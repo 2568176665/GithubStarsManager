@@ -1,10 +1,10 @@
 import React, { useState, useMemo } from 'react';
-import { Plus, Edit3, Trash2, Filter, ChevronDown, ChevronUp, X, Monitor, Apple, Smartphone, Package, Terminal, RotateCcw } from 'lucide-react';
+import { Plus, Edit3, Trash2, Filter, ChevronDown, ChevronUp, X, Monitor, Apple, Smartphone, Package, Terminal } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
 import { FilterModal } from './FilterModal';
 import { AssetFilter } from '../types';
-import { PRESET_FILTERS } from '../constants/presetFilters';
 import { useDialog } from '../hooks/useDialog';
+import { Button } from './ui/button';
 
 // 图标映射
 const ICON_MAP: Record<string, React.ElementType> = {
@@ -24,13 +24,6 @@ const PRESET_ICON_MAP: Record<string, string> = {
   'preset-source': 'Package',
 };
 
-// 默认预设筛选器（用于重置）
-const DEFAULT_PRESET_FILTERS: AssetFilter[] = PRESET_FILTERS.map(pf => ({
-  ...pf,
-  isPreset: true,
-  icon: PRESET_ICON_MAP[pf.id],
-}));
-
 interface AssetFilterManagerProps {
   selectedFilters: string[];
   onFilterToggle: (filterId: string) => void;
@@ -44,7 +37,7 @@ export const AssetFilterManager: React.FC<AssetFilterManagerProps> = ({
 }) => {
   const { assetFilters, addAssetFilter, updateAssetFilter, deleteAssetFilter, language } = useAppStore();
 
-  const { toast, confirm } = useDialog();
+  const { confirm } = useDialog();
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingFilter, setEditingFilter] = useState<AssetFilter | undefined>();
@@ -100,121 +93,63 @@ export const AssetFilterManager: React.FC<AssetFilterManagerProps> = ({
     onFilterToggle(presetId);
   };
 
-  const handleResetPresets = async () => {
-    const confirmed = await confirm(
-      t('重置预设', 'Reset Presets'),
-      language === 'zh' ? '确定要重置所有预设筛选器吗？这将恢复默认设置。' : 'Are you sure you want to reset all preset filters? This will restore default settings.',
-      { type: 'warning' }
-    );
-
-    if (!confirmed) return;
-
-    const previousFilters = assetFilters.map(f => ({ ...f }));
-    const previousSelected = [...selectedFilters];
-    const addedFilterIds: string[] = [];
-
-    try {
-      const store = useAppStore.getState();
-      presetFilters.forEach(filter => {
-        if (store.assetFilters.find(f => f.id === filter.id)) {
-          deleteAssetFilter(filter.id);
-        }
-        if (selectedFilters.includes(filter.id)) {
-          onFilterToggle(filter.id);
-        }
-      });
-      DEFAULT_PRESET_FILTERS.forEach(filter => {
-        if (!store.assetFilters.find(f => f.id === filter.id)) {
-          addAssetFilter(filter);
-          addedFilterIds.push(filter.id);
-        }
-      });
-      // Restore previously active preset selections that still map to a known preset id.
-      previousSelected.forEach(id => {
-        if (DEFAULT_PRESET_FILTERS.some(f => f.id === id) && !selectedFilters.includes(id)) {
-          onFilterToggle(id);
-        }
-      });
-    } catch (error) {
-      console.error('Failed to reset presets:', error);
-      const store = useAppStore.getState();
-
-      addedFilterIds.forEach(id => {
-        if (store.assetFilters.find(f => f.id === id)) {
-          deleteAssetFilter(id);
-        }
-      });
-
-      previousFilters.forEach(filter => {
-        if (!store.assetFilters.find(f => f.id === filter.id)) {
-          addAssetFilter(filter);
-        }
-      });
-
-      // 清除当前所有选择
-      selectedFilters.forEach(id => onFilterToggle(id));
-      // 恢复之前的选择
-      previousSelected.forEach(id => onFilterToggle(id));
-
-      toast(language === 'zh' ? '重置预设筛选器失败，已恢复之前的状态。' : 'Failed to reset preset filters. Previous state has been restored.', 'error');
-    }
-  };
-
   const t = (zh: string, en: string) => language === 'zh' ? zh : en;
 
   return (
     <div className="space-y-3">
       {/* Compact Header with Toggle */}
       <div className="flex items-center justify-between">
-        <button
-          onClick={() => setIsExpanded(!isExpanded)}
-          className="flex items-center space-x-2 px-3 py-2 bg-light-surface dark:bg-white/[0.04] rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-all group"
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => setIsExpanded(!isExpanded)}
+          className="flex items-center space-x-2 px-3 py-2 bg-muted dark:bg-muted/40 rounded-lg hover:bg-accent dark:hover:bg-accent transition-all group"
           title={isExpanded ? t('收起过滤器', 'Collapse filters') : t('展开过滤器', 'Expand filters')}
-          type="button"
           aria-expanded={isExpanded}
           aria-controls="asset-filter-panel"
         >
-          <Filter className={`w-4 h-4 text-gray-700 dark:text-text-tertiary transition-transform ${
-            isExpanded ? 'text-brand-violet dark:text-brand-violet' : ''
+          <Filter className={`w-4 h-4 text-muted-foreground dark:text-muted-foreground transition-transform ${
+            isExpanded ? 'text-primary dark:text-primary' : ''
           }`} aria-hidden="true" />
-          <span className="text-sm font-medium text-gray-900 dark:text-text-secondary">
+          <span className="text-sm font-medium text-foreground dark:text-muted-foreground">
             {t('过滤器', 'Filters')}
           </span>
           {selectedFilters.length > 0 && (
-            <span className="px-2 py-0.5 bg-brand-indigo text-white text-xs rounded-full">
+            <span className="px-2 py-0.5 bg-primary text-primary-foreground text-xs rounded-full">
               {selectedFilters.length}
             </span>
           )}
           {isExpanded ? (
-            <ChevronUp className="w-4 h-4 text-gray-500 dark:text-text-tertiary" aria-hidden="true" />
+            <ChevronUp className="w-4 h-4 text-muted-foreground dark:text-muted-foreground" aria-hidden="true" />
           ) : (
-            <ChevronDown className="w-4 h-4 text-gray-500 dark:text-text-tertiary" aria-hidden="true" />
+            <ChevronDown className="w-4 h-4 text-muted-foreground dark:text-muted-foreground" aria-hidden="true" />
           )}
-        </button>
+        </Button>
 
         <div className="flex items-center space-x-2">
           {selectedFilters.length > 0 && (
-            <button
+            <Button
+              variant="ghost"
               onClick={onClearFilters}
-              className="flex items-center space-x-1 px-2 py-1.5 text-xs text-gray-700 dark:text-text-tertiary hover:bg-light-surface dark:hover:bg-white/10 rounded-lg transition-colors"
+              className="flex items-center space-x-1 px-2 py-1.5 text-xs text-muted-foreground dark:text-muted-foreground hover:bg-muted dark:hover:bg-accent rounded-lg transition-colors"
               title={t('清除所有筛选', 'Clear all filters')}
               type="button"
               aria-label={t('清除所有筛选', 'Clear all filters')}
             >
               <X className="w-3 h-3" aria-hidden="true" />
               <span className="hidden sm:inline">{t('清除所有筛选', 'Clear all filters')}</span>
-            </button>
+            </Button>
           )}
-          <button
+          <Button
             onClick={handleCreateFilter}
-            className="flex items-center space-x-1 px-3 py-2 bg-brand-indigo text-white rounded-lg hover:bg-brand-hover transition-colors text-sm"
+            className="flex items-center space-x-1 px-3 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors text-sm"
             title={t('新建过滤器', 'New Filter')}
             type="button"
             aria-label={t('新建过滤器', 'New Filter')}
           >
             <Plus className="w-4 h-4" aria-hidden="true" />
             <span className="hidden sm:inline">{t('新建', 'New')}</span>
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -228,21 +163,9 @@ export const AssetFilterManager: React.FC<AssetFilterManagerProps> = ({
           {/* Preset Filters */}
           {presetFilters.length > 0 && (
             <div>
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-xs text-gray-500 dark:text-text-tertiary">
-                  {t('预设筛选器', 'Preset Filters')}
-                </p>
-                <button
-                  onClick={handleResetPresets}
-                  className="flex items-center space-x-1 text-xs text-gray-500 dark:text-text-tertiary hover:text-brand-violet dark:hover:text-gray-700 dark:text-text-secondary transition-colors"
-                  title={t('重置预设筛选器', 'Reset preset filters')}
-                  type="button"
-                  aria-label={t('重置预设筛选器', 'Reset preset filters')}
-                >
-                  <RotateCcw className="w-3 h-3" aria-hidden="true" />
-                  <span>{t('重置', 'Reset')}</span>
-                </button>
-              </div>
+              <p className="text-xs text-muted-foreground dark:text-muted-foreground mb-2">
+                {t('预设筛选器', 'Preset Filters')}
+              </p>
               <div className="flex flex-wrap gap-2">
                 {presetFilters.map(preset => {
                   const Icon = preset.icon ? ICON_MAP[preset.icon] : Filter;
@@ -252,31 +175,33 @@ export const AssetFilterManager: React.FC<AssetFilterManagerProps> = ({
                       key={preset.id}
                       className={`group flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border text-xs transition-colors ${
                         isSelected
-                          ? 'bg-gray-900 border-transparent text-white dark:bg-white/[0.12] dark:border-white/[0.2] dark:text-white font-medium'
-                          : 'bg-white border-black/[0.06] text-gray-700 dark:bg-white/[0.04] dark:border-white/[0.04] dark:text-text-secondary hover:bg-gray-50 hover:text-gray-900 dark:hover:bg-white/[0.08] dark:hover:text-text-primary'
+                          ? 'bg-gray-900 border-transparent text-white dark:bg-card/[0.12] dark:border-border/[0.2] dark:text-foreground font-medium'
+                          : 'bg-card border-border text-muted-foreground dark:bg-muted/40 dark:border-border dark:text-muted-foreground hover:bg-accent hover:text-foreground dark:hover:bg-accent dark:hover:text-foreground'
                       }`}
                     >
-                      <button
+                      <Button
+                        variant="ghost"
                         onClick={() => handlePresetToggle(preset.id)}
-                        className="flex items-center space-x-1.5"
+                        className="h-auto min-h-0 flex items-center space-x-1.5 p-0"
                         title={preset.keywords.join(', ')}
                         type="button"
                         aria-pressed={isSelected}
                       >
                         {Icon && <Icon className="w-3.5 h-3.5" aria-hidden="true" />}
                         <span>{preset.name}</span>
-                      </button>
+                      </Button>
 
                       <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity ml-1">
-                        <button
+                        <Button
+                          variant="ghost"
                           onClick={() => handleEditFilter(preset)}
-                          className="p-0.5 rounded hover:bg-white/20 dark:hover:bg-white/20 transition-colors"
+                          className="h-6 w-6 rounded p-0 hover:bg-card dark:hover:bg-accent transition-colors"
                           title={t('编辑', 'Edit')}
                           type="button"
                           aria-label={t('编辑', 'Edit')}
                         >
                           <Edit3 className="w-3 h-3" aria-hidden="true" />
-                        </button>
+                        </Button>
                       </div>
                     </div>
                   );
@@ -288,7 +213,7 @@ export const AssetFilterManager: React.FC<AssetFilterManagerProps> = ({
           {/* Custom Filters */}
           {customFilters.length > 0 && (
             <div>
-              <p className="text-xs text-gray-500 dark:text-text-tertiary mb-2">
+              <p className="text-xs text-muted-foreground dark:text-muted-foreground mb-2">
                 {t('自定义筛选器', 'Custom Filters')}
               </p>
               <div className="flex flex-wrap gap-2">
@@ -297,13 +222,14 @@ export const AssetFilterManager: React.FC<AssetFilterManagerProps> = ({
                     key={filter.id}
                     className={`group flex items-center space-x-2 px-3 py-2 rounded-lg border transition-colors ${
                       selectedFilters.includes(filter.id)
-                        ? 'bg-gray-900 border-transparent text-white dark:bg-white/[0.12] dark:border-white/[0.2] dark:text-white font-medium'
-                        : 'bg-light-surface border-black/[0.06] text-gray-900 dark:bg-white/[0.04] dark:border-white/[0.04] dark:text-text-secondary hover:bg-gray-200 dark:hover:bg-gray-600'
+                        ? 'bg-gray-900 border-transparent text-white dark:bg-card/[0.12] dark:border-border/[0.2] dark:text-foreground font-medium'
+                        : 'bg-muted border-border text-foreground dark:bg-muted/40 dark:border-border dark:text-muted-foreground hover:bg-accent dark:hover:bg-accent'
                     }`}
                   >
-                    <button
+                    <Button
+                      variant="ghost"
                       onClick={() => onFilterToggle(filter.id)}
-                      className="flex items-center space-x-2 flex-1"
+                      className="h-auto min-h-0 flex flex-1 items-center justify-start space-x-2 p-0"
                       aria-pressed={selectedFilters.includes(filter.id)}
                       aria-label={`${filter.name} (${filter.keywords.join(', ')})`}
                       title={`${filter.name} (${filter.keywords.join(', ')})`}
@@ -313,27 +239,29 @@ export const AssetFilterManager: React.FC<AssetFilterManagerProps> = ({
                       <span className="text-xs opacity-75 hidden lg:inline">
                         ({filter.keywords.join(', ')})
                       </span>
-                    </button>
+                    </Button>
                     
                     <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-                      <button
+                      <Button
+                        variant="ghost"
                         onClick={() => handleEditFilter(filter)}
-                        className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+                        className="h-6 w-6 rounded p-0 hover:bg-accent dark:hover:bg-accent transition-colors"
                         title={t('编辑', 'Edit')}
                         type="button"
                         aria-label={t('编辑', 'Edit')}
                       >
                         <Edit3 className="w-3 h-3" aria-hidden="true" />
-                      </button>
-                      <button
+                      </Button>
+                      <Button
+                        variant="destructive"
                         onClick={() => handleDeleteFilter(filter.id)}
-                        className="p-1 rounded hover:bg-gray-100 dark:bg-white/[0.04] hover:text-gray-700 dark:text-text-secondary dark:hover:bg-gray-100 dark:bg-white/[0.04] dark:hover:text-gray-700 dark:text-text-secondary transition-colors"
+                        className="h-6 w-6 rounded p-0 transition-colors"
                         title={t('删除', 'Delete')}
                         type="button"
                         aria-label={t('删除', 'Delete')}
                       >
                         <Trash2 className="w-3 h-3" aria-hidden="true" />
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 ))}
@@ -342,28 +270,13 @@ export const AssetFilterManager: React.FC<AssetFilterManagerProps> = ({
           )}
 
           {presetFilters.length === 0 && customFilters.length === 0 && (
-            <div className="text-center py-4 bg-light-bg dark:bg-panel-dark rounded-lg border-2 border-dashed border-black/[0.06] dark:border-white/[0.04]">
-              <p className="text-xs text-gray-500 dark:text-text-tertiary">
+            <div className="text-center py-4 bg-background dark:bg-card rounded-lg border-2 border-dashed border-border dark:border-border">
+              <p className="text-xs text-muted-foreground dark:text-muted-foreground">
                 {t('暂无过滤器，点击"新建"创建', 'No filters, click "New" to create')}
               </p>
             </div>
           )}
 
-          {selectedFilters.length > 0 && (
-            <div className="flex items-center justify-between pt-2 border-t border-black/[0.06] dark:border-white/[0.04]">
-              <span className="text-xs text-gray-700 dark:text-text-tertiary">
-                {t(`已选择 ${selectedFilters.length} 个过滤器`, `${selectedFilters.length} filters selected`)}
-              </span>
-              <button
-                onClick={onClearFilters}
-                className="text-xs text-gray-700 dark:text-text-tertiary hover:text-gray-900 dark:hover:text-gray-200 transition-colors"
-                type="button"
-                aria-label={t('清除所有筛选', 'Clear all filters')}
-              >
-                {t('清除所有筛选', 'Clear all filters')}
-              </button>
-            </div>
-          )}
           </div>
         </div>
       </div>

@@ -7,6 +7,8 @@ export interface DiscoveryAnalysisData {
   analysis_error?: string;
 }
 
+export type DiscoveryAnalysisRecord = Record<string, DiscoveryAnalysisData>;
+
 const DB_NAME = 'github-stars-discovery-analysis';
 const STORE_NAME = 'analysis';
 const DB_VERSION = 1;
@@ -154,6 +156,10 @@ export const discoveryAnalysisStorage = {
     }
 
     return result;
+  },
+
+  async saveAllAnalyses(analyses: DiscoveryAnalysisRecord): Promise<void> {
+    await Promise.all(Object.entries(analyses).map(([repoId, data]) => this.saveAnalysis(Number(repoId), data)));
   },
 
   async deleteAnalysis(repoId: number): Promise<void> {

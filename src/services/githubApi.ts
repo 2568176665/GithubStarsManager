@@ -22,6 +22,8 @@ import {
   WorkflowDefinition,
 } from '../types';
 import { logger } from './logger';
+import { backend } from './backendAdapter';
+import { useAppStore } from '../store/useAppStore';
 import { isReadmeCandidateItem, type GitHubReadmeCandidateItem } from '../utils/readmeVariants';
 
 interface GitHubContentResponse {
@@ -119,6 +121,10 @@ export class GitHubApiService {
 
   constructor(token: string) {
     this.token = token;
+    if (backend.backendUrl) {
+      this.backendUrl = backend.backendUrl;
+      this.backendAuthToken = useAppStore.getState().backendApiSecret || null;
+    }
   }
 
   /**
@@ -146,6 +152,15 @@ export class GitHubApiService {
     const startTime = Date.now();
     const method = (options.method || 'GET') as string;
     const { operationTag, ...fetchOptions } = options;
+
+    // Backend discovery runs asynchronously during app startup. A service can
+    // be created just before the probe completes, so refresh the proxy target
+    // immediately before each request to avoid sending worker-managed tokens
+    // directly to api.github.com.
+    if (!this.backendUrl && backend.backendUrl) {
+      this.backendUrl = backend.backendUrl;
+      this.backendAuthToken = useAppStore.getState().backendApiSecret || null;
+    }
 
     // Check rate limit before making request
     if (this.rateLimitRemaining !== null && this.rateLimitRemaining < 100 && this.rateLimitReset !== null) {
@@ -612,23 +627,21 @@ export class GitHubApiService {
       .slice(0, maxChars);
   }
 
-  async getWatchedRepositories(page = 1, perPage = 100, username?: string): Promise<Repository[]> {
-    const endpoint = username
-      ? `/users/${encodeURIComponent(username)}/subscriptions?page=${page}&per_page=${perPage}`
-      : `/user/subscriptions?page=${page}&per_page=${perPage}`;
+  async getWatchedRepositories(page = 1, perPage = 100): Promise<Repository[]> {
     // GitHub 对 watched repos 同样返回原始 license 对象，这里统一归一化为 SPDX id / null，
     // 与 /user/starred 路径保持一致，避免下游 normalizeLicense 拿到对象时崩溃。
-    const repos = await this.makeRequest<Repository[]>(endpoint);
-    return repos.map((repo) => ({ ...repo, license: toLicenseSpdxId(repo.license) }));
+    // 空响应体（204）会被 makeRequest 归一化为 null，这里按空列表处理，避免 .map 抛错拖垮同步。
+    const repos = await this.makeRequest<Repository[] | null>(`/user/subscriptions?page=${page}&per_page=${perPage}`);
+    return (repos ?? []).map((repo) => ({ ...repo, license: toLicenseSpdxId(repo.license) }));
   }
 
-  async getAllWatchedRepositories(username?: string): Promise<Repository[]> {
+  async getAllWatchedRepositories(): Promise<Repository[]> {
     let allRepos: Repository[] = [];
     let page = 1;
     const perPage = 100;
 
     while (true) {
-      const repos = await this.getWatchedRepositories(page, perPage, username);
+      const repos = await this.getWatchedRepositories(page, perPage);
       if (repos.length === 0) break;
 
       allRepos = [...allRepos, ...repos];
@@ -640,19 +653,6 @@ export class GitHubApiService {
     }
 
     return allRepos;
-  }
-
-  async getAllWatchedRepositoriesForCurrentUser(): Promise<Repository[]> {
-    const currentUser = await this.getCurrentUser();
-    const [privateAware, publicProfile] = await Promise.all([
-      this.getAllWatchedRepositories(),
-      this.getAllWatchedRepositories(currentUser.login),
-    ]);
-    const reposByName = new Map<string, Repository>();
-    [...privateAware, ...publicProfile].forEach(repo => {
-      reposByName.set(repo.full_name.toLowerCase(), repo);
-    });
-    return Array.from(reposByName.values());
   }
 
   private decodeContentResponse(response: GitHubContentResponse): string {

@@ -2,7 +2,7 @@ import { translateBackendError } from '../utils/backendErrors';
 import { logger } from './logger';
 
 import { Repository, Release, AIConfig, WebDAVConfig, EmbeddingConfig, VectorSearchConfig } from '../types';
-import { useAppStore } from '../store/useAppStore';
+import type { DiscoveryAnalysisRecord } from './discoveryAnalysisStorage';
 import { isReadmeCandidateItem, type GitHubReadmeCandidateItem } from '../utils/readmeVariants';
 
 interface GitHubContentResponse {
@@ -15,15 +15,26 @@ interface GitHubTreeResponse {
   truncated?: boolean;
 }
 
+// Custom domains can route Worker-to-Worker requests through an additional
+// redirect layer. Use the canonical Worker hostname for API traffic so the
+// custom-domain frontend still shares the same Worker and D1 database.
+export const WORKER_CANONICAL_API_ORIGIN = 'https://github-stars-manager.2568176665.workers.dev';
+
+export function getBackendProbeUrls(origin: string, hostname: string): string[] {
+  const currentUrl = `${origin}/api`;
+  const isLocal = hostname === 'localhost' || hostname === '127.0.0.1';
+  const isCanonicalWorker = hostname.endsWith('.workers.dev');
+  if (isLocal || isCanonicalWorker) return [currentUrl];
+  return [`${WORKER_CANONICAL_API_ORIGIN}/api`, currentUrl];
+}
+
 class BackendAdapter {
   private _backendUrl: string | null = null;
+  private _workerEnvMode = false;
 
   async init(): Promise<void> {
     try {
-      // Try common backend URLs
-      const urls = [
-        window.location.origin + '/api',
-      ];
+      const urls = getBackendProbeUrls(window.location.origin, window.location.hostname);
       // Only probe localhost in development
       if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
         urls.push('http://localhost:3000/api');
@@ -41,6 +52,7 @@ class BackendAdapter {
             const data = await res.json();
             if (data.status === 'ok') {
               this._backendUrl = baseUrl;
+              this._workerEnvMode = data.mode === 'worker-env';
               logger.info('backendAdapter', 'Backend connected', { url: baseUrl });
               return;
             }
@@ -53,9 +65,11 @@ class BackendAdapter {
       }
 
       this._backendUrl = null;
+      this._workerEnvMode = false;
       logger.info('backendAdapter', 'Backend not available, using local-only mode');
     } catch {
       this._backendUrl = null;
+      this._workerEnvMode = false;
       logger.info('backendAdapter', 'Backend not available, using local-only mode');
     }
   }
@@ -68,15 +82,21 @@ class BackendAdapter {
     return this._backendUrl;
   }
 
-  private getAuthHeaders(): Record<string, string> {
-    const secret = useAppStore.getState().backendApiSecret || '';
+  get isWorkerEnvMode(): boolean {
+    return this._workerEnvMode;
+  }
 
+  async fetchManagedSession(): Promise<{ login: string; [key: string]: unknown }> {
+    if (!this._backendUrl) throw new Error('Backend not available');
+    const res = await this.fetchWithTimeout(`${this._backendUrl}/session`);
+    if (!res.ok) await this.throwTranslatedError(res, 'Fetch managed GitHub session error');
+    return res.json() as Promise<{ login: string; [key: string]: unknown }>;
+  }
+
+  private getAuthHeaders(): Record<string, string> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
-    if (secret) {
-      headers['Authorization'] = `Bearer ${secret}`;
-    }
     return headers;
   }
   private async fetchWithTimeout(url: string, options?: RequestInit, timeoutMs = 30000): Promise<Response> {
@@ -550,12 +570,32 @@ class BackendAdapter {
     return res.json() as Promise<{ releases: Release[]; total: number }>;
   }
 
+  async syncDiscoveryAnalyses(analyses: DiscoveryAnalysisRecord): Promise<void> {
+    if (!this._backendUrl) return;
+    const res = await this.fetchWithRetry(`${this._backendUrl}/discovery-analyses`, {
+      method: 'PUT',
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify({ analyses }),
+    }, 30000, 3);
+    if (!res.ok) await this.throwTranslatedError(res, 'Sync discovery analyses error');
+  }
+
+  async fetchDiscoveryAnalyses(): Promise<DiscoveryAnalysisRecord> {
+    if (!this._backendUrl) throw new Error('Backend not available');
+    const res = await this.fetchWithRetry(`${this._backendUrl}/discovery-analyses`, {
+      headers: this.getAuthHeaders(),
+    }, 30000, 3);
+    if (!res.ok) await this.throwTranslatedError(res, 'Fetch discovery analyses error');
+    return res.json() as Promise<DiscoveryAnalysisRecord>;
+  }
+
   async syncAIConfigs(configs: AIConfig[]): Promise<void> {
     if (!this._backendUrl) return;
 
-    // Pre-sync validation: warn about configs that will likely be skipped
+    // Worker ENV AI intentionally has no browser-visible API key. It is
+    // resolved inside the Worker, so an empty key is valid for that config.
     for (const c of configs) {
-      if (!c.apiKey) {
+      if (!c.apiKey && !(this._workerEnvMode && c.id === 'worker-env-ai')) {
         logger.warn('backendAdapter', 'AI config has empty apiKey, will be skipped', { name: c.name, id: c.id });
       }
     }
@@ -770,8 +810,7 @@ class BackendAdapter {
   /**
    * Restore the GitHub token stored on the backend for cross-browser/device
    * session recovery. Only callable when the backend is reachable AND this
-   * client already authenticates (Bearer API_SECRET) — the backend never hands
-   * it out to unauthenticated callers.
+   * Legacy backend session restore endpoint. Worker ENV mode uses fetchManagedSession.
    */
   async restoreAuth(): Promise<{ github_token: string | null } | null> {
     if (!this._backendUrl) return null;

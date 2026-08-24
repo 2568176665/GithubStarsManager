@@ -20,6 +20,10 @@ const mocks = vi.hoisted(() => {
     },
     repositories: [],
     githubToken: 'ghp-local-token',
+    setGitHubToken: vi.fn(),
+    setUser: vi.fn(),
+    setAIConfigs: vi.fn(),
+    setActiveAIConfig: vi.fn(),
     setSelectedCategory: vi.fn(),
   };
 
@@ -30,8 +34,11 @@ const mocks = vi.hoisted(() => {
     ),
     backend: {
       init: vi.fn(),
-      isAvailable: true,
-      syncSettings: vi.fn(),
+    isAvailable: true,
+    isWorkerEnvMode: false,
+    fetchManagedSession: vi.fn(),
+    fetchAIConfigs: vi.fn(),
+    syncSettings: vi.fn(),
     },
     syncFromBackend: vi.fn(),
     startAutoSync: vi.fn(),
@@ -102,6 +109,7 @@ describe('App backend initialization', () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
     mocks.backend.isAvailable = true;
+    mocks.backend.isWorkerEnvMode = false;
     mocks.backend.init.mockResolvedValue(undefined);
     mocks.tryRestoreAuthFromBackend.mockResolvedValue(false);
     mocks.startAutoSync.mockReturnValue(vi.fn());
@@ -126,6 +134,22 @@ describe('App backend initialization', () => {
     });
 
     expect(mocks.backend.syncSettings).toHaveBeenCalledOnce();
+    expect(mocks.syncFromBackend).toHaveBeenCalledOnce();
+    expect(mocks.startAutoSync).toHaveBeenCalledOnce();
+  });
+
+  it('starts D1 pull and auto-sync lifecycle in Worker ENV mode', async () => {
+    mocks.backend.isWorkerEnvMode = true;
+    mocks.backend.fetchManagedSession.mockResolvedValue({ login: 'worker-user' });
+    mocks.backend.fetchAIConfigs.mockResolvedValue([]);
+
+    render(<App />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
     expect(mocks.syncFromBackend).toHaveBeenCalledOnce();
     expect(mocks.startAutoSync).toHaveBeenCalledOnce();
   });

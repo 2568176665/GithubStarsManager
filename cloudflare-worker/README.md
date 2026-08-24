@@ -141,3 +141,19 @@ npm run dev
 | Ollama nomic-embed-text | **768** | ✅ | 免费 |
 | Ollama bge-m3 | **1024** | ✅ | 免费 |
 | 硅基流动 BAAI/bge-large-zh-v1.5 | **1024** | ✅ | ¥0.5/M |
+# Worker ENV deployment
+
+The web deployment reads credentials only from Worker configuration. They are
+never returned to the browser:
+
+Copy `.env.example` for local development. Do not commit a real `.env` file.
+
+```powershell
+npx wrangler secret put GITHUB_TOKEN
+npx wrangler secret put AI_API_KEY
+npx wrangler deploy --var AI_API_TYPE:openai-compatible --var AI_BASE_URL:https://api.openai.com --var AI_MODEL:<model>
+```
+
+`GITHUB_TOKEN` is used by `/api/session` and `/api/proxy/github/*`. The AI
+secret is used by `/api/proxy/ai`; the browser receives only the public model
+metadata. Replace the AI values with the provider and model you actually use.

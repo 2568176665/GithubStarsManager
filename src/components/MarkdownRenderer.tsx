@@ -1,13 +1,21 @@
+import { Input } from './ui/input';
+import { Button } from './ui/button';
 import React, { memo, useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import ReactMarkdown, { type Components } from 'react-markdown';
+import type { PluggableList } from 'unified';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import rehypeRaw from 'rehype-raw';
 import rehypeSanitize from 'rehype-sanitize';
+import remarkAlert from 'remark-github-blockquote-alert';
+import remarkGemoji from 'remark-gemoji';
 import { Copy, Check, Download } from 'lucide-react';
 import hljs from 'highlight.js';
+import MermaidBlock from './MermaidBlock';
+import { githubMarkdownSchema } from '../utils/sanitizeSchema';
 import 'highlight.js/styles/github.min.css';
+import '../styles/github-markdown.scoped.css';
 import { useAppStore } from '../store/useAppStore';
 import { safeWriteText, getClipboardErrorMessage } from '../utils/clipboardUtils';
 
@@ -19,17 +27,38 @@ interface MarkdownRendererProps {
   baseUrl?: string;
   headingIds?: Map<string, string>;
   fontSize?: 'small' | 'medium' | 'large';
+  /** Convert single newlines to <br> (GitHub READMEs do not; AI summaries rely on it). */
+  breaks?: boolean;
 }
 
-const REMARK_PLUGINS = [remarkGfm, remarkBreaks];
-const REHYPE_PLUGINS_WITH_HTML = [rehypeRaw, rehypeSanitize];
+// GitHub-style remark pipeline: GFM tables/tasklists/strikethrough, [!NOTE]-style
+// alerts, :emoji: shortcodes. remarkBreaks is opt-in via the `breaks` prop.
+const BASE_REMARK_PLUGINS = [remarkGfm, remarkAlert, remarkGemoji];
 const REHYPE_PLUGINS_NO_HTML: never[] = [];
 
+// Matches $$display$$, \(inline\), \[display\] and $inline$ math so KaTeX is
+// only loaded for documents that actually use it.
+const MATH_PATTERN =
+  /\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|\$(?!\s)(?:\\.|[^$\\\n])*?[^\s$\\\n]\$/;
+
+interface MathPlugins {
+  remark: typeof import('remark-math')['default'];
+  rehype: typeof import('rehype-katex')['default'];
+}
+
+// react-markdown 会把 AST 节点作为 `node` prop 传给自定义组件，
+// 展开到原生 DOM 元素前需要剥掉这个非 DOM 属性
+function stripAstNode<T extends { node?: unknown }>(props: T): Omit<T, 'node'> {
+  const rest = { ...props };
+  delete (rest as { node?: unknown }).node;
+  return rest;
+}
+
+/** GitHub-native fenced code block: hljs highlighting plus a hover copy button. */
 const CodeBlock: React.FC<{
   children: React.ReactNode;
-  className?: string;
   language: string;
-}> = ({ children, className, language }) => {
+}> = ({ children, language }) => {
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
   const codeRef = useRef<HTMLElement>(null);
@@ -69,9 +98,6 @@ const CodeBlock: React.FC<{
     return String(children).replace(/\n$/, '');
   }, [children]);
 
-  const codeLines = useMemo(() => codeText.split('\n'), [codeText]);
-  const showLineNumbers = codeLines.length > 3;
-
   useEffect(() => {
     if (codeRef.current) {
       try {
@@ -96,113 +122,46 @@ const CodeBlock: React.FC<{
     }
   }, [codeText, uiLanguage]);
 
-  const isBashLike = ['bash', 'sh', 'shell', 'zsh'].includes(normalizedLanguage);
-  const isPowerShell = ['powershell', 'ps1'].includes(normalizedLanguage);
-  const isCmdLike = ['cmd', 'bat'].includes(normalizedLanguage);
-
+  // GitHub-native block: a bare <pre><code> styled by .markdown-body, with a
+  // copy button that appears on hover/focus.
   return (
-    <div className={`relative group my-3 rounded-xl overflow-hidden border shadow-md ${
-      isBashLike
-        ? 'border-black/[0.06] dark:border-white/[0.04]'
-        : isPowerShell
-          ? 'border-brand-violet/30 dark:border-brand-violet/30'
-          : isCmdLike
-            ? 'border-cyan-500/30 dark:border-cyan-400/30'
-            : 'border-black/[0.06] dark:border-white/[0.04]'
-    }`}>
-      <div className="flex items-center justify-between px-4 py-2.5 bg-light-surface dark:bg-panel-dark/90 border-b border-black/[0.06] dark:border-white/[0.04]">
-        <div className="flex items-center gap-2.5">
-          <div className="flex gap-1.5">
-            <span className="w-3 h-3 rounded-full bg-[#ff5f56] dark:bg-[#ff5f56]/90 shadow-sm" />
-            <span className="w-3 h-3 rounded-full bg-[#ffbd2e] dark:bg-[#ffbd2e]/90 shadow-sm" />
-            <span className="w-3 h-3 rounded-full bg-[#27c93f] dark:bg-[#27c93f]/90 shadow-sm" />
-          </div>
-          {language && (
-            <span className={`text-xs font-semibold px-2.5 py-1 rounded-md ${
-              isBashLike
-                ? 'bg-status-emerald/20 text-status-emerald border border-status-emerald/30 dark:bg-status-emerald/20 dark:text-status-emerald dark:border-status-emerald/30'
-                : isPowerShell
-                  ? 'bg-brand-indigo/20 dark:bg-brand-indigo/30 text-gray-700 dark:text-text-secondary border border-black/[0.06] dark:border-white/[0.04]'
-                  : isCmdLike
-                    ? 'bg-cyan-100 dark:bg-cyan-900/40 text-cyan-700 dark:text-cyan-300 border border-cyan-200 dark:border-cyan-800'
-                    : 'bg-gray-200 dark:bg-white/[0.04] text-gray-700 dark:text-text-tertiary border border-black/[0.06] dark:border-white/[0.04]'
-            }`}>
-              {isBashLike && (
-                <span className="mr-1.5 inline-block w-2 h-2 rounded-full bg-status-emerald animate-pulse" />
-              )}
-              {isPowerShell && (
-                <span className="mr-1.5 inline-block w-2 h-2 rounded-full bg-brand-violet animate-pulse" />
-              )}
-              {isCmdLike && (
-                <span className="mr-1.5 inline-block w-2 h-2 rounded-full bg-cyan-500 animate-pulse" />
-              )}
-              {language}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleCopy}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
-              copyError
-                ? 'bg-gray-100 dark:bg-white/[0.04] text-gray-700 dark:text-text-secondary border border-black/[0.06] dark:border-white/[0.04]'
-                : copied
-                  ? 'bg-status-emerald text-white border border-status-emerald'
-                  : 'bg-white dark:bg-white/[0.04] text-gray-700 dark:text-text-secondary hover:bg-light-bg dark:hover:bg-gray-600 border border-black/[0.06] dark:border-white/[0.04]'
-            }`}
-            title={copyError || (uiLanguage === 'zh' ? '复制代码' : 'Copy code')}
-          >
-            {copyError ? (
-              <span>!</span>
-            ) : copied ? (
-              <>
-                <Check className="w-3.5 h-3.5" />
-                {uiLanguage === 'zh' ? '已复制' : 'Copied'}
-              </>
-            ) : (
-              <>
-                <Copy className="w-3.5 h-3.5" />
-                {uiLanguage === 'zh' ? '复制' : 'Copy'}
-              </>
-            )}
-          </button>
-        </div>
-      </div>
+    <div className="group relative my-0">
       {copyError && (
-        <div className="absolute top-14 right-4 max-w-xs bg-gray-100 dark:bg-white/[0.04] text-gray-700 dark:text-text-secondary text-xs px-3 py-2 rounded-lg shadow-lg z-20 border border-black/[0.06] dark:border-white/[0.04]">
+        <div
+          data-translate="false"
+          role="alert"
+          className="absolute top-10 right-2 z-20 max-w-xs rounded-md border border-border bg-background px-3 py-2 text-xs text-foreground shadow-lg dark:bg-card"
+        >
           {copyError}
         </div>
       )}
-      <div className={`overflow-x-auto ${
-        isBashLike
-          ? 'bg-gradient-to-br from-gray-50 to-gray-100 dark:from-[#0d1117] dark:to-[#161b22]'
-          : isPowerShell
-            ? 'bg-gradient-to-br from-blue-50/50 to-indigo-50/30 dark:from-[#0d1117] dark:to-[#161b22]'
-            : isCmdLike
-              ? 'bg-gradient-to-br from-cyan-50/40 to-slate-100/20 dark:from-[#0d1117] dark:to-[#161b22]'
-              : 'bg-light-bg dark:bg-[#0d1117]'
-      }`}>
-        <div className={`p-4 overflow-x-auto ${className || ''}`}>
-          <pre className={showLineNumbers ? 'flex items-start' : undefined}>
-            {showLineNumbers && (
-              <span className="select-none pr-4 text-right flex-shrink-0" aria-hidden="true">
-                {codeLines.map((_, index) => (
-                  <span key={index} className="block text-gray-400 text-sm font-mono leading-6">
-                    {index + 1}
-                  </span>
-                ))}
-              </span>
-            )}
-            <code ref={codeRef} className={`text-sm font-mono leading-6 text-gray-800 dark:text-[#e6edf3] ${showLineNumbers ? 'block min-w-0 flex-1' : ''} ${normalizedLanguage ? `language-${normalizedLanguage}` : ''}`}>
-              {codeText}
-            </code>
-          </pre>
-        </div>
-      </div>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        onClick={handleCopy}
+        aria-label={uiLanguage === 'zh' ? '复制代码' : 'Copy code'}
+        title={copyError || (uiLanguage === 'zh' ? '复制代码' : 'Copy code')}
+        className={`absolute top-2 right-2 z-10 h-7 w-7 rounded-md p-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 ${
+          copyError
+            ? 'text-destructive opacity-100'
+            : copied
+              ? 'text-green-600 opacity-100 dark:text-green-500'
+              : 'border border-border bg-background/80 text-muted-foreground backdrop-blur hover:text-foreground dark:bg-card/80 dark:text-muted-foreground'
+        }`}
+      >
+        {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+      </Button>
+      <pre>
+        <code ref={codeRef} className={normalizedLanguage ? `language-${normalizedLanguage}` : undefined}>
+          {codeText}
+        </code>
+      </pre>
     </div>
   );
 };
 
+/** Anchor that externalizes non-anchor links and keeps in-page TOC jumps smooth. */
 const MarkdownLink: React.FC<{ href?: string; children?: React.ReactNode; baseUrl?: string; headingIds?: Map<string, string> }> = ({
   href,
   children,
@@ -263,7 +222,6 @@ const MarkdownLink: React.FC<{ href?: string; children?: React.ReactNode; baseUr
       href={resolvedHref}
       target={isHashLink || isSpecialLink ? undefined : "_blank"}
       rel={isHashLink || isSpecialLink ? undefined : "noopener noreferrer"}
-      className="text-brand-violet dark:text-brand-violet hover:text-gray-700 dark:hover:text-text-secondary underline decoration-blue-400 hover:decoration-blue-600 transition-colors"
       onClick={handleAnchorClick}
     >
       {children}
@@ -275,6 +233,10 @@ const resolveImageSrc = (imageSrc: string, baseUrl?: string): string => {
   if (imageSrc.startsWith('http://') || imageSrc.startsWith('https://') || imageSrc.startsWith('//')) {
     return imageSrc;
   }
+  // Do not let README fragments without repository context resolve against
+  // the app origin. That turns a broken relative asset into an application
+  // 500 request; callers with a baseUrl still resolve it against GitHub.
+  if (!baseUrl) return '';
   if (baseUrl) {
     try {
       return new URL(imageSrc, baseUrl + '/raw/HEAD/').href;
@@ -299,6 +261,7 @@ const truncateUrl = (url: string, maxLength: number = 50): string => {
   }
 };
 
+/** Image with skeleton loading, error fallback, relative-URL resolution and a lightbox. */
 const MarkdownImage: React.FC<{ src?: string; alt?: string; baseUrl?: string }> = ({
   src,
   alt,
@@ -472,24 +435,25 @@ const MarkdownImage: React.FC<{ src?: string; alt?: string; baseUrl?: string }> 
 
   const isSmallImage = imageSizeKnown && naturalWidth > 0 && naturalWidth < 300;
 
-  if (!src) return null;
+  if (!src || !imageUrl) return null;
 
   if (hasError) {
     return (
-      <span className="my-2 px-3 py-2 bg-gray-100 dark:bg-white/[0.04] rounded border border-black/[0.06] dark:border-white/[0.04] flex items-center gap-2 text-xs">
-        <svg className="w-4 h-4 text-gray-500 dark:text-text-tertiary flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <span className="my-2 px-3 py-2 bg-muted dark:bg-muted/40 rounded border border-border dark:border-border flex items-center gap-2 text-xs">
+        <svg className="w-4 h-4 text-muted-foreground dark:text-muted-foreground flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
         </svg>
-        <span className="text-gray-500 dark:text-text-tertiary">
+        <span className="text-muted-foreground dark:text-muted-foreground">
           {language === 'zh' ? '图片加载失败' : 'Image failed'}
         </span>
-        {alt && <span className="text-gray-400 dark:text-text-quaternary truncate max-w-[120px]">{alt}</span>}
-        <button
+        {alt && <span className="text-muted-foreground dark:text-muted-foreground/70 truncate max-w-[120px]">{alt}</span>}
+        <Button
+          variant="ghost"
           onClick={handleRetry}
-          className="ml-auto px-2 py-0.5 text-xs text-brand-violet hover:text-brand-violet/80 transition-colors flex-shrink-0"
+          className="ml-auto px-2 py-0.5 text-xs text-primary hover:text-primary/80 transition-colors flex-shrink-0"
         >
           {language === 'zh' ? '重试' : 'Retry'}
-        </button>
+        </Button>
       </span>
     );
   }
@@ -499,7 +463,7 @@ const MarkdownImage: React.FC<{ src?: string; alt?: string; baseUrl?: string }> 
       {isSmallImage ? (
         <span className="inline-flex items-center my-1">
           {isLoading && (
-            <span className="w-20 h-7 bg-light-surface dark:bg-white/[0.04] rounded animate-pulse inline-block" />
+            <span className="w-20 h-7 bg-muted dark:bg-muted/40 rounded animate-pulse inline-block" />
           )}
           <span className="relative inline-block">
             <img
@@ -529,11 +493,11 @@ const MarkdownImage: React.FC<{ src?: string; alt?: string; baseUrl?: string }> 
       ) : (
         <span className="my-4 flex flex-col items-center group/img">
           {isLoading && (
-            <span className="w-full max-w-md h-16 bg-light-surface dark:bg-panel-dark rounded-lg flex items-center justify-center animate-pulse gap-2">
-              <svg className="w-5 h-5 text-gray-300 dark:text-text-tertiary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <span className="w-full max-w-md h-16 bg-muted dark:bg-card rounded-lg flex items-center justify-center animate-pulse gap-2">
+              <svg className="w-5 h-5 text-gray-300 dark:text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
               </svg>
-              <span className="text-xs text-gray-400 dark:text-text-quaternary">{language === 'zh' ? '加载中...' : 'Loading...'}</span>
+              <span className="text-xs text-muted-foreground dark:text-muted-foreground/70">{language === 'zh' ? '加载中...' : 'Loading...'}</span>
             </span>
           )}
 
@@ -563,7 +527,7 @@ const MarkdownImage: React.FC<{ src?: string; alt?: string; baseUrl?: string }> 
           </span>
 
           {!isLoading && !hasError && (
-            <span data-translate="false" className="text-center mt-2 text-xs text-gray-400 dark:text-text-tertiary opacity-0 group-hover/img:opacity-100 transition-opacity duration-200 flex items-center gap-3">
+            <span data-translate="false" className="text-center mt-2 text-xs text-muted-foreground dark:text-muted-foreground opacity-0 group-hover/img:opacity-100 transition-opacity duration-200 flex items-center gap-3">
               <span>
                 {isInsideLink
                   ? (language === 'zh' ? '单击放大 · Ctrl+点击打开链接' : 'Click to zoom · Ctrl+Click to open link')
@@ -571,7 +535,7 @@ const MarkdownImage: React.FC<{ src?: string; alt?: string; baseUrl?: string }> 
                 }
               </span>
               {naturalWidth > 0 && (
-                <span className="text-gray-300 dark:text-text-secondary">|</span>
+                <span className="text-gray-300 dark:text-muted-foreground">|</span>
               )}
               {naturalWidth > 0 && (
                 <span>{naturalWidth} × {naturalHeight}</span>
@@ -582,7 +546,7 @@ const MarkdownImage: React.FC<{ src?: string; alt?: string; baseUrl?: string }> 
           {!isLoading && !hasError && isInsideLink && parentLinkHref && (
             <span
               data-translate="false"
-              className="text-center mt-1 text-xs text-brand-violet dark:text-brand-violet opacity-0 group-hover/img:opacity-100 transition-opacity flex items-center justify-center gap-1 cursor-pointer"
+              className="text-center mt-1 text-xs text-primary dark:text-primary opacity-0 group-hover/img:opacity-100 transition-opacity flex items-center justify-center gap-1 cursor-pointer"
               onClick={(e) => {
                 e.stopPropagation();
                 e.preventDefault();
@@ -621,66 +585,84 @@ const MarkdownImage: React.FC<{ src?: string; alt?: string; baseUrl?: string }> 
             </div>
             <div className="flex items-center gap-2 pointer-events-auto">
               {isInsideLink && parentLinkHref && (
-                <button
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
                   onClick={(e) => {
                     e.stopPropagation();
                     window.open(parentLinkHref, '_blank', 'noopener,noreferrer');
                   }}
-                  className="p-2 bg-white/10 hover:bg-white/20 text-white/80 hover:text-white rounded-lg transition-colors backdrop-blur-sm"
+                  className="h-8 w-8 p-0 bg-white/10 hover:bg-white/20 text-white/80 hover:text-white rounded-lg transition-colors backdrop-blur-sm"
                   title={language === 'zh' ? '打开链接' : 'Open link'}
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
                   </svg>
-                </button>
+                </Button>
               )}
-              <button
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
                 onClick={(e) => {
                   e.stopPropagation();
                   handleDownload(e);
                 }}
                 disabled={isDownloading}
-                className="p-2 bg-white/10 hover:bg-white/20 text-white/80 hover:text-white rounded-lg transition-colors backdrop-blur-sm"
+                className="h-8 w-8 p-0 bg-white/10 hover:bg-white/20 text-white/80 hover:text-white rounded-lg transition-colors backdrop-blur-sm"
                 title={language === 'zh' ? '下载图片' : 'Download image'}
               >
                 <Download className={`w-4 h-4 ${isDownloading ? 'animate-bounce' : ''}`} />
-              </button>
-              <button
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
                 onClick={(e) => {
                   e.stopPropagation();
                   setZoomScale(prev => Math.min(5, prev + 0.5));
                 }}
-                className="p-2 bg-white/10 hover:bg-white/20 text-white/80 hover:text-white rounded-lg transition-colors backdrop-blur-sm text-sm font-bold"
+                className="h-8 w-8 p-0 bg-white/10 hover:bg-white/20 text-white/80 hover:text-white rounded-lg transition-colors backdrop-blur-sm text-sm font-bold"
                 title={language === 'zh' ? '放大' : 'Zoom in'}
               >
                 +
-              </button>
+              </Button>
               <span className="text-white/60 text-xs min-w-[3rem] text-center">
                 {Math.round(zoomScale * 100)}%
               </span>
-              <button
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
                 onClick={(e) => {
                   e.stopPropagation();
                   setZoomScale(prev => Math.max(0.5, prev - 0.5));
                 }}
-                className="p-2 bg-white/10 hover:bg-white/20 text-white/80 hover:text-white rounded-lg transition-colors backdrop-blur-sm text-sm font-bold"
+                className="h-8 w-8 p-0 bg-white/10 hover:bg-white/20 text-white/80 hover:text-white rounded-lg transition-colors backdrop-blur-sm text-sm font-bold"
                 title={language === 'zh' ? '缩小' : 'Zoom out'}
               >
                 −
-              </button>
-              <button
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
                 onClick={(e) => {
                   e.stopPropagation();
                   setZoomScale(1);
                   setZoomPos({ x: 0, y: 0 });
                 }}
-                className="p-2 bg-white/10 hover:bg-white/20 text-white/80 hover:text-white rounded-lg transition-colors backdrop-blur-sm text-xs"
+                className="h-8 w-8 p-0 bg-white/10 hover:bg-white/20 text-white/80 hover:text-white rounded-lg transition-colors backdrop-blur-sm text-xs"
                 title={language === 'zh' ? '重置' : 'Reset'}
               >
                 1:1
-              </button>
-              <button
-                className="p-2 bg-white/10 hover:bg-white/20 text-white/80 hover:text-white rounded-lg transition-colors backdrop-blur-sm"
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 p-0 bg-white/10 hover:bg-white/20 text-white/80 hover:text-white rounded-lg transition-colors backdrop-blur-sm"
                 onClick={(e) => {
                   e.stopPropagation();
                   closeZoom();
@@ -690,7 +672,7 @@ const MarkdownImage: React.FC<{ src?: string; alt?: string; baseUrl?: string }> 
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
-              </button>
+              </Button>
             </div>
           </div>
 
@@ -772,7 +754,8 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = memo(({
   enableHtml = false,
   baseUrl,
   headingIds,
-  fontSize = 'medium'
+  fontSize = 'medium',
+  breaks = false
 }) => {
   const headingCounterRef = useRef(headingIds?.size ?? 0);
   const headingTextCountMapRef = useRef(new Map<string, number>());
@@ -782,19 +765,52 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = memo(({
     headingTextCountMapRef.current = new Map<string, number>();
   }, [content, headingIds]);
 
-  const rehypePlugins = enableHtml ? REHYPE_PLUGINS_WITH_HTML : REHYPE_PLUGINS_NO_HTML;
+  // Math (KaTeX) support is loaded lazily: render pass 1 without math plugins,
+  // then re-render with them once the dynamic imports resolve. react-markdown
+  // rebuilds its processor every render, so swapping plugin arrays via state is
+  // safe. Arrays are memoized to keep references stable across re-renders.
+  const [mathPlugins, setMathPlugins] = useState<MathPlugins | null>(null);
 
-  const getProseClass = useCallback(() => {
-    switch (fontSize) {
-      case 'small':
-        return 'prose prose-sm dark:prose-invert';
-      case 'large':
-        return 'prose prose-lg dark:prose-invert';
-      case 'medium':
-      default:
-        return 'prose dark:prose-invert';
+  useEffect(() => {
+    if (!MATH_PATTERN.test(content)) return;
+    let cancelled = false;
+    Promise.all([
+      import('remark-math'),
+      import('rehype-katex'),
+      import('./lazyKatexCss'),
+    ])
+      .then(([remarkMath, rehypeKatex]) => {
+        if (!cancelled) {
+          setMathPlugins({ remark: remarkMath.default, rehype: rehypeKatex.default });
+        }
+      })
+      .catch((error) => console.warn('Failed to load math support:', error));
+    return () => {
+      cancelled = true;
+    };
+  }, [content]);
+
+  const remarkPlugins = useMemo(
+    () => [
+      ...BASE_REMARK_PLUGINS,
+      ...(breaks ? [remarkBreaks] : []),
+      ...(mathPlugins ? [mathPlugins.remark] : []),
+    ],
+    [breaks, mathPlugins]
+  );
+
+  const rehypePlugins = useMemo<PluggableList>(() => {
+    if (!enableHtml) {
+      return mathPlugins ? [mathPlugins.rehype] : REHYPE_PLUGINS_NO_HTML;
     }
-  }, [fontSize]);
+    return [
+      rehypeRaw,
+      [rehypeSanitize, githubMarkdownSchema],
+      ...(mathPlugins ? [mathPlugins.rehype] : []),
+    ];
+  }, [enableHtml, mathPlugins]);
+
+  const fontSizePx = fontSize === 'small' ? '14px' : fontSize === 'large' ? '18px' : '16px';
 
   const getHeadingId = useCallback((children: React.ReactNode): string | undefined => {
     if (headingIds && headingIds.size > 0) {
@@ -808,34 +824,20 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = memo(({
     return `heading-extra-${headingCounterRef.current++}`;
   }, [headingIds]);
 
+  // Element cosmetics come from .markdown-body (github-markdown-css); the
+  // overrides below only carry behaviour (heading-id handshake, code blocks,
+  // images, links, read-only checkboxes).
   const markdownComponents: Components = useMemo(() => ({
     a: (props) => <MarkdownLink {...props} baseUrl={baseUrl} headingIds={headingIds} />,
     img: (props) => <MarkdownImage {...props} baseUrl={baseUrl} />,
-    h1: ({ children }) => {
-      const id = getHeadingId(children);
-      return <h1 id={id} className="text-lg font-bold text-gray-900 dark:text-text-primary mt-4 mb-2">{children}</h1>;
-    },
-    h2: ({ children }) => {
-      const id = getHeadingId(children);
-      return <h2 id={id} className="text-base font-semibold text-gray-900 dark:text-gray-200 mt-3 mb-2">{children}</h2>;
-    },
-    h3: ({ children }) => {
-      const id = getHeadingId(children);
-      return <h3 id={id} className="text-sm font-medium text-gray-900 dark:text-text-secondary mt-2 mb-1">{children}</h3>;
-    },
-    h4: ({ children }) => {
-      const id = getHeadingId(children);
-      return <h4 id={id} className="text-sm font-medium text-gray-900 dark:text-text-secondary mt-2 mb-1">{children}</h4>;
-    },
-    h5: ({ children }) => {
-      const id = getHeadingId(children);
-      return <h5 id={id} className="text-sm font-medium text-gray-500 dark:text-text-tertiary mt-1 mb-1">{children}</h5>;
-    },
-    h6: ({ children }) => {
-      const id = getHeadingId(children);
-      return <h6 id={id} className="text-sm font-medium text-gray-500 dark:text-text-tertiary mt-1 mb-1">{children}</h6>;
-    },
-    p: ({ children }) => {
+    h1: ({ children }) => <h1 id={getHeadingId(children)}>{children}</h1>,
+    h2: ({ children }) => <h2 id={getHeadingId(children)}>{children}</h2>,
+    h3: ({ children }) => <h3 id={getHeadingId(children)}>{children}</h3>,
+    h4: ({ children }) => <h4 id={getHeadingId(children)}>{children}</h4>,
+    h5: ({ children }) => <h5 id={getHeadingId(children)}>{children}</h5>,
+    h6: ({ children }) => <h6 id={getHeadingId(children)}>{children}</h6>,
+    p: (outerProps) => {
+      const { className, children, ...domProps } = stripAstNode(outerProps);
       const childArray = React.Children.toArray(children);
       const hasImagesOnly = childArray.every(
         child => {
@@ -849,31 +851,14 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = memo(({
       );
 
       return (
-        <p className={`text-gray-900 dark:text-text-secondary mb-2 leading-relaxed ${
-          hasImagesOnly
-            ? 'flex flex-wrap items-center justify-center gap-3'
-            : ''
-        }`}>
+        <p
+          {...domProps}
+          className={hasImagesOnly ? 'flex flex-wrap items-center justify-center gap-3' : className}
+        >
           {children}
         </p>
       );
     },
-    ul: ({ children }) => <ul className="list-disc list-inside text-gray-900 dark:text-text-secondary mb-2 space-y-1">{children}</ul>,
-    ol: ({ children }) => <ol className="list-decimal list-inside text-gray-900 dark:text-text-secondary mb-2 space-y-1">{children}</ol>,
-    li: ({ children, className, ...props }) => (
-      <li className={`ml-2 ${className || ''}`} {...props}>
-        {children}
-      </li>
-    ),
-    strong: ({ children }) => (
-      <strong className="font-semibold text-gray-900 dark:text-gray-100">{children}</strong>
-    ),
-    em: ({ children }) => (
-      <em className="italic text-gray-900 dark:text-text-secondary">{children}</em>
-    ),
-    del: ({ children }) => (
-      <del className="line-through text-gray-500 dark:text-text-tertiary">{children}</del>
-    ),
     code: ({ className, children, ...props }) => {
       // 检查 props 中是否有 'data-code-block' 标记（由 pre 组件添加）
       const isCodeBlock = 'data-code-block' in props || !!className;
@@ -881,15 +866,15 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = memo(({
       const match = /language-(\w+)/.exec(className || '');
       const language = match ? match[1] : '';
 
-      return isInline ? (
-        <code className="px-1.5 py-0.5 bg-light-surface dark:bg-white/[0.04] text-gray-900 dark:text-gray-200 rounded text-xs font-mono" {...props}>
-          {children}
-        </code>
-      ) : (
-        <CodeBlock className={className} language={language}>
-          {children}
-        </CodeBlock>
-      );
+      if (isInline) {
+        return <code {...stripAstNode(props)}>{children}</code>;
+      }
+
+      const codeText = typeof children === 'string' ? children : String(children);
+      if (/^mermaid$/i.test(language)) {
+        return <MermaidBlock code={codeText.replace(/\n$/, '')} />;
+      }
+      return <CodeBlock language={language}>{children}</CodeBlock>;
     },
     pre: ({ children }) => {
       // 给 code 子元素添加标记，表明它是代码块而不是行内代码
@@ -900,53 +885,22 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = memo(({
       // 对于非 code 子元素（如 ASCII 字符画），保留 pre 标签
       return <pre>{children}</pre>;
     },
-    blockquote: ({ children }) => (
-      <blockquote className="border-l-4 border-black/[0.06] dark:border-white/[0.04] pl-4 py-1 my-2 text-gray-700 dark:text-text-tertiary italic bg-light-bg dark:bg-panel-dark/50 rounded-r">
-        {children}
-      </blockquote>
-    ),
-    hr: () => <hr className="my-4 border-black/[0.06] dark:border-white/[0.04]" />,
-    table: ({ children }) => (
-      <div className="overflow-x-auto my-3">
-        <table className="min-w-full border-collapse border border-black/[0.06] dark:border-white/[0.04] text-sm">
-          {children}
-        </table>
-      </div>
-    ),
-    thead: ({ children }) => <thead className="bg-light-surface dark:bg-panel-dark">{children}</thead>,
-    tbody: ({ children }) => <tbody className="text-gray-900 dark:text-text-secondary">{children}</tbody>,
-    th: ({ children }) => (
-      <th className="border border-black/[0.06] dark:border-white/[0.04] px-3 py-2 text-left font-semibold text-gray-900 dark:text-gray-200">
-        {children}
-      </th>
-    ),
-    td: ({ children }) => (
-      <td className="border border-black/[0.06] dark:border-white/[0.04] px-3 py-2 text-gray-900 dark:text-text-secondary">
-        {children}
-      </td>
-    ),
     input: (props) => {
       if (props.type === 'checkbox') {
-        return (
-          <input
-            {...props}
-            readOnly
-            className="mr-1.5 align-middle w-3.5 h-3.5 rounded border-gray-300 text-brand-violet focus:ring-brand-violet dark:border-white/[0.08] dark:bg-white/[0.04]"
-          />
-        );
+        return <input {...stripAstNode(props)} readOnly />;
       }
-      return <input {...props} />;
+      return <Input {...props} />;
     },
   }), [baseUrl, headingIds, getHeadingId]);
 
   if (!shouldRender) {
-    return <div className="h-32 flex items-center justify-center text-gray-400 dark:text-text-quaternary">Loading...</div>;
+    return <div className="h-32 flex items-center justify-center text-muted-foreground dark:text-muted-foreground/70">Loading...</div>;
   }
 
   return (
-    <div className={`${getProseClass()} max-w-none ${className}`}>
+    <div className={`markdown-body max-w-none ${className}`} style={{ fontSize: fontSizePx }}>
       <ReactMarkdown
-        remarkPlugins={REMARK_PLUGINS}
+        remarkPlugins={remarkPlugins}
         rehypePlugins={rehypePlugins}
         components={markdownComponents}
       >

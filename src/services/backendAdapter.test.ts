@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { backend } from './backendAdapter';
+import { backend, getBackendProbeUrls, WORKER_CANONICAL_API_ORIGIN } from './backendAdapter';
 
 vi.mock('../store/useAppStore', () => ({
   useAppStore: { getState: () => ({ backendApiSecret: '' }) },
@@ -66,5 +66,20 @@ describe('backendAdapter 429 Retry-After 解析', () => {
     const err = (await backend.checkRateLimit().catch((e: Error) => e)) as Error & { statusCode?: number; retryAfterMs?: number };
     expect(err.statusCode).toBe(429);
     expect(err.retryAfterMs).toBeUndefined();
+  });
+});
+
+describe('backendAdapter Worker endpoint selection', () => {
+  it('uses the canonical Worker hostname before a custom-domain API', () => {
+    expect(getBackendProbeUrls('https://gsm.syquui.eu.org', 'gsm.syquui.eu.org')).toEqual([
+      `${WORKER_CANONICAL_API_ORIGIN}/api`,
+      'https://gsm.syquui.eu.org/api',
+    ]);
+  });
+
+  it('keeps the current origin on the canonical Worker hostname', () => {
+    expect(getBackendProbeUrls(WORKER_CANONICAL_API_ORIGIN, 'github-stars-manager.2568176665.workers.dev')).toEqual([
+      `${WORKER_CANONICAL_API_ORIGIN}/api`,
+    ]);
   });
 });

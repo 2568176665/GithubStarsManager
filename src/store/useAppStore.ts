@@ -42,6 +42,7 @@ import {
   HeaderMenuItem,
   defaultHeaderMenuConfig,
   SyncMode,
+  TranslationEngine,
 } from '../types';
 import { indexedDBStorage } from '../services/indexedDbStorage';
 import { EMBEDDING_FORMAT_VERSION } from '../services/vectorSearchService';
@@ -405,7 +406,10 @@ interface AppActions {
   batchUnsubscribeReleases: (repoIds: number[]) => void;
   removeReleasesByRepoId: (repoId: number) => void;
   removeReleasesByRepoFullName: (fullName: string) => void;
+  /** 标记 Release 已读；被标记的条目同时清空 updated_asset_ids（“资产已更新”标识随已读消失） */
   markReleaseAsRead: (releaseId: number) => void;
+  /** 点击某条资产后清除其"资产已更新"标识（从 updated_asset_ids 移除），不影响 Release 级未读状态 */
+  markAssetAsRead: (assetId: number) => void;
   markAllReleasesAsRead: () => void;
   setReleaseSourceSettings: (settings: ReleaseSourceSettings) => void;
   setReleaseEnabledSources: (sourceIds: ReleaseSourceId[]) => void;
@@ -447,6 +451,7 @@ interface AppActions {
   setCurrentView: (view: 'repositories' | 'gists' | 'releases' | 'forks' | 'settings' | 'subscription') => void;
   setSelectedCategory: (category: string) => void;
   setLanguage: (language: 'zh' | 'en') => void;
+  setTranslationEngine: (engine: TranslationEngine) => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
   setReadmeModalOpen: (open: boolean) => void;
   setHeaderMenuConfig: (config: HeaderMenuItem[]) => void;
@@ -580,6 +585,7 @@ type PersistedAppState = Partial<
     | 'currentView'
     | 'selectedCategory'
     | 'language'
+    | 'translationEngine'
     | 'searchFilters'
     | 'isSidebarCollapsed'
     | 'repositoryViewMode'
@@ -930,6 +936,9 @@ export const normalizePersistedState = (
     categoryMatchMode: safePersisted.categoryMatchMode === 'legacy' ? 'legacy' : 'effective',
     assetFilters: Array.isArray(safePersisted.assetFilters) && safePersisted.assetFilters.length > 0 ? safePersisted.assetFilters : defaultPresetFilters,
     language: safePersisted.language || 'zh',
+    translationEngine: safePersisted.translationEngine === 'google' || safePersisted.translationEngine === 'ai'
+      ? safePersisted.translationEngine
+      : 'microsoft',
     isAuthenticated: !!(resolvedUser && resolvedGithubToken),
     releaseViewMode: safePersisted.releaseViewMode || 'timeline',
     releaseShowMode: safePersisted.releaseShowMode === 'unread' ? 'unread' : 'all',
@@ -1338,6 +1347,7 @@ export const useAppStore = create<AppState & AppActions>()(
       currentView: 'repositories',
       selectedCategory: 'all',
       language: 'zh',
+      translationEngine: 'microsoft',
       updateNotification: null,
       analysisProgress: { current: 0, total: 0 },
       backendApiSecret: readSessionBackendSecret(),
@@ -2066,6 +2076,11 @@ export const useAppStore = create<AppState & AppActions>()(
         const newReadReleases = new Set(state.readReleases);
         newReadReleases.add(releaseId);
 
+        // 点击 Release 即视为已看过其资产更新：被标记已读的条目同时清除资产级
+        // “资产已更新”标识（updated_asset_ids）。仅改动确有标识的记录，避免
+        // 每次点击都生成新的 releases 数组触发多余的重渲染与持久化。
+        const clearedIds = new Set<number>([releaseId]);
+
         // In 'latest' mode, marking the latest release as read also marks all other releases of that repo
         if (state.releaseLatestMode === 'latest') {
           const markedRelease = state.releases.find(r => r.id === releaseId);
@@ -2076,16 +2091,53 @@ export const useAppStore = create<AppState & AppActions>()(
               r.published_at > latest.published_at ? r : latest
             , repoReleases[0]);
             if (latestRepoRelease && latestRepoRelease.id === releaseId) {
-              repoReleases.forEach(r => newReadReleases.add(r.id));
+              repoReleases.forEach(r => {
+                newReadReleases.add(r.id);
+                clearedIds.add(r.id);
+              });
             }
           }
         }
 
-        return { readReleases: newReadReleases };
+        const releases = state.releases.some(r => clearedIds.has(r.id) && (r.updated_asset_ids?.length ?? 0) > 0)
+          ? state.releases.map(r =>
+              clearedIds.has(r.id) && (r.updated_asset_ids?.length ?? 0) > 0
+                ? { ...r, updated_asset_ids: [] }
+                : r
+            )
+          : state.releases;
+
+        return { readReleases: newReadReleases, releases };
       }),
+      // 资产级已读：仅从 release.updated_asset_ids 移除该资产 id，不动 readReleases/is_read。
+      // 无命中时直接返回，避免多余的重渲染与 autoSync 推送。
+      markAssetAsRead: (assetId) => {
+        const state = get();
+        const hasAsset = state.releases.some(release => release.updated_asset_ids?.includes(assetId));
+        if (!hasAsset) return;
+        set((s) => ({
+          releases: s.releases.map(release =>
+            release.updated_asset_ids?.includes(assetId)
+              ? { ...release, updated_asset_ids: release.updated_asset_ids.filter(id => id !== assetId) }
+              : release
+          ),
+        }));
+      },
       markAllReleasesAsRead: () => set((state) => {
         const allReleaseIds = new Set(state.releases.map(r => r.id));
-        return { readReleases: allReleaseIds };
+        // "全部已读"视为用户已看过所有更新：一并清除资产级"资产已更新"标识，
+        // 并同步记录上的 is_read=true，避免后续 autoSync 整表推送时用陈旧的
+        // is_read:false 覆盖后端 mark-all-read 已置为已读的状态。
+        const releases = state.releases.map(release => {
+          const hasBadges = !!release.updated_asset_ids && release.updated_asset_ids.length > 0;
+          if (release.is_read === true && !hasBadges) return release;
+          return {
+            ...release,
+            is_read: true,
+            ...(hasBadges ? { updated_asset_ids: [] } : {}),
+          };
+        });
+        return { readReleases: allReleaseIds, releases };
       }),
 
       // Category actions
@@ -2357,6 +2409,7 @@ export const useAppStore = create<AppState & AppActions>()(
       setCurrentView: (currentView) => set({ currentView }),
       setSelectedCategory: (selectedCategory) => set({ selectedCategory }),
       setLanguage: (language) => set({ language }),
+      setTranslationEngine: (translationEngine) => set({ translationEngine }),
       setSidebarCollapsed: (isSidebarCollapsed) => set({ isSidebarCollapsed }),
       setReadmeModalOpen: (readmeModalOpen) => set({ readmeModalOpen }),
       setHeaderMenuConfig: (config) => set({
@@ -2608,6 +2661,7 @@ export const useAppStore = create<AppState & AppActions>()(
         currentView: state.currentView,
         selectedCategory: state.selectedCategory,
         language: state.language,
+        translationEngine: state.translationEngine,
         isSidebarCollapsed: state.isSidebarCollapsed,
         headerMenuConfig: state.headerMenuConfig,
 

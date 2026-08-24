@@ -3,6 +3,9 @@ import { useAppStore } from '../store/useAppStore';
 import { mergeRepositoriesPreservingLocalMetadata } from '../utils/repositoryMerge';
 import { GitHubApiService } from './githubApi';
 import { logger } from './logger';
+import { discoveryAnalysisStorage } from './discoveryAnalysisStorage';
+import { analysesMapToRecord, mergeDiscoveryAnalyses } from '../utils/discoveryAnalysisMerge';
+import { applyAppStateSnapshot, buildAppStateSnapshot } from './appStateSnapshot';
 
 // Prevent sync loops: when we pull data FROM backend and update store,
 // the store subscription would trigger a push TO backend. This flag blocks that.
@@ -37,6 +40,7 @@ const _lastHash = {
   embedding: '',
   vectorSearch: '',
   settings: '',
+  discoveryAnalyses: '',
 };
 
 function quickHash(data: unknown): string {
@@ -214,7 +218,7 @@ export async function syncFromBackend(): Promise<void> {
 
   const startTime = Date.now();
   try {
-    const [reposResult, releasesResult, aiResult, webdavResult, embeddingResult, vectorSearchResult, settingsResult] = await Promise.allSettled([
+    const [reposResult, releasesResult, aiResult, webdavResult, embeddingResult, vectorSearchResult, settingsResult, discoveryAnalysesResult] = await Promise.allSettled([
       backend.fetchRepositories(),
       backend.fetchReleases(),
       backend.fetchAIConfigs(),
@@ -222,9 +226,10 @@ export async function syncFromBackend(): Promise<void> {
       backend.fetchEmbeddingConfigs(),
       backend.fetchVectorSearchConfig(),
       backend.fetchSettings(),
+      backend.fetchDiscoveryAnalyses(),
     ]);
 
-    const changed = { repos: false, releases: false, ai: false, webdav: false, embedding: false, vectorSearch: false, settings: false };
+    const changed = { repos: false, releases: false, ai: false, webdav: false, embedding: false, vectorSearch: false, settings: false, discoveryAnalyses: false };
 
     // Compute hashes for each slice — only mark changed if hash differs
     const hashes: Record<string, string> = {};
@@ -283,6 +288,14 @@ export async function syncFromBackend(): Promise<void> {
       }
     }
 
+    if (discoveryAnalysesResult.status === 'fulfilled') {
+      const hash = quickHash(discoveryAnalysesResult.value);
+      if (hash !== _lastHash.discoveryAnalyses) {
+        hashes.discoveryAnalyses = hash;
+        changed.discoveryAnalyses = true;
+      }
+    }
+
     // Only update store if backend data actually changed
     if (!Object.values(changed).some(Boolean)) {
       _isSyncingFromBackendActive = false;
@@ -309,6 +322,11 @@ export async function syncFromBackend(): Promise<void> {
         _hasPendingPush = true;
       } else {
         const merged = mergeRepositoriesPreservingLocalMetadata(backendRepos, localRepos);
+        if (quickHash(merged) !== quickHash(backendRepos)) {
+          // Local analysis/custom metadata filled a gap in the D1 snapshot;
+          // persist the merged result so another origin can recover it too.
+          _hasPendingPush = true;
+        }
         state.setRepositories(merged);
         _lastHash.repos = quickHash(merged);
       }
@@ -399,6 +417,14 @@ export async function syncFromBackend(): Promise<void> {
     // Sync active selections from settings
     if (changed.settings && settingsResult.status === 'fulfilled') {
       const settings = settingsResult.value;
+      const localSettings = buildAppStateSnapshot(state);
+      const mergedSettings = { ...localSettings, ...settings };
+      if (quickHash(mergedSettings) !== quickHash(settings)) {
+        // Older backends may not have the newly added state fields yet.
+        // Preserve those local fields and migrate them into D1 on this pull.
+        _hasPendingPush = true;
+      }
+      applyAppStateSnapshot(mergedSettings);
       if (typeof settings.activeAIConfig === 'string' || settings.activeAIConfig === null) {
         state.setActiveAIConfig(settings.activeAIConfig as string | null);
       }
@@ -439,6 +465,15 @@ export async function syncFromBackend(): Promise<void> {
       }
       _lastHash.settings = hashes.settings;
     }
+    if (changed.discoveryAnalyses && discoveryAnalysesResult.status === 'fulfilled') {
+      const localAnalyses = analysesMapToRecord(await discoveryAnalysisStorage.loadAllAnalyses());
+      const mergedAnalyses = mergeDiscoveryAnalyses(discoveryAnalysesResult.value, localAnalyses);
+      await discoveryAnalysisStorage.saveAllAnalyses(mergedAnalyses);
+      if (quickHash(mergedAnalyses) !== quickHash(discoveryAnalysesResult.value)) {
+        _hasPendingPush = true;
+      }
+      _lastHash.discoveryAnalyses = hashes.discoveryAnalyses;
+    }
 
     logger.info('sync.pullFromBackend', 'Synced from backend (data changed)', { ...changed, durationMs: Date.now() - startTime });
   } catch (err) {
@@ -476,6 +511,7 @@ export async function syncToBackend(): Promise<void> {
   try {
     const state = useAppStore.getState();
 
+    const discoveryAnalyses = analysesMapToRecord(await discoveryAnalysisStorage.loadAllAnalyses());
     const results = await Promise.allSettled([
       backend.syncRepositories(state.repositories),
       backend.syncReleases(state.releases),
@@ -483,19 +519,10 @@ export async function syncToBackend(): Promise<void> {
       backend.syncWebDAVConfigs(state.webdavConfigs),
       backend.syncEmbeddingConfigs(state.embeddingConfigs),
       backend.syncVectorSearchConfig(state.vectorSearchConfig),
-      backend.syncSettings({
-        activeAIConfig: state.activeAIConfig,
-        activeWebDAVConfig: state.activeWebDAVConfig,
-        activeEmbeddingConfig: state.activeEmbeddingConfig,
-        hiddenDefaultCategoryIds: state.hiddenDefaultCategoryIds,
-        categoryOrder: state.categoryOrder,
-        customCategories: state.customCategories,
-        assetFilters: state.assetFilters,
-        releaseSourceSettings: state.releaseSourceSettings,
-        collapsedSidebarCategoryCount: state.collapsedSidebarCategoryCount,
-      }),
+      backend.syncSettings(buildAppStateSnapshot(state)),
+      backend.syncDiscoveryAnalyses(discoveryAnalyses),
     ]);
-    const [reposSync, releasesSync, aiSync, webdavSync, embeddingSync, vectorSearchSync, settingsSync] = results;
+    const [reposSync, releasesSync, aiSync, webdavSync, embeddingSync, vectorSearchSync, settingsSync, discoveryAnalysesSync] = results;
 
     const failures = results.filter(r => r.status === 'rejected');
     if (failures.length > 0) {
@@ -525,6 +552,9 @@ export async function syncToBackend(): Promise<void> {
         releaseSourceSettings: state.releaseSourceSettings,
         collapsedSidebarCategoryCount: state.collapsedSidebarCategoryCount,
       });
+    }
+    if (discoveryAnalysesSync.status === 'fulfilled') {
+      _lastHash.discoveryAnalyses = quickHash(discoveryAnalyses);
     }
   } catch (err) {
     logger.errorFromError('sync.pushToBackend', 'Failed to sync to backend', err, { durationMs: Date.now() - pushStartTime });
@@ -590,7 +620,8 @@ export function startAutoSync(): () => void {
       state.customCategories !== prevState.customCategories ||
       state.assetFilters !== prevState.assetFilters ||
       state.releaseSourceSettings !== prevState.releaseSourceSettings ||
-      state.collapsedSidebarCategoryCount !== prevState.collapsedSidebarCategoryCount;
+      state.collapsedSidebarCategoryCount !== prevState.collapsedSidebarCategoryCount ||
+      state.discoveryRepos !== prevState.discoveryRepos;
 
     if (!changed) return;
 

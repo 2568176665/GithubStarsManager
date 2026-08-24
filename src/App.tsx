@@ -172,6 +172,31 @@ function App() {
       try {
         await backend.init();
         if (backend.isAvailable && !cancelled) {
+          if (backend.isWorkerEnvMode) {
+            const [session, envAIConfigs] = await Promise.all([
+              backend.fetchManagedSession(),
+              backend.fetchAIConfigs(),
+            ]);
+            if (!cancelled) {
+              const state = useAppStore.getState();
+              state.setGitHubToken('worker-managed');
+              state.setUser(session as unknown as Parameters<typeof state.setUser>[0]);
+              state.setAIConfigs(envAIConfigs);
+              if (envAIConfigs.length > 0) state.setActiveAIConfig(envAIConfigs[0].id);
+            }
+          }
+          if (backend.isWorkerEnvMode) {
+            // Worker ENV mode still needs the normal D1 pull/push lifecycle.
+            // The browser origin may be new, so local IndexedDB cannot be the
+            // source of truth for repositories and AI analysis metadata.
+            if (!cancelled) {
+              await syncFromBackend();
+            }
+            if (!cancelled) {
+              unsubscribe = startAutoSync();
+            }
+            return;
+          }
           // Issue #259: recover a session on a fresh browser/device. Only acts
           // when there is no local session and the backend is authenticated.
           // Run before the backend data pull so auth can complete before the
@@ -250,8 +275,8 @@ function App() {
   // Show loading state while store is hydrating to ensure correct theme is applied
   if (!hasHydrated) {
     return (
-      <div className="min-h-screen bg-light-bg dark:bg-marketing-black flex items-center justify-center">
-        <div className="text-gray-900 dark:text-text-primary text-lg font-medium animate-pulse">
+      <div className="flex min-h-screen items-center justify-center bg-background text-foreground">
+        <div className="animate-pulse text-lg font-medium text-foreground">
           Loading...
         </div>
       </div>
@@ -263,7 +288,7 @@ function App() {
   }
 
   return (
-    <div className="ui-shell min-h-screen text-gray-900 dark:text-text-primary transition-colors duration-200">
+    <div className="ui-shell min-h-screen transition-colors duration-200">
       <UpdateNotificationBanner />
       <Header />
       <main className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-5 sm:py-7">
