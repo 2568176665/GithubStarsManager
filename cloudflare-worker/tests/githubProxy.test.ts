@@ -32,4 +32,14 @@ describe('Cloudflare Worker GitHub proxy', () => {
       expect.objectContaining({ body: JSON.stringify(graphQLBody) })
     );
   });
+
+  it('returns 404 instead of 500 when a static asset binding is unavailable', async () => {
+    const response = await worker.fetch(
+      new Request('https://gsm.example/icon-rounded-light.svg'),
+      {} as never
+    );
+
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe('Not Found');
+  });
 });

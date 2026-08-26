@@ -194,6 +194,12 @@ export default {
       if (url.pathname === '/favicon.ico') {
         return Response.redirect(new URL('/icon.png', request.url).toString(), 302);
       }
+      if (!env.ASSETS) {
+        return new Response('Not Found', {
+          status: 404,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'text/plain; charset=utf-8' },
+        });
+      }
       return env.ASSETS.fetch(request);
     } catch (error) {
       return json({ success: false, error: error instanceof Error ? error.message : String(error) }, 500);

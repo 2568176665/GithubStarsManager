@@ -20,7 +20,9 @@ export const useDiagnosticBackendActions = ({ selectedScope }: UseDiagnosticBack
   const [backendDebug, setBackendDebug] = useState(false);
   const [backendEntries, setBackendEntries] = useState<LogEntry[]>([]);
   const [backendLogCount, setBackendLogCount] = useState(0);
-  const backendAvailable = backend.isAvailable;
+  // Worker ENV exposes application APIs, but diagnostics are implemented only
+  // by the optional Docker backend.
+  const backendAvailable = backend.isAvailable && !backend.isWorkerEnvMode;
 
   const fetchLogs = useCallback(async (level?: LogLevel): Promise<BackendLogsResponse | null> => {
     if (!backendAvailable) return null;

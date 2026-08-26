@@ -11,14 +11,16 @@ import { Button } from './ui/button';
  */
 export const DebugModeIndicator: React.FC = () => {
   const [frontendDebug, setFrontendDebug] = useState(() => sessionStorage.getItem('gsm:frontend-debug') === 'true');
-  const [backendDebug, setBackendDebug] = useState(() => sessionStorage.getItem('gsm:backend-debug') === 'true');
+  const [backendDebug, setBackendDebug] = useState(() => (
+    !backend.isWorkerEnvMode && sessionStorage.getItem('gsm:backend-debug') === 'true'
+  ));
   const setCurrentView = useAppStore(s => s.setCurrentView);
 
   // Sync with sessionStorage changes (e.g. from DiagnosticLogsPanel)
   useEffect(() => {
     const check = () => {
       setFrontendDebug(sessionStorage.getItem('gsm:frontend-debug') === 'true');
-      setBackendDebug(sessionStorage.getItem('gsm:backend-debug') === 'true');
+      setBackendDebug(!backend.isWorkerEnvMode && sessionStorage.getItem('gsm:backend-debug') === 'true');
     };
     // Also listen for storage events from other tabs
     window.addEventListener('storage', check);
@@ -37,7 +39,7 @@ export const DebugModeIndicator: React.FC = () => {
     setFrontendDebug(false);
 
     // Disable backend debug
-    if (backend.isAvailable) {
+    if (backend.isAvailable && !backend.isWorkerEnvMode) {
       try {
         const secret = sessionStorage.getItem('github-stars-manager-backend-secret');
         await fetch('/api/logs/debug', {

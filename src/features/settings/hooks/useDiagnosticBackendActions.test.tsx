@@ -3,9 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LogEntry } from '../../../services/logger';
 import { useDiagnosticBackendActions } from './useDiagnosticBackendActions';
 
-vi.mock('../../../services/backendAdapter', () => ({
-  backend: { isAvailable: true, backendUrl: 'http://backend.test' },
+const backendMock = vi.hoisted(() => ({
+  isAvailable: true,
+  isWorkerEnvMode: false,
+  backendUrl: 'http://backend.test',
 }));
+
+vi.mock('../../../services/backendAdapter', () => ({ backend: backendMock }));
 
 const entry = {
   timestamp: '2026-08-25T00:00:00.000Z',
@@ -15,6 +19,8 @@ const entry = {
 
 describe('useDiagnosticBackendActions', () => {
   beforeEach(() => {
+    backendMock.isAvailable = true;
+    backendMock.isWorkerEnvMode = false;
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('backend unavailable')));
   });
 
@@ -40,5 +46,14 @@ describe('useDiagnosticBackendActions', () => {
 
     expect(result.current.backendEntries).toEqual([entry]);
     expect(result.current.backendLogCount).toBe(1);
+  });
+
+  it('does not probe Docker diagnostics in Worker ENV mode', () => {
+    backendMock.isWorkerEnvMode = true;
+
+    const { result } = renderHook(() => useDiagnosticBackendActions({ selectedScope: 'all' }));
+
+    expect(result.current.backendAvailable).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

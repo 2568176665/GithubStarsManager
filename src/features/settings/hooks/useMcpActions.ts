@@ -45,7 +45,7 @@ export const useMcpActions = ({ t }: UseMcpActionsOptions): McpActions => {
   const [endpoints, setEndpoints] = useState({ streamableHttp: '/mcp', sse: '/sse', messages: '/messages' });
 
   const refreshFromBackend = useCallback(async () => {
-    if (!backend.isAvailable) {
+    if (!backend.isAvailable || backend.isWorkerEnvMode) {
       setBackendMode(false);
       return;
     }
