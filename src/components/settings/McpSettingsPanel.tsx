@@ -1,6 +1,7 @@
 import { Input } from '../ui/input';
 import { Button } from '../ui/button';
 import { Switch } from '../ui/switch';
+import { NumberInput } from '../ui/NumberInput';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Cable,
@@ -13,42 +14,25 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
-import { backend } from '../../services/backendAdapter';
+import { useShallow } from 'zustand/react/shallow';
 import { isElectron } from '../../services/electronProxy';
 import { useDialog } from '../../hooks/useDialog';
+import { useMcpActions } from '../../features/settings/hooks/useMcpActions';
 import { MCP_DEFAULT_PORT, normalizeMcpHost } from '../../utils/mcpHost';
 
 interface McpSettingsPanelProps {
   t: (zh: string, en: string) => string;
 }
 
-function generateLocalToken(): string {
-  const bytes = new Uint8Array(24);
-  crypto.getRandomValues(bytes);
-  let binary = '';
-  bytes.forEach((b) => {
-    binary += String.fromCharCode(b);
-  });
-  const b64 = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-  return `gsm_mcp_${b64}`;
-}
-
 export const McpSettingsPanel: React.FC<McpSettingsPanelProps> = ({ t }) => {
-  const { mcpConfig, setMcpConfig, language } = useAppStore();
-  const { toast, confirm } = useDialog();
-
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { mcpConfig, setMcpConfig, language } = useAppStore(useShallow((state) => ({
+    mcpConfig: state.mcpConfig,
+    setMcpConfig: state.setMcpConfig,
+    language: state.language,
+  })));
+  const { toast } = useDialog();
+  const { loading, saving, error, backendMode, vectorAvailable, endpoints, refresh: refreshFromBackend, toggle: handleToggle, resetToken: handleResetToken } = useMcpActions({ t });
   const [showToken, setShowToken] = useState(false);
-  const [backendMode, setBackendMode] = useState(false);
-  const [vectorAvailable, setVectorAvailable] = useState<boolean | null>(null);
-  // Defaults for Electron local; backend overwrites via /api/mcp/status
-  const [endpoints, setEndpoints] = useState({
-    streamableHttp: '/mcp',
-    sse: '/sse',
-    messages: '/messages',
-  });
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [portInput, setPortInput] = useState(String(mcpConfig.port || MCP_DEFAULT_PORT));
 
@@ -105,42 +89,6 @@ export const McpSettingsPanel: React.FC<McpSettingsPanelProps> = ({ t }) => {
     showToken || !mcpConfig.token ? json : json.replace(mcpConfig.token, '••••••••')
   ), [mcpConfig.token, showToken]);
 
-  const refreshFromBackend = useCallback(async () => {
-    if (!backend.isAvailable) {
-      setBackendMode(false);
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const status = await backend.getMcpStatus();
-      setBackendMode(true);
-      setMcpConfig({
-        enabled: status.enabled,
-        token: status.token,
-      });
-      setEndpoints(status.endpoints);
-      setVectorAvailable(status.vectorAvailable);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, [setMcpConfig]);
-
-  useEffect(() => {
-    void refreshFromBackend();
-  }, [refreshFromBackend]);
-
-  // Mint a durable local token only when enabling without one (persisted in IndexedDB).
-  // Never rotate automatically — only user "Reset Token" replaces it.
-  // Lifecycle (start/stop/snapshot) lives in mcpElectronBridge (App session).
-  useEffect(() => {
-    if (!backendMode && isElectronApp && mcpConfig.enabled && !mcpConfig.token) {
-      setMcpConfig({ token: generateLocalToken() });
-    }
-  }, [backendMode, isElectronApp, mcpConfig.enabled, mcpConfig.token, setMcpConfig]);
-
   const copyText = async (key: string, text: string) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -149,76 +97,6 @@ export const McpSettingsPanel: React.FC<McpSettingsPanelProps> = ({ t }) => {
       setTimeout(() => setCopiedKey(null), 1500);
     } catch {
       toast(t('复制失败', 'Copy failed'), 'error');
-    }
-  };
-
-  const handleToggle = async (enabled: boolean) => {
-    setSaving(true);
-    setError(null);
-    try {
-      if (backendMode && backend.isAvailable) {
-        const result = await backend.updateMcpConfig({ enabled });
-        setMcpConfig({ enabled: result.enabled, token: result.token });
-        setEndpoints(result.endpoints);
-        toast(
-          enabled
-            ? t('MCP 服务已开启', 'MCP server enabled')
-            : t('MCP 服务已关闭', 'MCP server disabled'),
-          'success'
-        );
-      } else if (isElectronApp) {
-        let token = mcpConfig.token;
-        if (enabled && !token) token = generateLocalToken();
-        setMcpConfig({ enabled, token });
-        toast(
-          enabled
-            ? t('MCP 服务已开启（本地）', 'MCP server enabled (local)')
-            : t('MCP 服务已关闭', 'MCP server disabled'),
-          'success'
-        );
-      } else {
-        toast(t('需要后端或客户端才能使用 MCP', 'Backend or desktop client required for MCP'), 'error');
-      }
-    } catch (err) {
-      setError((err as Error).message);
-      toast(t('操作失败', 'Operation failed'), 'error');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleResetToken = async () => {
-    if (!mcpConfig.enabled) {
-      toast(
-        t('请先开启 MCP 服务再重置 Token', 'Enable MCP before resetting the token'),
-        'error'
-      );
-      return;
-    }
-    const ok = await confirm(
-      t('重置 MCP Token', 'Reset MCP Token'),
-      t(
-        '重置后旧 Token 立即失效，需要更新 Agent 配置。是否继续？',
-        'The old token will stop working immediately. Update your agent config. Continue?'
-      )
-    );
-    if (!ok) return;
-
-    setSaving(true);
-    try {
-      if (backendMode && backend.isAvailable) {
-        const result = await backend.updateMcpConfig({ resetToken: true, enabled: true });
-        // Backend token is session/UI only — store still holds local electron prefs separately
-        setMcpConfig({ token: result.token, enabled: result.enabled });
-      } else {
-        setMcpConfig({ token: generateLocalToken() });
-      }
-      toast(t('Token 已重置', 'Token reset'), 'success');
-    } catch (err) {
-      setError((err as Error).message);
-      toast(t('重置失败', 'Reset failed'), 'error');
-    } finally {
-      setSaving(false);
     }
   };
 
@@ -243,7 +121,7 @@ export const McpSettingsPanel: React.FC<McpSettingsPanelProps> = ({ t }) => {
       </p>
 
       {error && (
-        <div className="flex items-start gap-2 p-3 rounded-lg bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-300 text-sm">
+        <div className="flex items-start gap-2 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
           <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
           <span>{error}</span>
         </div>
@@ -276,7 +154,7 @@ export const McpSettingsPanel: React.FC<McpSettingsPanelProps> = ({ t }) => {
           {loading ? (
             <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
           ) : mcpConfig.enabled ? (
-            <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
+            <CheckCircle className="w-4 h-4 text-success" />
           ) : (
             <AlertCircle className="w-4 h-4 text-muted-foreground" />
           )}
@@ -298,7 +176,7 @@ export const McpSettingsPanel: React.FC<McpSettingsPanelProps> = ({ t }) => {
         </div>
 
         {vectorAvailable === false && (
-          <p className="text-xs text-amber-700 dark:text-amber-300">
+          <p className="text-xs text-warning">
             {t(
               '向量搜索未配置：Agent 不会看到 gsm_vector_search 工具。可在「向量搜索」中配置。',
               'Vector search not configured: gsm_vector_search will not be listed. Configure under Vector Search.'
@@ -306,7 +184,7 @@ export const McpSettingsPanel: React.FC<McpSettingsPanelProps> = ({ t }) => {
           </p>
         )}
         {vectorAvailable === true && (
-          <p className="text-xs text-green-700 dark:text-green-300">
+          <p className="text-xs text-success">
             {t('向量搜索已启用，将暴露 gsm_vector_search。', 'Vector search enabled; gsm_vector_search is listed.')}
           </p>
         )}
@@ -330,28 +208,23 @@ export const McpSettingsPanel: React.FC<McpSettingsPanelProps> = ({ t }) => {
             </label>
             <label className="text-sm text-muted-foreground dark:text-muted-foreground">
               {t('端口', 'Port')}
-              <Input
-                type="number"
+              <NumberInput
                 min={1}
                 max={65535}
-                value={portInput}
-                onChange={(e) => {
-                  const value = e.target.value;
+                draftValue={portInput}
+                onDraftChange={(value) => {
                   setPortInput(value);
                   const parsed = Number(value);
                   if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535) {
                     setMcpConfig({ port: parsed });
                   }
                 }}
-                onBlur={() => {
-                  const parsed = Number(portInput);
-                  const port = Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535
-                    ? parsed
-                    : MCP_DEFAULT_PORT;
+                onDraftCommit={(parsed) => {
+                  const port = parsed ?? MCP_DEFAULT_PORT;
                   setPortInput(String(port));
                   setMcpConfig({ port });
                 }}
-                className="mt-1 w-full px-3 py-2 rounded-lg border border-border dark:border-border bg-muted dark:bg-muted/40 text-foreground dark:text-foreground text-sm"
+                className="mt-1 w-full"
               />
             </label>
           </div>
@@ -417,7 +290,7 @@ export const McpSettingsPanel: React.FC<McpSettingsPanelProps> = ({ t }) => {
             aria-label={t('复制 Token', 'Copy token')}
           >
             {copiedKey === 'token' ? (
-              <CheckCircle className="w-4 h-4 text-green-600" />
+              <CheckCircle className="w-4 h-4 text-success" />
             ) : (
               <Copy className="w-4 h-4" />
             )}
@@ -484,7 +357,7 @@ export const McpSettingsPanel: React.FC<McpSettingsPanelProps> = ({ t }) => {
               {copiedKey === 'json' ? t('已复制', 'Copied') : t('复制 JSON', 'Copy JSON')}
             </Button>
           </div>
-          <pre className="text-xs font-mono p-3 rounded-lg bg-background dark:bg-black/30 overflow-x-auto text-foreground dark:text-muted-foreground border border-black/[0.04] dark:border-border">
+          <pre className="text-xs font-mono p-3 rounded-lg bg-background dark:bg-muted/40 overflow-x-auto text-foreground dark:text-muted-foreground border border-border/60 dark:border-border">
             {maskToken(agentConfigJson)}
           </pre>
           <p className="text-xs text-muted-foreground dark:text-muted-foreground mt-2">
@@ -506,7 +379,7 @@ export const McpSettingsPanel: React.FC<McpSettingsPanelProps> = ({ t }) => {
               {copiedKey === 'sse-json' ? t('已复制', 'Copied') : t('复制 SSE JSON', 'Copy SSE JSON')}
             </Button>
           </div>
-          <pre className="text-xs font-mono p-3 rounded-lg bg-background dark:bg-black/30 overflow-x-auto text-foreground dark:text-muted-foreground border border-black/[0.04] dark:border-border">
+          <pre className="text-xs font-mono p-3 rounded-lg bg-background dark:bg-muted/40 overflow-x-auto text-foreground dark:text-muted-foreground border border-border/60 dark:border-border">
             {maskToken(agentSseConfigJson)}
           </pre>
         </div>

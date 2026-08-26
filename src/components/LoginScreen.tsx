@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { AlertCircle, ArrowRight, Github, Key, Moon, Sun } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
+import { useShallow } from 'zustand/react/shallow';
 import { GitHubApiService } from '../services/githubApi';
 import { backend } from '../services/backendAdapter';
 import { safeReadText } from '../utils/clipboardUtils';
@@ -14,7 +15,16 @@ export const LoginScreen: React.FC = () => {
   const [token, setToken] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
-  const { setUser, setGitHubToken, repositories, lastSync, language, setLanguage, theme, setTheme } = useAppStore();
+  const { setUser, setGitHubToken, repositories, lastSync, language, setLanguage, theme, setTheme } = useAppStore(useShallow((state) => ({
+    setUser: state.setUser,
+    setGitHubToken: state.setGitHubToken,
+    repositories: state.repositories,
+    lastSync: state.lastSync,
+    language: state.language,
+    setLanguage: state.setLanguage,
+    theme: state.theme,
+    setTheme: state.setTheme,
+    })));
   const workerManaged = backend.isWorkerEnvMode;
 
   const handleConnect = async () => {
@@ -128,23 +138,17 @@ export const LoginScreen: React.FC = () => {
           </div>
 
           {repositories.length > 0 && lastSync && (
-            <div className="mb-4 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-100">
+            <div className="mb-4 rounded-md border border-success/30 bg-success/10 p-3 text-success">
               <div className="flex items-center gap-2">
-                <div className="h-2 w-2 rounded-full bg-emerald-600 dark:bg-emerald-400" />
+                <div className="h-2 w-2 rounded-full bg-success" />
                 <span className="text-sm font-medium">{t(`已缓存 ${repositories.length} 个仓库`, `${repositories.length} repositories cached`)}</span>
               </div>
-              <p className="mt-1 text-xs text-emerald-700 dark:text-emerald-300">{t('上次同步:', 'Last sync:')} {new Date(lastSync).toLocaleString()}</p>
+              <p className="mt-1 text-xs text-success">{t('上次同步:', 'Last sync:')} {new Date(lastSync).toLocaleString()}</p>
             </div>
           )}
 
           <div className="space-y-4">
-            {workerManaged && (
-              <div className="rounded-md border border-primary/20 bg-primary/5 p-3 text-sm text-muted-foreground">
-                {t('GitHub 配置由 Worker 环境变量托管。', 'GitHub is managed by the Worker environment.')}
-              </div>
-            )}
-
-            {!workerManaged && <div className="space-y-2">
+            <div className="space-y-2">
               <Label htmlFor="github-token">GitHub Personal Access Token</Label>
               <div className="relative">
                 <Key className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-muted-foreground dark:text-muted-foreground/70" />
@@ -162,7 +166,7 @@ export const LoginScreen: React.FC = () => {
                   className="pl-10"
                 />
               </div>
-            </div>}
+            </div>
 
             {error && (
               <div role="alert" className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-destructive">
@@ -171,7 +175,7 @@ export const LoginScreen: React.FC = () => {
               </div>
             )}
 
-            <Button type="button" onClick={handleConnect} disabled={isLoading || (!workerManaged && !token.trim())} className="w-full">
+            <Button type="button" onClick={handleConnect} disabled={isLoading || !token.trim()} className="w-full">
               {isLoading ? (
                 <>
                   <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" />

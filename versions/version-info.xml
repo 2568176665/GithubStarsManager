@@ -553,4 +553,16 @@
     </changelog>
     <downloadUrl>https://github.com/AmintaCCCP/GithubStarsManager/releases/tag/v0.7.6</downloadUrl>
   </version>
+  <version>
+    <number>0.7.7</number>
+    <releaseDate>2026-08-25</releaseDate>
+    <changelog>
+      <item>feat: Added one-click switching across 12 built-in light and dark theme presets with live previews.</item>
+      <item>refactor: Migrated frontend styling to semantic design tokens and self-hosted font families while preserving the default appearance.</item>
+      <item>refactor: Introduced layered frontend architecture, modular store slices, typed selectors, domain action hooks, and enforced import boundaries without changing the persistence schema.</item>
+      <item>perf: Lazy-loaded dormant views and added deterministic bundle reporting to reduce the modern entry bundle and largest legacy chunk.</item>
+      <item>fix: README modal close now restores keyboard focus to the repository card that opened it.</item>
+    </changelog>
+    <downloadUrl>https://github.com/AmintaCCCP/GithubStarsManager/releases/tag/v0.7.7</downloadUrl>
+  </version>
 </versions>

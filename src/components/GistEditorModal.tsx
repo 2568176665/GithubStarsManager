@@ -150,7 +150,7 @@ export const GistEditorModal: React.FC<GistEditorModalProps> = ({ gist, isOpen, 
           <div className="flex items-center justify-between">
             <div className="text-sm font-medium text-foreground dark:text-foreground">{t('文件', 'Files')}</div>
             {hasDuplicateFilenames && (
-              <div className="text-xs text-red-600 dark:text-red-300">
+              <div className="text-xs text-destructive">
                 {t('文件名不能重复', 'Filenames must be unique')}
               </div>
             )}
@@ -172,7 +172,7 @@ export const GistEditorModal: React.FC<GistEditorModalProps> = ({ gist, isOpen, 
                   aria-label={t(`文件名 ${index + 1}`, `Filename ${index + 1}`)}
                   value={file.filename}
                   onChange={(event) => updateFile(file.id, { filename: event.target.value })}
-                  className="min-w-0 flex-1 rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground outline-none focus:border-primary dark:border-border dark:bg-black/20 dark:text-foreground"
+                  className="min-w-0 flex-1 rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground outline-none focus:border-primary dark:border-border dark:bg-muted/40 dark:text-foreground"
                   placeholder={`file-${index + 1}.txt`}
                 />
                 <Button
@@ -180,7 +180,7 @@ export const GistEditorModal: React.FC<GistEditorModalProps> = ({ gist, isOpen, 
                   variant="ghost"
                   onClick={() => removeFile(file.id)}
                   disabled={visibleFiles.length === 1}
-                  className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40 dark:text-muted-foreground dark:hover:bg-red-500/10 dark:hover:text-red-300"
+                  className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-40 dark:text-muted-foreground"
                   title={t('删除文件', 'Delete file')}
                 >
                   <Trash2 className="h-4 w-4" />
@@ -192,7 +192,7 @@ export const GistEditorModal: React.FC<GistEditorModalProps> = ({ gist, isOpen, 
                 value={file.content}
                 onChange={(event) => updateFile(file.id, { content: event.target.value })}
                 rows={8}
-                className="w-full resize-y rounded-lg border border-border bg-card px-3 py-2 font-mono text-sm text-foreground outline-none focus:border-primary dark:border-border dark:bg-black/20 dark:text-foreground"
+                className="w-full resize-y rounded-lg border border-border bg-card px-3 py-2 font-mono text-sm text-foreground outline-none focus:border-primary dark:border-border dark:bg-muted/40 dark:text-foreground"
                 placeholder={t('输入文件内容', 'Enter file content')}
               />
             </div>

@@ -17,6 +17,7 @@ import { githubMarkdownSchema } from '../utils/sanitizeSchema';
 import 'highlight.js/styles/github.min.css';
 import '../styles/github-markdown.scoped.css';
 import { useAppStore } from '../store/useAppStore';
+import { useShallow } from 'zustand/react/shallow';
 import { safeWriteText, getClipboardErrorMessage } from '../utils/clipboardUtils';
 
 interface MarkdownRendererProps {
@@ -62,7 +63,9 @@ const CodeBlock: React.FC<{
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
   const codeRef = useRef<HTMLElement>(null);
-  const { language: uiLanguage } = useAppStore();
+  const { language: uiLanguage } = useAppStore(useShallow((state) => ({
+    language: state.language,
+  })));
 
   const normalizedLanguage = useMemo(() => {
     if (!language) return '';
@@ -146,7 +149,7 @@ const CodeBlock: React.FC<{
           copyError
             ? 'text-destructive opacity-100'
             : copied
-              ? 'text-green-600 opacity-100 dark:text-green-500'
+              ? 'text-success opacity-100'
               : 'border border-border bg-background/80 text-muted-foreground backdrop-blur hover:text-foreground dark:bg-card/80 dark:text-muted-foreground'
         }`}
       >
@@ -233,9 +236,7 @@ const resolveImageSrc = (imageSrc: string, baseUrl?: string): string => {
   if (imageSrc.startsWith('http://') || imageSrc.startsWith('https://') || imageSrc.startsWith('//')) {
     return imageSrc;
   }
-  // Do not let README fragments without repository context resolve against
-  // the app origin. That turns a broken relative asset into an application
-  // 500 request; callers with a baseUrl still resolve it against GitHub.
+  // Do not resolve README fragments without repository context against the app origin.
   if (!baseUrl) return '';
   if (baseUrl) {
     try {
@@ -282,7 +283,9 @@ const MarkdownImage: React.FC<{ src?: string; alt?: string; baseUrl?: string }> 
   const dragStartRef = useRef({ x: 0, y: 0, posX: 0, posY: 0 });
   const imgRef = useRef<HTMLImageElement>(null);
   const zoomOverlayRef = useRef<HTMLDivElement>(null);
-  const { language } = useAppStore();
+  const { language } = useAppStore(useShallow((state) => ({
+    language: state.language,
+  })));
 
   const imageUrl = useMemo(() => resolveImageSrc(src || '', baseUrl), [src, baseUrl]);
 
@@ -494,7 +497,7 @@ const MarkdownImage: React.FC<{ src?: string; alt?: string; baseUrl?: string }> 
         <span className="my-4 flex flex-col items-center group/img">
           {isLoading && (
             <span className="w-full max-w-md h-16 bg-muted dark:bg-card rounded-lg flex items-center justify-center animate-pulse gap-2">
-              <svg className="w-5 h-5 text-gray-300 dark:text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-5 h-5 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
               </svg>
               <span className="text-xs text-muted-foreground dark:text-muted-foreground/70">{language === 'zh' ? '加载中...' : 'Loading...'}</span>
@@ -523,7 +526,7 @@ const MarkdownImage: React.FC<{ src?: string; alt?: string; baseUrl?: string }> 
               onError={handleImageError}
               onClick={handleImageClick}
             />
-            <span className="absolute inset-0 rounded-xl ring-1 ring-inset ring-black/5 dark:ring-white/5 pointer-events-none" />
+            <span className="absolute inset-0 rounded-xl ring-1 ring-inset ring-foreground/5 dark:ring-foreground/10 pointer-events-none" />
           </span>
 
           {!isLoading && !hasError && (
@@ -535,7 +538,7 @@ const MarkdownImage: React.FC<{ src?: string; alt?: string; baseUrl?: string }> 
                 }
               </span>
               {naturalWidth > 0 && (
-                <span className="text-gray-300 dark:text-muted-foreground">|</span>
+                <span className="text-muted-foreground">|</span>
               )}
               {naturalWidth > 0 && (
                 <span>{naturalWidth} × {naturalHeight}</span>
@@ -567,20 +570,20 @@ const MarkdownImage: React.FC<{ src?: string; alt?: string; baseUrl?: string }> 
       {isZoomed && createPortal(
         <div
           ref={zoomOverlayRef}
-          className="fixed inset-0 z-[99999] bg-black/90 backdrop-blur-sm flex items-center justify-center cursor-default select-none"
+          className="fixed inset-0 z-[99999] bg-overlay/90 backdrop-blur-sm flex items-center justify-center cursor-default select-none"
           onClick={() => {
             if (!isDragging) {
               closeZoom();
             }
           }}
         >
-          <div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-4 py-3 bg-gradient-to-b from-black/60 to-transparent pointer-events-none">
+          <div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-4 py-3 bg-gradient-to-b from-overlay/60 to-transparent pointer-events-none">
             <div className="flex items-center gap-2 pointer-events-auto">
               {alt && (
-                <span className="text-white/70 text-sm truncate max-w-[300px]">{alt}</span>
+                <span className="text-overlay-foreground/70 text-sm truncate max-w-[300px]">{alt}</span>
               )}
               {naturalWidth > 0 && (
-                <span className="text-white/50 text-xs">{naturalWidth} × {naturalHeight}</span>
+                <span className="text-overlay-foreground/50 text-xs">{naturalWidth} × {naturalHeight}</span>
               )}
             </div>
             <div className="flex items-center gap-2 pointer-events-auto">
@@ -593,7 +596,7 @@ const MarkdownImage: React.FC<{ src?: string; alt?: string; baseUrl?: string }> 
                     e.stopPropagation();
                     window.open(parentLinkHref, '_blank', 'noopener,noreferrer');
                   }}
-                  className="h-8 w-8 p-0 bg-white/10 hover:bg-white/20 text-white/80 hover:text-white rounded-lg transition-colors backdrop-blur-sm"
+                  className="h-8 w-8 p-0 bg-overlay-foreground/10 hover:bg-overlay-foreground/20 text-overlay-foreground/80 hover:text-overlay-foreground rounded-lg transition-colors backdrop-blur-sm"
                   title={language === 'zh' ? '打开链接' : 'Open link'}
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -610,7 +613,7 @@ const MarkdownImage: React.FC<{ src?: string; alt?: string; baseUrl?: string }> 
                   handleDownload(e);
                 }}
                 disabled={isDownloading}
-                className="h-8 w-8 p-0 bg-white/10 hover:bg-white/20 text-white/80 hover:text-white rounded-lg transition-colors backdrop-blur-sm"
+                className="h-8 w-8 p-0 bg-overlay-foreground/10 hover:bg-overlay-foreground/20 text-overlay-foreground/80 hover:text-overlay-foreground rounded-lg transition-colors backdrop-blur-sm"
                 title={language === 'zh' ? '下载图片' : 'Download image'}
               >
                 <Download className={`w-4 h-4 ${isDownloading ? 'animate-bounce' : ''}`} />
@@ -623,12 +626,12 @@ const MarkdownImage: React.FC<{ src?: string; alt?: string; baseUrl?: string }> 
                   e.stopPropagation();
                   setZoomScale(prev => Math.min(5, prev + 0.5));
                 }}
-                className="h-8 w-8 p-0 bg-white/10 hover:bg-white/20 text-white/80 hover:text-white rounded-lg transition-colors backdrop-blur-sm text-sm font-bold"
+                className="h-8 w-8 p-0 bg-overlay-foreground/10 hover:bg-overlay-foreground/20 text-overlay-foreground/80 hover:text-overlay-foreground rounded-lg transition-colors backdrop-blur-sm text-sm font-bold"
                 title={language === 'zh' ? '放大' : 'Zoom in'}
               >
                 +
               </Button>
-              <span className="text-white/60 text-xs min-w-[3rem] text-center">
+              <span className="text-overlay-foreground/60 text-xs min-w-[3rem] text-center">
                 {Math.round(zoomScale * 100)}%
               </span>
               <Button
@@ -639,7 +642,7 @@ const MarkdownImage: React.FC<{ src?: string; alt?: string; baseUrl?: string }> 
                   e.stopPropagation();
                   setZoomScale(prev => Math.max(0.5, prev - 0.5));
                 }}
-                className="h-8 w-8 p-0 bg-white/10 hover:bg-white/20 text-white/80 hover:text-white rounded-lg transition-colors backdrop-blur-sm text-sm font-bold"
+                className="h-8 w-8 p-0 bg-overlay-foreground/10 hover:bg-overlay-foreground/20 text-overlay-foreground/80 hover:text-overlay-foreground rounded-lg transition-colors backdrop-blur-sm text-sm font-bold"
                 title={language === 'zh' ? '缩小' : 'Zoom out'}
               >
                 −
@@ -653,7 +656,7 @@ const MarkdownImage: React.FC<{ src?: string; alt?: string; baseUrl?: string }> 
                   setZoomScale(1);
                   setZoomPos({ x: 0, y: 0 });
                 }}
-                className="h-8 w-8 p-0 bg-white/10 hover:bg-white/20 text-white/80 hover:text-white rounded-lg transition-colors backdrop-blur-sm text-xs"
+                className="h-8 w-8 p-0 bg-overlay-foreground/10 hover:bg-overlay-foreground/20 text-overlay-foreground/80 hover:text-overlay-foreground rounded-lg transition-colors backdrop-blur-sm text-xs"
                 title={language === 'zh' ? '重置' : 'Reset'}
               >
                 1:1
@@ -662,7 +665,7 @@ const MarkdownImage: React.FC<{ src?: string; alt?: string; baseUrl?: string }> 
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 p-0 bg-white/10 hover:bg-white/20 text-white/80 hover:text-white rounded-lg transition-colors backdrop-blur-sm"
+                className="h-8 w-8 p-0 bg-overlay-foreground/10 hover:bg-overlay-foreground/20 text-overlay-foreground/80 hover:text-overlay-foreground rounded-lg transition-colors backdrop-blur-sm"
                 onClick={(e) => {
                   e.stopPropagation();
                   closeZoom();
@@ -722,9 +725,9 @@ const MarkdownImage: React.FC<{ src?: string; alt?: string; baseUrl?: string }> 
             />
           </div>
 
-          <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 text-white/50 text-xs pointer-events-none flex items-center gap-3">
+          <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 text-overlay-foreground/50 text-xs pointer-events-none flex items-center gap-3">
             <span>{language === 'zh' ? '滚轮缩放 · 拖拽移动' : 'Scroll to zoom · Drag to pan'}</span>
-            <span className="text-white/30">|</span>
+            <span className="text-overlay-foreground/30">|</span>
             <span>{language === 'zh' ? 'Esc 或点击背景关闭' : 'Esc or click background to close'}</span>
           </div>
         </div>,

@@ -7,11 +7,10 @@ import { forceSyncToBackend } from '../services/autoSync';
 import { GitHubApiService } from '../services/githubApi';
 import { ReadmeModal } from './ReadmeModal';
 import { Modal } from './Modal';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip';
+import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import { useDialog } from '../hooks/useDialog';
 import { Button } from './ui/button';
-import { hasUsableAIConfig } from '../utils/aiConfig';
 
 interface SubscriptionRepoCardProps {
   repo: DiscoveryRepo;
@@ -215,7 +214,12 @@ export const SubscriptionRepoCard: React.FC<SubscriptionRepoCardProps> = ({ repo
       return;
     }
 
-    if (!hasUsableAIConfig(activeConfig)) {
+    if (activeConfig.apiKeyStatus === 'decrypt_failed' || activeConfig.apiKeyStatus === 'empty') {
+      toast(t('AI服务的API密钥无法解密或为空，请在设置中重新输入并保存该配置。', 'The AI service API key could not be decrypted or is empty. Please re-enter and save the configuration in settings.'), 'error');
+      return;
+    }
+
+    if (!activeConfig.baseUrl || !activeConfig.apiKey || !activeConfig.model) {
       toast(t('AI服务配置不完整，请检查API端点、密钥和模型名称。', 'AI service configuration is incomplete. Please check the API endpoint, key, and model name.'), 'error');
       return;
     }
@@ -291,15 +295,10 @@ export const SubscriptionRepoCard: React.FC<SubscriptionRepoCardProps> = ({ repo
   const cardTitle = repo.full_name || `${repo.owner?.login || ''}/${repo.name || ''}`;
 
   return (
-    <TooltipProvider>
     <>
     <div 
       onClick={handleCardClick}
-      className={`bg-card border border-border p-5 transition-all duration-200 ${
-        desktopSafeMode
-          ? 'rounded-lg hover:shadow-md hover:-translate-y-0.5 cursor-pointer'
-          : 'rounded-xl hover:shadow-lg hover:-translate-y-0.5 cursor-pointer'
-      }`}
+      className="ui-card p-5 transition-all duration-200 cursor-pointer"
       style={{ userSelect: 'none' }}
       onCopy={(e) => e.preventDefault()}
       onCut={(e) => e.preventDefault()}
@@ -335,7 +334,7 @@ export const SubscriptionRepoCard: React.FC<SubscriptionRepoCardProps> = ({ repo
                 size="icon"
                 onClick={handleAnalyze}
                 disabled={!githubToken || isAnalyzing}
-                className="flex items-center justify-center w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-muted text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed dark:bg-muted/40 dark:text-muted-foreground dark:hover:bg-accent dark:hover:text-foreground"
+                className="flex items-center justify-center w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-muted text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground disabled:opacity-50 disabled:cursor-not-allowed"
                 title={
                   isAnalyzed 
                     ? t('重新分析', 'Re-analyze') 
@@ -357,7 +356,7 @@ export const SubscriptionRepoCard: React.FC<SubscriptionRepoCardProps> = ({ repo
               <Button
                 size="icon"
                 onClick={handleOpenInZRead}
-                className="hidden sm:flex items-center justify-center w-8 h-8 rounded-lg bg-muted text-muted-foreground dark:bg-muted/40 dark:text-muted-foreground hover:bg-accent hover:text-foreground dark:hover:bg-accent dark:hover:text-foreground transition-colors"
+                className="hidden sm:flex items-center justify-center w-8 h-8 rounded-lg bg-muted text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
                 title={t('在ZRead打开', 'Open in ZRead')}
               >
                 <BookOpen className="w-4 h-4" />
@@ -369,7 +368,7 @@ export const SubscriptionRepoCard: React.FC<SubscriptionRepoCardProps> = ({ repo
                 target="_blank"
                 rel="noopener noreferrer"
                 onClick={(event) => event.stopPropagation()}
-                className="hidden sm:flex items-center justify-center w-8 h-8 rounded-lg bg-muted text-muted-foreground dark:bg-muted/40 dark:text-muted-foreground hover:bg-accent hover:text-foreground dark:hover:bg-accent dark:hover:text-foreground transition-colors"
+                className="hidden sm:flex items-center justify-center w-8 h-8 rounded-lg bg-muted text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
                 title={t('在GitHub打开', 'Open on GitHub')}
               >
                 <ExternalLink className="w-4 h-4" />
@@ -383,7 +382,7 @@ export const SubscriptionRepoCard: React.FC<SubscriptionRepoCardProps> = ({ repo
                 className={`flex items-center justify-center w-7 h-7 sm:w-8 sm:h-8 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                   isStarred
                     ? 'bg-primary text-primary-foreground shadow-sm dark:bg-primary/80 dark:text-primary-foreground'
-                    : 'bg-muted text-muted-foreground dark:bg-muted/40 dark:text-muted-foreground hover:bg-accent dark:hover:bg-accent hover:text-muted-foreground dark:hover:text-muted-foreground'
+                    : 'bg-muted text-muted-foreground hover:bg-accent hover:text-accent-foreground'
                 }`}
                 title={isStarred ? t('取消Star', 'Unstar') : t('添加Star', 'Add Star')}
               >
@@ -560,6 +559,5 @@ export const SubscriptionRepoCard: React.FC<SubscriptionRepoCardProps> = ({ repo
         onClose={() => setReadmeModalOpen(false)}
         repository={repo} />
     </>
-    </TooltipProvider>
   );
 };

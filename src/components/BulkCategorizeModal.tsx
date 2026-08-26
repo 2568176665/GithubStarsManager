@@ -4,6 +4,7 @@ import { Check } from 'lucide-react';
 import { Modal } from './Modal';
 import { Repository } from '../types';
 import { useAppStore, getAllCategories } from '../store/useAppStore';
+import { useShallow } from 'zustand/react/shallow';
 
 interface BulkCategorizeModalProps {
   isOpen: boolean;
@@ -18,7 +19,12 @@ export const BulkCategorizeModal: React.FC<BulkCategorizeModalProps> = ({
   repositories,
   onCategorize
 }) => {
-  const { customCategories, hiddenDefaultCategoryIds, defaultCategoryOverrides, language } = useAppStore();
+  const { customCategories, hiddenDefaultCategoryIds, defaultCategoryOverrides, language } = useAppStore(useShallow((state) => ({
+    customCategories: state.customCategories,
+    hiddenDefaultCategoryIds: state.hiddenDefaultCategoryIds,
+    defaultCategoryOverrides: state.defaultCategoryOverrides,
+    language: state.language,
+  })));
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const categorySelectionLabelId = useId();
@@ -83,7 +89,7 @@ export const BulkCategorizeModal: React.FC<BulkCategorizeModalProps> = ({
                 className={`h-auto w-full flex items-center justify-between px-4 py-3 rounded-lg border transition-colors ${
                   selectedCategory === category.id
                     ? 'border-primary bg-muted dark:bg-primary/10'
-                    : 'border-border dark:hover:border-white/20'
+                    : 'border-border dark:hover:border-border-strong'
                 }`}
               >
                 <div className="flex items-center space-x-3">
@@ -107,7 +113,7 @@ export const BulkCategorizeModal: React.FC<BulkCategorizeModalProps> = ({
           </div>
         )}
 
-        <div className="bg-muted dark:bg-amber-600/10 border border-border dark:border-amber-600/20 rounded-lg p-3">
+        <div className="bg-muted dark:bg-warning/10 border border-border dark:border-warning/20 rounded-lg p-3">
           <p className="text-sm text-muted-foreground dark:text-muted-foreground ">
             {t('提示：此操作将覆盖这些仓库现有的自定义分类。', 'Note: This operation will overwrite the existing custom categories of these repositories.')}
           </p>

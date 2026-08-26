@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { SubscriptionRepoCard } from './SubscriptionRepoCard';
+import { TooltipProvider } from './ui/tooltip';
 import type { DiscoveryRepo } from '../types';
 
 vi.mock('../store/useAppStore', () => ({
@@ -55,8 +56,14 @@ const repo: DiscoveryRepo = {
 };
 
 describe('SubscriptionRepoCard', () => {
+  const renderCard = () => render(
+    <TooltipProvider>
+      <SubscriptionRepoCard repo={repo} />
+    </TooltipProvider>,
+  );
+
   it('opens GitHub without opening the README modal', () => {
-    render(<SubscriptionRepoCard repo={repo} />);
+    renderCard();
 
     const githubLink = screen.getByTitle('在GitHub打开');
     expect(githubLink).toHaveAttribute('href', repo.html_url);
@@ -69,7 +76,7 @@ describe('SubscriptionRepoCard', () => {
   });
 
   it('opens the README modal when the card itself is clicked', () => {
-    render(<SubscriptionRepoCard repo={repo} />);
+    renderCard();
 
     fireEvent.click(screen.getByText(repo.full_name));
 

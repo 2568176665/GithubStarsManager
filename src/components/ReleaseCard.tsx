@@ -4,6 +4,7 @@ import { Release } from '../types';
 import { formatDistanceToNow } from 'date-fns';
 import MarkdownRenderer from './MarkdownRenderer';
 import { useAppStore } from '../store/useAppStore';
+import { useShallow } from 'zustand/react/shallow';
 import { useDialog } from '../hooks/useDialog';
 import { sendToRpcDownload } from '../services/rpcDownloadService';
 import { AIService } from '../services/aiService';
@@ -73,7 +74,12 @@ const ReleaseCard: React.FC<ReleaseCardProps> = memo(({
   const showAssetsUpdatedIndicator = shouldShowAssetsUpdatedIndicator(release);
 
   // RPC download support — use refs to avoid stale closure in async handler
-  const { rpcDownloadConfig, backendApiSecret, aiConfigs, activeAIConfig } = useAppStore();
+  const { rpcDownloadConfig, backendApiSecret, aiConfigs, activeAIConfig } = useAppStore(useShallow((state) => ({
+    rpcDownloadConfig: state.rpcDownloadConfig,
+    backendApiSecret: state.backendApiSecret,
+    aiConfigs: state.aiConfigs,
+    activeAIConfig: state.activeAIConfig,
+  })));
   const activeConfig = aiConfigs.find((config) => config.id === activeAIConfig);
 
   // AI 总结的本地状态（展开态与结果均内聚在卡片内，不持久化）
@@ -354,7 +360,7 @@ const ReleaseCard: React.FC<ReleaseCardProps> = memo(({
                 </span>
               </div>
 
-              <div className="rounded-md border border-border max-h-72 overflow-y-auto bg-background dark:bg-foreground/[0.08]">
+              <div className="ui-inset-surface max-h-72 overflow-hidden overflow-y-auto">
                 {downloadLinks.map((link, index) => {
                   const isRpcEnabled = rpcDownloadConfig.enabled;
                   const isDownloading = downloadingRef.current[link.url];
@@ -373,13 +379,13 @@ const ReleaseCard: React.FC<ReleaseCardProps> = memo(({
                           handleRpcDownload(link);
                         }}
                         disabled={isDownloading || isDownloaded}
-                        className={`h-auto flex items-center justify-between px-4 py-3 w-full text-left hover:bg-muted dark:hover:bg-accent transition-colors border-b border-border last:border-b-0 disabled:opacity-60 ${
+                        className={`h-auto flex items-center justify-between rounded-none px-4 py-3 w-full text-left hover:bg-muted dark:hover:bg-accent transition-colors border-b border-border last:border-b-0 disabled:opacity-60 ${
                           link.isSourceCode ? 'bg-accent/60' : ''
                         }`}
                       >
                         <div className="flex items-center space-x-1.5 min-w-0 flex-1">
                           {isDownloaded ? (
-                            <CheckCircle2 className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
+                            <CheckCircle2 className="w-3.5 h-3.5 text-success flex-shrink-0" />
                           ) : isDownloading ? (
                             <Loader2 className="w-3.5 h-3.5 text-muted-foreground animate-spin flex-shrink-0" />
                           ) : link.isSourceCode ? (
@@ -519,7 +525,7 @@ const ReleaseCard: React.FC<ReleaseCardProps> = memo(({
                   <MarkdownRenderer content={summary.content} shouldRender={true} breaks={true} />
                 )}
                 {summary.status === 'error' && (
-                  <div className="py-3 text-xs text-red-500 dark:text-red-400">
+                  <div className="py-3 text-xs text-destructive">
                     {t('总结生成失败，请重试。', 'Failed to generate summary. Please try again.')}
                   </div>
                 )}

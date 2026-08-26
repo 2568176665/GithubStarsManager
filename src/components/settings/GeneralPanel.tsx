@@ -2,19 +2,24 @@ import React from 'react';
 import { ExternalLink, Github, Globe, Mail, Package, Twitter } from 'lucide-react';
 import { UpdateChecker } from '../UpdateChecker';
 import { useAppStore } from '../../store/useAppStore';
+import { useShallow } from 'zustand/react/shallow';
 import { version } from '../../../package.json';
 import { PROJECT_REPO_URL } from '../../constants/project';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Label } from '../ui/label';
 import { RadioGroup, RadioGroupItem } from '../ui/radio-group';
+import { ThemeSettingsCard } from './ThemeSettingsCard';
 
 interface GeneralPanelProps {
   t: (zh: string, en: string) => string;
 }
 
 export const GeneralPanel: React.FC<GeneralPanelProps> = ({ t }) => {
-  const { language, setLanguage } = useAppStore();
+  const { language, setLanguage } = useAppStore(useShallow((state) => ({
+    language: state.language,
+    setLanguage: state.setLanguage,
+  })));
 
   return (
     <div className="space-y-6">
@@ -22,6 +27,8 @@ export const GeneralPanel: React.FC<GeneralPanelProps> = ({ t }) => {
         <Package className="h-6 w-6 text-muted-foreground dark:text-muted-foreground" />
         <h3 className="text-lg font-semibold text-foreground dark:text-foreground">{t('通用设置', 'General Settings')}</h3>
       </div>
+
+      <ThemeSettingsCard t={t} />
 
       <Card>
         <CardHeader>

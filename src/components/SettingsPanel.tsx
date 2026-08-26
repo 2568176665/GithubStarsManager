@@ -3,7 +3,9 @@ import {
   Settings,
   Globe,
   Bot,
+  Cloud,
   Database,
+  Server,
   Package,
   X,
   Trash2,
@@ -11,9 +13,11 @@ import {
   ScrollText,
   Layout,
   Search,
+  Cable,
   Star,
 } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
+import { useShallow } from 'zustand/react/shallow';
 import { Button } from './ui/button';
 import { Dialog, DialogContent, DialogTitle } from './ui/dialog';
 import { isElectron } from '../services/electronProxy';
@@ -21,7 +25,9 @@ import { backend } from '../services/backendAdapter';
 import {
   GeneralPanel,
   AIConfigPanel,
+  WebDAVPanel,
   BackupPanel,
+  BackendPanel,
   CategoryPanel,
   DataManagementPanel,
   NetworkPanel,
@@ -29,9 +35,10 @@ import {
   MenuManagementPanel,
   StarSyncPanel,
   VectorSearchSettings,
+  McpSettingsPanel,
 } from './settings';
 
-type SettingsTab = 'general' | 'starSync' | 'ai' | 'backup' | 'category' | 'menu' | 'data' | 'logs' | 'network' | 'vectorSearch';
+type SettingsTab = 'general' | 'starSync' | 'ai' | 'webdav' | 'backup' | 'backend' | 'category' | 'menu' | 'data' | 'logs' | 'network' | 'vectorSearch' | 'mcp';
 
 interface SettingsTabItem {
   id: SettingsTab;
@@ -181,7 +188,7 @@ const MobileTabNav: React.FC<MobileTabNavProps> = ({ tabs, activeTab, onTabChang
       
       {/* 底部活动指示器 */}
       <div
-        className="absolute bottom-0 h-0.5 bg-gray-900 dark:bg-text-primary rounded-full transition-all duration-200 ease-out will-change-transform"
+        className="absolute bottom-0 h-0.5 bg-primary rounded-full transition-all duration-200 ease-out will-change-transform"
         style={{
           transform: `translateX(${indicatorStyle.translateX}px)`,
           width: indicatorStyle.width,
@@ -200,7 +207,10 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   onClose,
   isModal = false 
 }) => {
-  const { language, setCurrentView } = useAppStore();
+  const { language, setCurrentView } = useAppStore(useShallow((state) => ({
+    language: state.language,
+    setCurrentView: state.setCurrentView,
+  })));
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const [displayTab, setDisplayTab] = useState<SettingsTab>('general');
   const [isTransitioning, setIsTransitioning] = useState(false);
@@ -255,7 +265,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
 
   // Valid SettingsTab values for runtime validation
   const VALID_TABS: ReadonlySet<string> = useMemo(
-    () => new Set(['general', 'starSync', 'ai', 'backup', 'category', 'menu', 'data', 'logs', 'network', 'vectorSearch']),
+    () => new Set(['general', 'starSync', 'ai', 'webdav', 'backup', 'backend', 'category', 'menu', 'data', 'logs', 'network', 'vectorSearch', 'mcp']),
     []
   );
 
@@ -319,9 +329,19 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
       icon: <Bot className="w-5 h-5" />,
     },
     {
+      id: 'webdav',
+      label: t('WebDAV', 'WebDAV'),
+      icon: <Cloud className="w-5 h-5" />,
+    },
+    {
       id: 'backup',
       label: t('备份恢复', 'Backup'),
       icon: <Database className="w-5 h-5" />,
+    },
+    {
+      id: 'backend',
+      label: t('后端同步', 'Backend'),
+      icon: <Server className="w-5 h-5" />,
     },
     {
       id: 'category',
@@ -353,6 +373,12 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
       label: t('向量搜索', 'Vector Search'),
       icon: <Search className="w-5 h-5" />,
     },
+    // MCP requires a long-lived process: backend or Electron main. Hide for pure SPA.
+    ...((isElectron() || backend.isAvailable) ? [{
+      id: 'mcp' as SettingsTab,
+      label: t('MCP服务', 'MCP Server'),
+      icon: <Cable className="w-5 h-5" />,
+    }] : []),
   ];
 
   const renderTabContent = () => {
@@ -364,8 +390,12 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
           return <StarSyncPanel t={t} />;
         case 'ai':
           return <AIConfigPanel t={t} />;
+        case 'webdav':
+          return <WebDAVPanel t={t} />;
         case 'backup':
           return <BackupPanel t={t} />;
+        case 'backend':
+          return <BackendPanel t={t} />;
         case 'category':
           return <CategoryPanel t={t} />;
         case 'menu':
@@ -378,6 +408,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
           return <NetworkPanel t={t} />;
         case 'vectorSearch':
           return <VectorSearchSettings t={t} />;
+        case 'mcp':
+          return <McpSettingsPanel t={t} />;
         default:
           return null;
       }

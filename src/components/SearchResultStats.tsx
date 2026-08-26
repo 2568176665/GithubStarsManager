@@ -2,6 +2,7 @@ import React from 'react';
 import { Search, Bot, Clock, TrendingUp } from 'lucide-react';
 import { Repository } from '../types';
 import { useAppStore } from '../store/useAppStore';
+import { useShallow } from 'zustand/react/shallow';
 
 interface SearchResultStatsProps {
   repositories: Repository[];
@@ -18,7 +19,9 @@ export const SearchResultStats: React.FC<SearchResultStatsProps> = ({
   isRealTimeSearch,
   searchTime
 }) => {
-  const { language } = useAppStore();
+  const { language } = useAppStore(useShallow((state) => ({
+    language: state.language,
+  })));
 
   const t = (zh: string, en: string) => language === 'zh' ? zh : en;
 
@@ -44,7 +47,7 @@ export const SearchResultStats: React.FC<SearchResultStatsProps> = ({
   };
 
   return (
-    <div className="bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-900/10 dark:to-purple-900/10 rounded-lg border border-border p-4 mb-4">
+    <div className="bg-gradient-to-r from-accent/70 to-background dark:from-accent/30 dark:to-background rounded-lg border border-border p-4 mb-4">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center space-x-2">
           {isRealTimeSearch ? (
@@ -135,7 +138,7 @@ export const SearchResultStats: React.FC<SearchResultStatsProps> = ({
             "{searchQuery}"
           </code>
           {stats.aiAnalyzed > 0 && (
-            <span className="ml-2 text-xs text-green-600 dark:text-green-400">
+            <span className="ml-2 text-xs text-success">
               {stats.aiAnalyzed} {t('个已AI分析', 'AI analyzed')}
             </span>
           )}

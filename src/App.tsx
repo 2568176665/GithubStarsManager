@@ -1,36 +1,24 @@
-import React, { useEffect, useMemo, useCallback } from 'react';
+import React, { Suspense, useEffect, useMemo, useCallback } from 'react';
 import { LoginScreen } from './components/LoginScreen';
 import { Header } from './components/Header';
 import { SearchBar } from './components/SearchBar';
 import { RepositoryList } from './components/RepositoryList';
 import { CategorySidebar } from './components/CategorySidebar';
-import { ReleaseTimeline } from './components/ReleaseTimeline';
-import { ForkTimeline } from './components/ForkTimeline';
-import { SettingsPanel } from './components/SettingsPanel';
+
 import { DebugModeIndicator } from './components/DebugModeIndicator';
-import { DiscoveryView } from './components/DiscoveryView';
-import { GistView } from './components/GistView';
+
 import { BackToTop } from './components/BackToTop';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { SyncModeChoiceModal } from './components/SyncModeChoiceModal';
 import { useAppStore } from './store/useAppStore';
+import { selectAppShellState } from './store/selectors';
+import { useShallow } from 'zustand/react/shallow';
+import { applyThemePreset } from './lib/themePresets';
 import { useAutoUpdateCheck } from './hooks/useAutoUpdateCheck';
 import { logger } from './services/logger';
 import { UpdateNotificationBanner } from './components/UpdateNotificationBanner';
 import { ListsPushIndicator } from './components/ListsPushIndicator';
-import { backend } from './services/backendAdapter';
-import {
-  syncFromBackend,
-  startAutoSync,
-  stopAutoSync,
-  tryRestoreAuthFromBackend,
-  syncLocalGitHubTokenToBackend,
-} from './services/autoSync';
-import {
-  startMcpElectronBridge,
-  stopMcpElectronBridge,
-  refreshMcpElectronBridge,
-} from './services/mcpElectronBridge';
+import { useBackendLifecycle } from './features/lifecycle/useBackendLifecycle';
 import type { AppState, SearchFilters } from './types';
 
 /**
@@ -54,6 +42,34 @@ function hasActiveSearchFilters(filters: SearchFilters): boolean {
     filters.sortOrder !== 'desc'
   );
 }
+
+const LazyReleaseTimeline = React.lazy(() =>
+  import('./components/ReleaseTimeline').then((module) => ({ default: module.ReleaseTimeline }))
+);
+const LazyForkTimeline = React.lazy(() =>
+  import('./components/ForkTimeline').then((module) => ({ default: module.ForkTimeline }))
+);
+const LazySettingsPanel = React.lazy(() =>
+  import('./components/SettingsPanel').then((module) => ({ default: module.SettingsPanel }))
+);
+const LazyDiscoveryView = React.lazy(() =>
+  import('./components/DiscoveryView').then((module) => ({ default: module.DiscoveryView }))
+);
+const LazyGistView = React.lazy(() =>
+  import('./components/GistView').then((module) => ({ default: module.GistView }))
+);
+
+const ViewLoadingFallback: React.FC = () => (
+  <div className="flex min-h-[12rem] items-center justify-center bg-background text-foreground" role="status" aria-live="polite">
+    <div className="animate-pulse text-lg font-medium text-foreground">Loading...</div>
+  </div>
+);
+
+const LazyViewBoundary: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <ErrorBoundary>
+    <Suspense fallback={<ViewLoadingFallback />}>{children}</Suspense>
+  </ErrorBoundary>
+);
 
 /**
  * Main repository view combining category sidebar, search bar, and repository list.
@@ -107,17 +123,40 @@ const RepositoriesView = React.memo(({
 });
 RepositoriesView.displayName = 'RepositoriesView';
 
-const ReleasesView = React.memo(() => <ReleaseTimeline />);
+const ReleasesView = React.memo(() => (
+  <LazyViewBoundary>
+    <LazyReleaseTimeline />
+  </LazyViewBoundary>
+));
 ReleasesView.displayName = 'ReleasesView';
 
-const GistsView = React.memo(() => <GistView />);
+const GistsView = React.memo(() => (
+  <LazyViewBoundary>
+    <LazyGistView />
+  </LazyViewBoundary>
+));
 GistsView.displayName = 'GistsView';
 
-const ForksView = React.memo(() => <ForkTimeline />);
+const ForksView = React.memo(() => (
+  <LazyViewBoundary>
+    <LazyForkTimeline />
+  </LazyViewBoundary>
+));
 ForksView.displayName = 'ForksView';
 
-const SettingsView = React.memo(() => <SettingsPanel />);
+const SettingsView = React.memo(() => (
+  <LazyViewBoundary>
+    <LazySettingsPanel />
+  </LazyViewBoundary>
+));
 SettingsView.displayName = 'SettingsView';
+
+const DiscoverySubscriptionView = React.memo(() => (
+  <Suspense fallback={<ViewLoadingFallback />}>
+    <LazyDiscoveryView />
+  </Suspense>
+));
+DiscoverySubscriptionView.displayName = 'DiscoverySubscriptionView';
 
 function App() {
   const {
@@ -125,14 +164,16 @@ function App() {
     currentView,
     selectedCategory,
     theme,
+    themePreset,
     hasHydrated,
     searchResults,
     searchFilters,
     repositories,
     setSelectedCategory,
-  } = useAppStore();
+  } = useAppStore(useShallow(selectAppShellState));
 
   useAutoUpdateCheck();
+  useBackendLifecycle(hasHydrated);
 
   // Restore persisted frontend debug level at startup so capture is active
   // app-wide, not only after DiagnosticLogsPanel mounts.
@@ -140,12 +181,6 @@ function App() {
     if (sessionStorage.getItem('gsm:frontend-debug') === 'true') {
       logger.setLevel('debug');
     }
-  }, []);
-
-  // Electron local MCP: start after backend discovery so we don't bind :3927
-  // when agents should use backend /mcp instead.
-  useEffect(() => {
-    return () => stopMcpElectronBridge();
   }, []);
 
   useEffect(() => {
@@ -156,82 +191,10 @@ function App() {
     }
   }, [theme]);
 
+  // Theme preset (palette/radius/font/shadow skin) rides on data-theme.
   useEffect(() => {
-    if (!hasHydrated) return;
-
-    let unsubscribe: (() => void) | null = null;
-    let cancelled = false;
-
-    /**
-     * Initialize backend-backed features after persisted local state is ready.
-     *
-     * Token repair is intentionally bounded so an unavailable backend cannot
-     * block the initial data sync and background synchronization indefinitely.
-     */
-    const initBackend = async () => {
-      try {
-        await backend.init();
-        if (backend.isAvailable && !cancelled) {
-          if (backend.isWorkerEnvMode) {
-            const [session, envAIConfigs] = await Promise.all([
-              backend.fetchManagedSession(),
-              backend.fetchAIConfigs(),
-            ]);
-            if (!cancelled) {
-              const state = useAppStore.getState();
-              state.setGitHubToken('worker-managed');
-              state.setUser(session as unknown as Parameters<typeof state.setUser>[0]);
-              state.setAIConfigs(envAIConfigs);
-              if (envAIConfigs.length > 0) state.setActiveAIConfig(envAIConfigs[0].id);
-            }
-          }
-          if (backend.isWorkerEnvMode) {
-            // Worker ENV mode still needs the normal D1 pull/push lifecycle.
-            // The browser origin may be new, so local IndexedDB cannot be the
-            // source of truth for repositories and AI analysis metadata.
-            if (!cancelled) {
-              await syncFromBackend();
-            }
-            if (!cancelled) {
-              unsubscribe = startAutoSync();
-            }
-            return;
-          }
-          // Issue #259: recover a session on a fresh browser/device. Only acts
-          // when there is no local session and the backend is authenticated.
-          // Run before the backend data pull so auth can complete before the
-          // app decides whether to render LoginScreen.
-          await tryRestoreAuthFromBackend();
-          if (!cancelled) {
-            await syncLocalGitHubTokenToBackend();
-          }
-          if (!cancelled) {
-            await syncFromBackend();
-          }
-          if (!cancelled) {
-            unsubscribe = startAutoSync();
-          }
-        }
-      } catch (err) {
-        console.error('Failed to initialize backend:', err);
-      } finally {
-        // After backend probe (success or not), wire desktop MCP lifecycle
-        if (!cancelled) {
-          startMcpElectronBridge();
-          refreshMcpElectronBridge();
-        }
-      }
-    };
-
-    initBackend();
-
-    return () => {
-      cancelled = true;
-      if (unsubscribe) {
-        stopAutoSync(unsubscribe);
-      }
-    };
-  }, [hasHydrated]);
+    applyThemePreset(themePreset);
+  }, [themePreset]);
 
   const handleCategorySelect = useCallback((category: string) => {
     // 相似仓库视图下点击分类 = 离开相似视图并切换到该分类，避免交互歧义
@@ -262,7 +225,7 @@ function App() {
       case 'subscription':
         return (
           <ErrorBoundary>
-            <DiscoveryView />
+            <DiscoverySubscriptionView />
           </ErrorBoundary>
         );
       case 'settings':

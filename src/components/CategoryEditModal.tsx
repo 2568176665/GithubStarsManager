@@ -5,6 +5,7 @@ import { Save, X, Plus } from 'lucide-react';
 import { Modal } from './Modal';
 import { Category } from '../types';
 import { useAppStore, getAllCategories } from '../store/useAppStore';
+import { useShallow } from 'zustand/react/shallow';
 import { useDialog } from '../hooks/useDialog';
 import { validateCategoryName } from '../utils/categoryUtils';
 
@@ -798,7 +799,17 @@ export const CategoryEditModal: React.FC<CategoryEditModalProps> = ({
   category,
   isCreating = false
 }) => {
-  const { addCustomCategory, updateCustomCategory, updateDefaultCategory, resetDefaultCategory, resetDefaultCategoryNameIcon, resetDefaultCategoryKeywords, defaultCategoryOverrides, language, customCategories } = useAppStore();
+  const { addCustomCategory, updateCustomCategory, updateDefaultCategory, resetDefaultCategory, resetDefaultCategoryNameIcon, resetDefaultCategoryKeywords, defaultCategoryOverrides, language, customCategories } = useAppStore(useShallow((state) => ({
+    addCustomCategory: state.addCustomCategory,
+    updateCustomCategory: state.updateCustomCategory,
+    updateDefaultCategory: state.updateDefaultCategory,
+    resetDefaultCategory: state.resetDefaultCategory,
+    resetDefaultCategoryNameIcon: state.resetDefaultCategoryNameIcon,
+    resetDefaultCategoryKeywords: state.resetDefaultCategoryKeywords,
+    defaultCategoryOverrides: state.defaultCategoryOverrides,
+    language: state.language,
+    customCategories: state.customCategories,
+  })));
 
   const { toast } = useDialog();
   const t = (zh: string, en: string) => language === 'zh' ? zh : en;
@@ -1042,15 +1053,15 @@ export const CategoryEditModal: React.FC<CategoryEditModalProps> = ({
 
         {/* Default Category Modified Hint */}
         {category && !category.isCustom && isDefaultCategoryModified && originalCategory && (
-          <div className="p-3 bg-muted dark:bg-amber-600/10 rounded-lg border border-border dark:border-amber-600/20">
-            <p className="text-xs text-amber-600 mb-2">
+          <div className="p-3 bg-muted dark:bg-warning/10 rounded-lg border border-border dark:border-warning/20">
+            <p className="text-xs text-warning mb-2">
               {t(
                 `此默认分类已被修改。原始值：${originalCategory.icon} ${originalCategory.name}`,
                 `This default category has been modified. Original: ${originalCategory.icon} ${originalCategory.name}`
               )}
             </p>
             <div className="flex items-center space-x-2">
-              <span className="text-xs text-amber-600">{t('还原:', 'Reset:')}</span>
+              <span className="text-xs text-warning">{t('还原:', 'Reset:')}</span>
               {hasNameIconModified && (
                 <Button
                   size="sm"
@@ -1062,7 +1073,7 @@ export const CategoryEditModal: React.FC<CategoryEditModalProps> = ({
                       icon: originalCategory.icon
                     }));
                   }}
-                  className="text-xs px-2 py-1 bg-muted text-muted-foreground dark:bg-amber-600/20 dark:text-amber-600 rounded hover:bg-accent dark:hover:bg-amber-600/30 transition-colors"
+                  className="text-xs px-2 py-1 bg-muted text-muted-foreground dark:bg-warning/20 dark:text-warning rounded hover:bg-accent dark:hover:bg-warning/30 transition-colors"
                 >
                   {t('名字/图标', 'Name/Icon')}
                 </Button>
@@ -1077,7 +1088,7 @@ export const CategoryEditModal: React.FC<CategoryEditModalProps> = ({
                       keywords: originalCategory.keywords.join(', ')
                     }));
                   }}
-                  className="text-xs px-2 py-1 bg-muted text-muted-foreground dark:bg-amber-600/20 dark:text-amber-600 rounded hover:bg-accent dark:hover:bg-amber-600/30 transition-colors"
+                  className="text-xs px-2 py-1 bg-muted text-muted-foreground dark:bg-warning/20 dark:text-warning rounded hover:bg-accent dark:hover:bg-warning/30 transition-colors"
                 >
                   {t('关键词', 'Keywords')}
                 </Button>

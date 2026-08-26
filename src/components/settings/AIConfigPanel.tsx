@@ -8,11 +8,11 @@ import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { Bot, Plus, Edit3, Trash2, Save, X, TestTube, RefreshCw, MessageSquare, Eye, EyeOff, AlertCircle, Languages } from 'lucide-react';
 import { AIConfig, AIApiType, AIReasoningEffort, MiMoPlan, TranslationEngine } from '../../types';
 import { useAppStore } from '../../store/useAppStore';
-import { AIService } from '../../services/aiService';
+import { useShallow } from 'zustand/react/shallow';
+import { useAIConfigActions } from '../../features/settings/hooks/useAIConfigActions';
 import { buildFinalApiUrl } from '../../utils/apiUrlBuilder';
 import { SliderInput } from '../ui/SliderInput';
 import { useDialog } from '../../hooks/useDialog';
-import { backend } from '../../services/backendAdapter';
 
 interface AIConfigPanelProps {
   t: (zh: string, en: string) => string;
@@ -90,15 +90,23 @@ export const AIConfigPanel: React.FC<AIConfigPanelProps> = ({ t }) => {
     updateAIConfig,
     deleteAIConfig,
     setActiveAIConfig,
-  } = useAppStore();
+  } = useAppStore(useShallow((state) => ({
+    aiConfigs: state.aiConfigs,
+    activeAIConfig: state.activeAIConfig,
+    language: state.language,
+    translationEngine: state.translationEngine,
+    setTranslationEngine: state.setTranslationEngine,
+    addAIConfig: state.addAIConfig,
+    updateAIConfig: state.updateAIConfig,
+    deleteAIConfig: state.deleteAIConfig,
+    setActiveAIConfig: state.setActiveAIConfig,
+  })));
 
   const { toast, confirm } = useDialog();
-  const workerManaged = backend.isWorkerEnvMode;
+  const { testingId, testingForm, testConfig, testDraft } = useAIConfigActions({ t });
 
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [testingId, setTestingId] = useState<string | null>(null);
-  const [testingForm, setTestingForm] = useState(false);
   const [showCustomPrompt, setShowCustomPrompt] = useState(false);
   const [showDefaultPrompt, setShowDefaultPrompt] = useState(false);
   const [notification, setNotification] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
@@ -128,7 +136,7 @@ export const AIConfigPanel: React.FC<AIConfigPanelProps> = ({ t }) => {
     model: '',
     customPrompt: '',
     useCustomPrompt: false,
-    concurrency: 4,
+    concurrency: 1,
     reasoningEffort: '',
     mimoPlan: 'api',
   });
@@ -172,7 +180,7 @@ export const AIConfigPanel: React.FC<AIConfigPanelProps> = ({ t }) => {
       model: '',
       customPrompt: '',
       useCustomPrompt: false,
-      concurrency: 4,
+      concurrency: 1,
       reasoningEffort: '',
       mimoPlan: 'api',
     });
@@ -241,7 +249,7 @@ export const AIConfigPanel: React.FC<AIConfigPanelProps> = ({ t }) => {
       model: config.model,
       customPrompt: config.customPrompt || '',
       useCustomPrompt: config.useCustomPrompt || false,
-      concurrency: config.concurrency || 4,
+      concurrency: config.concurrency || 1,
       reasoningEffort: config.reasoningEffort || '',
       mimoPlan: config.mimoPlan || 'api',
     });
@@ -250,61 +258,26 @@ export const AIConfigPanel: React.FC<AIConfigPanelProps> = ({ t }) => {
     setShowCustomPrompt(config.useCustomPrompt || false);
   };
 
-  const handleTest = async (config: AIConfig) => {
-    setTestingId(config.id);
-    try {
-      const aiService = new AIService(config, language);
-      const result = await aiService.testConnection();
-
-      if (result.success) {
-        toast(t('AI服务连接成功！', 'AI service connection successful!'), 'success');
-      } else {
-        toast(result.message, 'error');
-      }
-    } catch (error) {
-      console.error('AI test failed:', error);
-      toast(t('AI服务测试失败，请检查网络连接和配置。', 'AI service test failed. Please check network connection and configuration.'), 'error');
-    } finally {
-      setTestingId(null);
-    }
-  };
+  const handleTest = (config: AIConfig) => testConfig(config);
 
   const handleTestForm = async () => {
     if (!form.baseUrl || !form.apiKey || !form.model) {
       toast(t('请先填写API端点、API密钥和模型名称', 'Please fill in API Endpoint, API Key and Model Name first'), 'error');
       return;
     }
-
-    setTestingForm(true);
-    try {
-      const tempConfig: AIConfig = {
-        id: '' as string,
-        name: form.name || 'Test',
-        apiType: form.apiType,
-        baseUrl: form.baseUrl.replace(/\/$/, ''),
-        apiKey: form.apiKey,
-        model: form.model,
-        isActive: false,
-        customPrompt: form.customPrompt || undefined,
-        useCustomPrompt: form.useCustomPrompt,
-        concurrency: form.concurrency,
-        reasoningEffort: form.reasoningEffort || undefined,
-      };
-
-      const aiService = new AIService(tempConfig, language);
-      const result = await aiService.testConnection();
-
-      if (result.success) {
-        toast(t('✅ AI服务连接成功！', '✅ AI service connection successful!'), 'success');
-      } else {
-        toast(result.message, 'error');
-      }
-    } catch (error) {
-      console.error('AI test failed:', error);
-      toast(t('AI服务测试失败，请检查网络连接和配置。', 'AI service test failed. Please check network connection and configuration.'), 'error');
-    } finally {
-      setTestingForm(false);
-    }
+    await testDraft({
+      id: '' as string,
+      name: form.name || 'Test',
+      apiType: form.apiType,
+      baseUrl: form.baseUrl.replace(/\/$/, ''),
+      apiKey: form.apiKey,
+      model: form.model,
+      isActive: false,
+      customPrompt: form.customPrompt || undefined,
+      useCustomPrompt: form.useCustomPrompt,
+      concurrency: form.concurrency,
+      reasoningEffort: form.reasoningEffort || undefined,
+    });
   };
 
   const defaultPrompt = useMemo(() => {
@@ -422,20 +395,14 @@ Repository information:
             {t('AI服务配置', 'AI Service Configuration')}
           </h3>
         </div>
-        {!workerManaged && <Button
+        <Button
           onClick={() => setShowForm(true)}
           className="flex items-center space-x-2 px-4 py-2 bg-primary text-primary-foreground dark:bg-primary dark:text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
         >
           <Plus className="w-4 h-4" />
           <span>{t('添加AI配置', 'Add AI Config')}</span>
-        </Button>}
+        </Button>
       </div>
-
-      {workerManaged && (
-        <div className="rounded-md border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-muted-foreground">
-          {t('AI 配置由 Worker 环境变量托管，网页端不保存或显示 API Key。', 'AI configuration is managed by Worker environment variables; the API key is never stored or shown in the browser.')}
-        </div>
-      )}
 
       {showForm && (
         <div className="p-4 bg-background dark:bg-muted/40 rounded-lg border border-border dark:border-border">
@@ -717,7 +684,7 @@ Repository information:
             className={`p-4 rounded-lg border transition-colors ${
               config.id === activeAIConfig
                 ? 'border-border bg-accent/50 dark:border-border/[0.12] dark:bg-accent/60'
-                : 'border-border dark:border-border hover:border-border dark:hover:border-white/[0.08]'
+                : 'border-border dark:border-border hover:border-border dark:hover:border-border-strong'
             }`}
           >
             <div className="flex items-center justify-between">
@@ -738,7 +705,7 @@ Repository information:
                     )}
                   </h4>
                   <p className="text-sm text-muted-foreground dark:text-muted-foreground">
-                    {(config.apiType || 'openai').toUpperCase()} • {config.baseUrl} • {config.model} • {t('并发数', 'Concurrency')}: {config.concurrency || 4}
+                    {(config.apiType || 'openai').toUpperCase()} • {config.baseUrl} • {config.model} • {t('并发数', 'Concurrency')}: {config.concurrency || 1}
                     {config.reasoningEffort ? ` • reasoning: ${config.reasoningEffort}` : ''}
                   </p>
                   {(config.apiKeyStatus === 'decrypt_failed' || config.apiKeyStatus === 'empty') && (
@@ -753,7 +720,7 @@ Repository information:
               </div>
               
               <div className="flex items-center space-x-2">
-                {!workerManaged && <Button
+                <Button
                   variant="ghost"
                   size="icon"
                   onClick={() => handleTest(config)}
@@ -766,8 +733,8 @@ Repository information:
                   ) : (
                     <TestTube className="w-4 h-4" />
                   )}
-                </Button>}
-                {!workerManaged && <Button
+                </Button>
+                <Button
                   variant="ghost"
                   size="icon"
                   onClick={() => handleEdit(config)}
@@ -775,7 +742,7 @@ Repository information:
                   title={t('编辑', 'Edit')}
                 >
                   <Edit3 className="w-4 h-4" />
-                </Button>}
+                </Button>
                 <Button
                   variant="ghost"
                   size="icon"
