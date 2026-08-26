@@ -183,6 +183,29 @@ describe('MarkdownRenderer', () => {
       );
       expect(container.querySelector('img')).not.toBeInTheDocument();
     });
+
+    it('should remove invalid Star History chart signatures', () => {
+      const { container } = render(
+        <MarkdownRenderer content="![Chart](https://api.star-history.com/chart?repos=user%2Frepo&sealed_token=expired)" />
+      );
+      expect(container.querySelector('img')).toHaveAttribute(
+        'src',
+        'https://api.star-history.com/chart?repos=user%2Frepo'
+      );
+    });
+
+    it('should remove invalid Star History signatures from picture sources', () => {
+      const { container } = render(
+        <MarkdownRenderer
+          enableHtml
+          content={'<picture><source srcset="https://api.star-history.com/chart?repos=user%2Frepo&sealed_token=expired" /></picture>'}
+        />
+      );
+      expect(container.querySelector('source')).toHaveAttribute(
+        'srcset',
+        'https://api.star-history.com/chart?repos=user%2Frepo'
+      );
+    });
   });
 
   describe('Code Blocks', () => {

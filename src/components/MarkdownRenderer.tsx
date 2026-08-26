@@ -234,6 +234,15 @@ const MarkdownLink: React.FC<{ href?: string; children?: React.ReactNode; baseUr
 
 const resolveImageSrc = (imageSrc: string, baseUrl?: string): string => {
   if (imageSrc.startsWith('http://') || imageSrc.startsWith('https://') || imageSrc.startsWith('//')) {
+    try {
+      const url = new URL(imageSrc);
+      if (url.hostname === 'api.star-history.com' && url.pathname === '/chart') {
+        url.searchParams.delete('sealed_token');
+        return url.href;
+      }
+    } catch {
+      // Keep the original URL when it cannot be parsed.
+    }
     return imageSrc;
   }
   // Do not resolve README fragments without repository context against the app origin.
@@ -246,6 +255,17 @@ const resolveImageSrc = (imageSrc: string, baseUrl?: string): string => {
     }
   }
   return imageSrc;
+};
+
+const resolveImageSrcSet = (srcSet?: string): string | undefined => {
+  if (!srcSet) return srcSet;
+  return srcSet
+    .split(',')
+    .map((candidate) => {
+      const [src, ...descriptor] = candidate.trim().split(/\s+/);
+      return [resolveImageSrc(src), ...descriptor].join(' ');
+    })
+    .join(', ');
 };
 
 const truncateUrl = (url: string, maxLength: number = 50): string => {
@@ -833,6 +853,9 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = memo(({
   const markdownComponents: Components = useMemo(() => ({
     a: (props) => <MarkdownLink {...props} baseUrl={baseUrl} headingIds={headingIds} />,
     img: (props) => <MarkdownImage {...props} baseUrl={baseUrl} />,
+    source: ({ srcSet, ...props }) => (
+      <source {...stripAstNode(props)} srcSet={resolveImageSrcSet(srcSet)} />
+    ),
     h1: ({ children }) => <h1 id={getHeadingId(children)}>{children}</h1>,
     h2: ({ children }) => <h2 id={getHeadingId(children)}>{children}</h2>,
     h3: ({ children }) => <h3 id={getHeadingId(children)}>{children}</h3>,

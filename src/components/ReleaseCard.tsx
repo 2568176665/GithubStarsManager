@@ -471,6 +471,7 @@ const ReleaseCard: React.FC<ReleaseCardProps> = memo(({
                 <MarkdownRenderer
                   content={isFullContent ? (release.body || '') : truncatedBody}
                   shouldRender={true}
+                  baseUrl={`https://github.com/${release.repository.full_name}`}
                   fontSize="small"
                 />
 
