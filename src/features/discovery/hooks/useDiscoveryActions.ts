@@ -118,7 +118,7 @@ export const useDiscoveryActions = (scrollContainerRef: RefObject<HTMLDivElement
   const refreshChannel = useCallback(async (channelId: DiscoveryChannelId, page = 1, append = false) => {
     const currentState = latestStateRef.current;
     if (!currentState.githubToken) {
-      toast(t('GitHub Token 未找到，请重新登录。', 'GitHub token not found. Please login again.'), 'error');
+      toast(t('GitHub token not found. Please login again.', 'GitHub token not found. Please login again.'), 'error');
       return;
     }
     const requestVersion = (channelRequestVersionRef.current[channelId] ?? 0) + 1;
@@ -200,7 +200,7 @@ export const useDiscoveryActions = (scrollContainerRef: RefObject<HTMLDivElement
       if (!isCurrentRequest()) return;
       console.error(`Failed to refresh channel ${channelId}:`, error);
       if (append) currentState.setDiscoveryLoadMoreError(channelId, t('鍔犺浇鏇村澶辫触锛岃閲嶈瘯', 'Failed to load more, please retry'));
-      else toast(t('获取数据失败，请检查网络连接或 GitHub Token。', 'Failed to fetch data. Please check your network connection or GitHub Token.'), 'error');
+      else toast(t('Failed to fetch data. Please check your network connection or GitHub Token.', 'Failed to fetch data. Please check your network connection or GitHub Token.'), 'error');
     } finally {
       if (ownsLoading()) {
         if (append) currentState.setDiscoveryLoadingMore(channelId, false);

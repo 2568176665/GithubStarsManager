@@ -165,14 +165,20 @@ describe('useRepositoryAnalysisJob', () => {
       });
     });
 
-    const { result } = renderJob(onAnalysisResult);
+    const { result } = renderJob(onAnalysisResult, [{
+      id: 'tag',
+      name: 'tag',
+      icon: 'tag',
+      keywords: [],
+      isCustom: true,
+    }]);
     await act(async () => {
       await result.current.run(runOptions([target]));
     });
 
     expect(onAnalysisResult).toHaveBeenCalledWith(
       expect.objectContaining({ repo: target, success: true }),
-      expect.objectContaining({ analyzedAt: expect.any(String) }),
+      expect.objectContaining({ resolvedCategory: expect.any(String) }),
     );
     expect(storeState.updateRepository).not.toHaveBeenCalled();
   });
