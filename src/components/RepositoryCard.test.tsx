@@ -1,5 +1,4 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { TooltipProvider } from './ui/tooltip';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RepositoryCard } from './RepositoryCard';
@@ -103,9 +102,7 @@ const storeState = {
 const mockUseAppStore = vi.mocked(useAppStore);
 
 const renderRepositoryCard = (viewMode: 'list' | 'grid') => render(
-  <TooltipProvider>
-    <RepositoryCard repository={repository} allCategories={[]} viewMode={viewMode} />
-  </TooltipProvider>
+  <RepositoryCard repository={repository} allCategories={[]} viewMode={viewMode} />
 );
 
 beforeEach(() => {
@@ -248,5 +245,13 @@ describe('RepositoryCard view modes', () => {
 
     const footer = screen.getByText(/最近提交/).closest('.border-t');
     expect(footer?.parentElement).toHaveClass('mt-4');
+  });
+
+  it('does not show a hover tooltip for the repository description', () => {
+    renderRepositoryCard('grid');
+
+    fireEvent.mouseEnter(screen.getByText('Repository description'));
+
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
   });
 });

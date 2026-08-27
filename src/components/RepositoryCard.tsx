@@ -8,7 +8,6 @@ import { formatDistanceToNow } from 'date-fns';
 import { RepositoryEditModal } from './RepositoryEditModal';
 import { ErrorBoundary } from './ErrorBoundary';
 import { Dialog, DialogContent, DialogTitle } from './ui/dialog';
-import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { NO_LICENSE_SENTINEL, normalizeLicense } from '../utils/licenseFilter';
 import { useRepositoryCardActions } from '../features/repositories/hooks/useRepositoryCardActions';
 import { Button } from './ui/button';
@@ -859,23 +858,16 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
       </div>
       )}
 
-      {/* Description with shared Tooltip */}
+      {/* Description */}
       <div className={viewMode === 'list' ? 'mb-3' : 'mb-4 flex-1'}>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <p
-              tabIndex={0}
-              className={viewMode === 'list'
-                ? 'text-sm leading-6 text-muted-foreground dark:text-muted-foreground line-clamp-2 transition-colors duration-200 hover:text-foreground dark:hover:text-foreground'
-                : 'text-foreground dark:text-muted-foreground text-[13px] leading-[1.625] line-clamp-3 mb-2 transition-colors duration-200 hover:text-foreground dark:hover:text-foreground rounded-md px-1 -mx-1 hover:bg-muted dark:hover:bg-card/[0.02]'}
-            >
-              {highlightSearchTerm(displayContent.content, searchQuery)}
-            </p>
-          </TooltipTrigger>
-          <TooltipContent side="top" align="start" className="max-w-lg whitespace-pre-wrap break-words">
-            {displayContent.content}
-          </TooltipContent>
-        </Tooltip>
+        <p
+          tabIndex={0}
+          className={viewMode === 'list'
+            ? 'text-sm leading-6 text-muted-foreground dark:text-muted-foreground line-clamp-2 transition-colors duration-200 hover:text-foreground dark:hover:text-foreground'
+            : 'text-foreground dark:text-muted-foreground text-[13px] leading-[1.625] line-clamp-3 mb-2 transition-colors duration-200 hover:text-foreground dark:hover:text-foreground rounded-md px-1 -mx-1 hover:bg-muted dark:hover:bg-card/[0.02]'}
+        >
+          {highlightSearchTerm(displayContent.content, searchQuery)}
+        </p>
 
         {/* 方案一：同时显示多个状态标签 */}
         {viewMode === 'grid' && (

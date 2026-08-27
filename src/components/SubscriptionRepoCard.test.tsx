@@ -1,7 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { SubscriptionRepoCard } from './SubscriptionRepoCard';
-import { TooltipProvider } from './ui/tooltip';
 import type { DiscoveryRepo } from '../types';
 
 vi.mock('../store/useAppStore', () => ({
@@ -56,11 +55,7 @@ const repo: DiscoveryRepo = {
 };
 
 describe('SubscriptionRepoCard', () => {
-  const renderCard = () => render(
-    <TooltipProvider>
-      <SubscriptionRepoCard repo={repo} />
-    </TooltipProvider>,
-  );
+  const renderCard = () => render(<SubscriptionRepoCard repo={repo} />);
 
   it('opens GitHub without opening the README modal', () => {
     renderCard();
@@ -81,5 +76,13 @@ describe('SubscriptionRepoCard', () => {
     fireEvent.click(screen.getByText(repo.full_name));
 
     expect(screen.getByTestId('readme-modal')).toBeInTheDocument();
+  });
+
+  it('does not show a hover tooltip for the trending repository description', () => {
+    renderCard();
+
+    fireEvent.mouseEnter(screen.getByText('Example repository'));
+
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
   });
 });
