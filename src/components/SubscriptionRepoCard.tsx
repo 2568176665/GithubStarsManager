@@ -10,6 +10,7 @@ import { Modal } from './Modal';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import { useDialog } from '../hooks/useDialog';
 import { Button } from './ui/button';
+import { resolveActiveAIConfig } from '../utils/aiConfig';
 
 interface SubscriptionRepoCardProps {
   repo: DiscoveryRepo;
@@ -207,7 +208,7 @@ export const SubscriptionRepoCard: React.FC<SubscriptionRepoCardProps> = ({ repo
       return;
     }
 
-    const activeConfig = aiConfigs.find(c => c.id === activeAIConfig);
+    const activeConfig = resolveActiveAIConfig(aiConfigs, activeAIConfig);
     if (!activeConfig) {
       toast(t('请先在设置中配置AI服务。', 'Please configure AI service in settings first.'), 'error');
       return;

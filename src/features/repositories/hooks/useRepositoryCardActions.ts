@@ -9,6 +9,7 @@ import { forceSyncToBackend } from '../../../services/autoSync';
 import { GitHubApiService } from '../../../services/githubApi';
 import { logger } from '../../../services/logger';
 import { applyAnalysisFailure, applyAnalysisSuccess } from '../application/repositoryPatches';
+import { resolveActiveAIConfig } from '../../../utils/aiConfig';
 
 interface UseRepositoryCardActionsOptions {
   repository: Repository;
@@ -97,7 +98,7 @@ export const useRepositoryCardActions = ({
       return;
     }
 
-    const activeConfig = aiConfigs.find((config) => config.id === activeAIConfig);
+    const activeConfig = resolveActiveAIConfig(aiConfigs, activeAIConfig);
     if (!activeConfig) {
       toast(
         language === 'zh'

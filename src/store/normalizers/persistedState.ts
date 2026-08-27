@@ -9,6 +9,7 @@ import type {
 import { defaultHeaderMenuConfig, defaultSubscriptionChannels } from '../../types';
 import { DEFAULT_THEME_PRESET_ID, isThemePresetId } from '../../constants/themePresets';
 import { normalizeReleaseSourceSettings } from '../../utils/releaseSources';
+import { resolveActiveAIConfig } from '../../utils/aiConfig';
 import type { AppStoreState } from '../types';
 import { readAuthMirror } from '../persistence/authStorage';
 import {
@@ -48,6 +49,11 @@ export const normalizePersistedState = (
   const gists = Array.isArray(safePersisted.gists) ? safePersisted.gists : [];
   const starredGists = Array.isArray(safePersisted.starredGists) ? safePersisted.starredGists : [];
   const releases = Array.isArray(safePersisted.releases) ? safePersisted.releases : [];
+  const aiConfigs = Array.isArray(safePersisted.aiConfigs) ? safePersisted.aiConfigs : currentState.aiConfigs;
+  const persistedActiveAIConfig = typeof safePersisted.activeAIConfig === 'string' || safePersisted.activeAIConfig === null
+    ? safePersisted.activeAIConfig
+    : currentState.activeAIConfig;
+  const activeAIConfig = resolveActiveAIConfig(aiConfigs, persistedActiveAIConfig)?.id ?? null;
 
   // Migration for old users: mark repos with existing releases as already synced
   const migratedRepositories = repositories.map(repo => {
@@ -136,6 +142,8 @@ export const normalizePersistedState = (
       sortOrder: safePersisted.gistSearchFilters?.sortOrder || 'desc',
     },
     webdavConfigs: Array.isArray(safePersisted.webdavConfigs) ? safePersisted.webdavConfigs : [],
+    aiConfigs,
+    activeAIConfig,
     embeddingConfigs: Array.isArray(safePersisted.embeddingConfigs) ? safePersisted.embeddingConfigs : [],
     activeEmbeddingConfig: typeof safePersisted.activeEmbeddingConfig === 'string' ? safePersisted.activeEmbeddingConfig : null,
     vectorSearchConfig: normalizeVectorSearchConfig(

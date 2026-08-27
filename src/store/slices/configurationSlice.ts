@@ -1,6 +1,7 @@
 
 import type { AppStoreSlice } from '../types';
 import { mergeVectorSearchConfig, normalizeMcpConfig } from '../schema';
+import { resolveActiveAIConfig } from '../../utils/aiConfig';
 
 export const createConfigurationSlice: AppStoreSlice<Pick<import('../types').AppActions,
   | 'addAIConfig'
@@ -25,20 +26,32 @@ export const createConfigurationSlice: AppStoreSlice<Pick<import('../types').App
   | 'setMcpConfig'
 >> = (set) => ({
       // AI actions
-      addAIConfig: (config) => set((state) => ({
-        aiConfigs: [...state.aiConfigs, config]
-      })),
+      addAIConfig: (config) => set((state) => {
+        const aiConfigs = [...state.aiConfigs, config];
+        return {
+          aiConfigs,
+          activeAIConfig: resolveActiveAIConfig(aiConfigs, state.activeAIConfig)?.id ?? null,
+        };
+      }),
       updateAIConfig: (id, updates) => set((state) => ({
         aiConfigs: state.aiConfigs.map(config =>
           config.id === id ? { ...config, ...updates } : config
         )
       })),
-      deleteAIConfig: (id) => set((state) => ({
-        aiConfigs: state.aiConfigs.filter(config => config.id !== id),
-        activeAIConfig: state.activeAIConfig === id ? null : state.activeAIConfig
+      deleteAIConfig: (id) => set((state) => {
+        const aiConfigs = state.aiConfigs.filter(config => config.id !== id);
+        return {
+          aiConfigs,
+          activeAIConfig: resolveActiveAIConfig(aiConfigs, state.activeAIConfig)?.id ?? null,
+        };
+      }),
+      setActiveAIConfig: (activeAIConfig) => set((state) => ({
+        activeAIConfig: resolveActiveAIConfig(state.aiConfigs, activeAIConfig)?.id ?? null,
       })),
-      setActiveAIConfig: (activeAIConfig) => set({ activeAIConfig }),
-      setAIConfigs: (aiConfigs) => set({ aiConfigs }),
+      setAIConfigs: (aiConfigs) => set((state) => ({
+        aiConfigs,
+        activeAIConfig: resolveActiveAIConfig(aiConfigs, state.activeAIConfig)?.id ?? null,
+      })),
 
       // WebDAV actions
       addWebDAVConfig: (config) => set((state) => ({

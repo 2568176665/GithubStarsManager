@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { EmbeddingConfig, Release, Repository, VectorSearchConfig, VectorSearchStatus, defaultReleaseSourceSettings } from '../types';
+import { AIConfig, EmbeddingConfig, Release, Repository, VectorSearchConfig, VectorSearchStatus, defaultReleaseSourceSettings } from '../types';
 import { EMBEDDING_FORMAT_VERSION, indexAllRepos } from '../services/vectorSearchService';
 import { CUSTOM_RELEASE_SOURCE_ID, createCustomReleaseRepository } from '../utils/releaseSources';
 import { findReleasesWithChangedAssets, shouldShowAssetsUpdatedIndicator } from '../utils/releaseAssets';
@@ -39,6 +39,75 @@ const createRepository = (id: number, overrides: Partial<Repository> = {}): Repo
   },
   topics: ['test'],
   ...overrides,
+});
+
+const createAIConfig = (id: string): AIConfig => ({
+  id,
+  name: `AI ${id}`,
+  baseUrl: 'https://ai.example.test/v1',
+  apiKey: 'secret',
+  model: 'model',
+  isActive: false,
+});
+
+describe('useAppStore AI configuration selection', () => {
+  beforeEach(() => {
+    useAppStore.setState({ aiConfigs: [], activeAIConfig: null });
+  });
+
+  it('activates the first configuration added to an empty list', () => {
+    useAppStore.getState().addAIConfig(createAIConfig('first'));
+
+    expect(useAppStore.getState().activeAIConfig).toBe('first');
+  });
+
+  it('falls back to the first config when replacing the list invalidates the active id', () => {
+    useAppStore.setState({ activeAIConfig: 'missing' });
+    useAppStore.getState().setAIConfigs([createAIConfig('first'), createAIConfig('second')]);
+
+    expect(useAppStore.getState().activeAIConfig).toBe('first');
+  });
+
+  it('selects a remaining config when the active config is deleted', () => {
+    const first = createAIConfig('first');
+    const second = createAIConfig('second');
+    useAppStore.setState({ aiConfigs: [first, second], activeAIConfig: 'first' });
+
+    useAppStore.getState().deleteAIConfig('first');
+
+    expect(useAppStore.getState().activeAIConfig).toBe('second');
+  });
+
+  it('restores the first config when a persisted active id is missing', () => {
+    const first = createAIConfig('first');
+    const second = createAIConfig('second');
+    const normalized = normalizePersistedState({
+      aiConfigs: [first, second],
+      activeAIConfig: 'missing',
+    }, useAppStore.getInitialState());
+
+    expect(normalized.activeAIConfig).toBe('first');
+  });
+
+  it('preserves a valid persisted active config', () => {
+    const first = createAIConfig('first');
+    const second = createAIConfig('second');
+    const normalized = normalizePersistedState({
+      aiConfigs: [first, second],
+      activeAIConfig: 'second',
+    }, useAppStore.getInitialState());
+
+    expect(normalized.activeAIConfig).toBe('second');
+  });
+
+  it('keeps in-memory AI configs when a persisted snapshot omits the field', () => {
+    const first = createAIConfig('first');
+    const currentState = { ...useAppStore.getInitialState(), aiConfigs: [first], activeAIConfig: 'first' };
+    const normalized = normalizePersistedState({}, currentState);
+
+    expect(normalized.aiConfigs).toEqual([first]);
+    expect(normalized.activeAIConfig).toBe('first');
+  });
 });
 
 describe('useAppStore release source settings', () => {

@@ -1,7 +1,7 @@
 import { StrictMode, type ReactNode } from 'react';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Repository } from '../../../types';
+import type { Category, Repository } from '../../../types';
 import { useRepositoryAnalysisJob } from './useRepositoryAnalysisJob';
 import { useAppStore } from '../../../store/useAppStore';
 
@@ -77,7 +77,7 @@ const createStoreState = () => ({
     model: 'test-model',
     concurrency: 1,
   }],
-  activeAIConfig: 'ai-config',
+  activeAIConfig: 'ai-config' as string | null,
   language: 'zh' as const,
   updateRepository: vi.fn(),
   setLoading: vi.fn(),
@@ -92,7 +92,10 @@ const runOptions = (repositories: Repository[], syncOnComplete = false) => ({
   syncOnComplete,
 });
 
-const renderJob = (onAnalysisResult?: Parameters<typeof useRepositoryAnalysisJob>[0]['onAnalysisResult']) => renderHook(() => useRepositoryAnalysisJob({ allCategories: [], onAnalysisResult }));
+const renderJob = (
+  onAnalysisResult?: Parameters<typeof useRepositoryAnalysisJob>[0]['onAnalysisResult'],
+  allCategories: Category[] = [],
+) => renderHook(() => useRepositoryAnalysisJob({ allCategories, onAnalysisResult }));
 
 describe('useRepositoryAnalysisJob', () => {
   beforeEach(() => {
@@ -132,6 +135,19 @@ describe('useRepositoryAnalysisJob', () => {
     }));
     expect(mocks.forceSyncToBackend).not.toHaveBeenCalled();
     expect(result.current).toMatchObject({ isRunning: false, isPaused: false, progress: { current: 0, total: 0 } });
+  });
+
+  it('runs the pipeline when the only AI config has no active id', async () => {
+    storeState.activeAIConfig = null;
+    const target = repository(1);
+    const { result } = renderJob();
+
+    await act(async () => {
+      await result.current.run(runOptions([target]));
+    });
+
+    expect(mocks.analyzeRepositoriesPipelined).toHaveBeenCalledTimes(1);
+    expect(mocks.toast).not.toHaveBeenCalledWith('请先在设置中配置AI服务。', 'error');
   });
 
   it('uses the same pipeline while allowing discovery views to own result persistence', async () => {

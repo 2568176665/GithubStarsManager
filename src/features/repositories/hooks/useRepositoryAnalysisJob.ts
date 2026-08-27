@@ -8,6 +8,7 @@ import { AIService } from '../../../services/aiService';
 import { GitHubApiService } from '../../../services/githubApi';
 import { forceSyncToBackend } from '../../../services/autoSync';
 import { buildCategoryHints, resolveCategoryAssignment } from '../../../utils/categoryUtils';
+import { resolveActiveAIConfig } from '../../../utils/aiConfig';
 import { applyAnalysisFailure, applyAnalysisSuccess } from '../application/repositoryPatches';
 
 export type RepositoryAnalysisScope = 'all' | 'unanalyzed' | 'failed' | 'selected';
@@ -167,7 +168,7 @@ export const useRepositoryAnalysisJob = ({
       return false;
     }
 
-    const activeConfig = aiConfigs.find((config) => config.id === activeAIConfig);
+    const activeConfig = resolveActiveAIConfig(aiConfigs, activeAIConfig);
     if (!activeConfig) {
       toast(language === 'zh' ? '请先在设置中配置AI服务。' : 'Please configure AI service in settings first.', 'error');
       return false;
