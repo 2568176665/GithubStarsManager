@@ -35,7 +35,7 @@ export const useBackendLifecycle = (hasHydrated: boolean): void => {
         await backend.init();
         if (backend.isAvailable && !cancelled) {
           if (backend.isWorkerEnvMode) {
-            const [session, envAIConfigs] = await Promise.all([
+            const [session, aiConfigs] = await Promise.all([
               backend.fetchManagedSession(),
               backend.fetchAIConfigs(),
             ]);
@@ -43,8 +43,12 @@ export const useBackendLifecycle = (hasHydrated: boolean): void => {
               const state = useAppStore.getState();
               state.setGitHubToken('worker-managed');
               state.setUser(session as unknown as Parameters<typeof state.setUser>[0]);
-              state.setAIConfigs(envAIConfigs);
-              if (envAIConfigs.length > 0) state.setActiveAIConfig(envAIConfigs[0].id);
+              // Worker AI configs are now stored in D1. Keep local configs when
+              // the D1 store is empty so the first sync can bootstrap them.
+              if (aiConfigs.length > 0) {
+                state.setAIConfigs(aiConfigs);
+                state.setActiveAIConfig(aiConfigs[0].id);
+              }
             }
             if (!cancelled) {
               await syncFromBackend();

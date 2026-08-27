@@ -5,7 +5,7 @@ import { GitHubApiService } from './githubApi';
 import { logger } from './logger';
 import { discoveryAnalysisStorage } from './discoveryAnalysisStorage';
 import { analysesMapToRecord, mergeDiscoveryAnalyses } from '../utils/discoveryAnalysisMerge';
-import { applyAppStateSnapshot, buildAppStateSnapshot } from './appStateSnapshot';
+import { applyAppStateSnapshot, buildAppStateSnapshot, hasAppStateSnapshotChanged } from './appStateSnapshot';
 
 // Prevent sync loops: when we pull data FROM backend and update store,
 // the store subscription would trigger a push TO backend. This flag blocks that.
@@ -108,6 +108,32 @@ export function shouldQueueVectorSearchRepairPush(backendConfig: unknown, localC
   return backendTokenUnusable && !!l.authToken;
 }
 
+/** Preserve locally configured AI providers during the first pull from an empty backend. */
+export function shouldPreserveLocalAIConfigs(
+  backendConfigs: unknown,
+  localConfigs: unknown,
+  isFirstSync: boolean,
+): boolean {
+  return isFirstSync
+    && Array.isArray(backendConfigs)
+    && backendConfigs.length === 0
+    && Array.isArray(localConfigs)
+    && localConfigs.length > 0;
+}
+
+/** Preserve a non-empty local collection while bootstrapping an empty D1. */
+export function shouldPreserveLocalCollection(
+  backendItems: unknown,
+  localItems: unknown,
+  isFirstSync: boolean,
+): boolean {
+  return isFirstSync
+    && Array.isArray(backendItems)
+    && backendItems.length === 0
+    && Array.isArray(localItems)
+    && localItems.length > 0;
+}
+
 function setRepositorySyncVisualState(isSyncing: boolean): void {
   if (typeof window === 'undefined') return;
   window.dispatchEvent(new CustomEvent('gsm:repository-sync-visual-state', { detail: { isSyncing } }));
@@ -176,7 +202,9 @@ const LOCAL_TOKEN_SYNC_TIMEOUT_MS = 5000;
 export async function syncLocalGitHubTokenToBackend(
   timeoutMs = LOCAL_TOKEN_SYNC_TIMEOUT_MS,
 ): Promise<boolean> {
-  if (!backend.isAvailable) return false;
+  // Worker mode authenticates with its own secret and deliberately does not
+  // persist the browser's GitHub token in D1.
+  if (!backend.isAvailable || backend.isWorkerEnvMode) return false;
 
   const { githubToken } = useAppStore.getState();
   if (!githubToken) return false;
@@ -316,8 +344,11 @@ export async function syncFromBackend(): Promise<void> {
       // On bootstrap the hash is still '' — preserve local cache and push it to backend.
       // On subsequent syncs, accept the backend state even if empty (e.g. user cleared
       // stars from another device).
-      const isBootstrapEmpty =
-        backendRepos.length === 0 && localRepos.length > 0 && _lastHash.repos === '';
+      const isBootstrapEmpty = shouldPreserveLocalCollection(
+        backendRepos,
+        localRepos,
+        _lastHash.repos === '',
+      );
       if (isBootstrapEmpty) {
         _hasPendingPush = true;
       } else {
@@ -332,35 +363,47 @@ export async function syncFromBackend(): Promise<void> {
       }
     }
     if (changed.releases && releasesResult.status === 'fulfilled') {
-      state.setReleases(releasesResult.value.releases);
-      _lastHash.releases = hashes.releases;
+      const backendReleases = releasesResult.value.releases;
+      if (shouldPreserveLocalCollection(backendReleases, state.releases, _lastHash.releases === '')) {
+        _hasPendingPush = true;
+      } else {
+        state.setReleases(backendReleases);
+        _lastHash.releases = hashes.releases;
+      }
     }
     if (changed.ai && aiResult.status === 'fulfilled') {
       // Filter out configs with decrypt_failed status — preserve local apiKey values
       // to prevent backend decryption failures from overwriting valid local data.
       const backendConfigs = aiResult.value;
       const localConfigs = state.aiConfigs;
-      const mergedConfigs = backendConfigs.map(bc => {
-        if (bc.apiKeyStatus === 'decrypt_failed' || !bc.apiKey) {
-          const local = localConfigs.find(lc => lc.id === bc.id);
-          if (local && local.apiKey) {
-            logger.warn('sync.decryptFailed', `Backend decrypt_failed for AI config "${bc.name}", preserving local apiKey`);
-            return { ...bc, apiKey: local.apiKey, apiKeyStatus: 'ok' as const };
+      if (shouldPreserveLocalAIConfigs(backendConfigs, localConfigs, _lastHash.ai === '')) {
+        _hasPendingPush = true;
+      } else {
+        const mergedConfigs = backendConfigs.map(bc => {
+          if (bc.apiKeyStatus === 'decrypt_failed' || !bc.apiKey) {
+            const local = localConfigs.find(lc => lc.id === bc.id);
+            if (local && local.apiKey) {
+              logger.warn('sync.decryptFailed', `Backend decrypt_failed for AI config "${bc.name}", preserving local apiKey`);
+              return { ...bc, apiKey: local.apiKey, apiKeyStatus: 'ok' as const };
+            }
           }
-        }
-        return bc;
-      });
-      state.setAIConfigs(mergedConfigs);
-      // Store raw backend hash so change detection compares against the same payload.
-      // Using mergedConfigs would cause a mismatch and re-trigger on every poll.
-      _lastHash.ai = hashes.ai;
+          return bc;
+        });
+        state.setAIConfigs(mergedConfigs);
+        // Store raw backend hash so change detection compares against the same payload.
+        // Using mergedConfigs would cause a mismatch and re-trigger on every poll.
+        _lastHash.ai = hashes.ai;
+      }
     }
     if (changed.webdav && webdavResult.status === 'fulfilled') {
       // Filter out configs with decrypt_failed status — preserve local password values
       // to prevent backend decryption failures from overwriting valid local data.
       const backendConfigs = webdavResult.value;
       const localConfigs = state.webdavConfigs;
-      const mergedConfigs = backendConfigs.map(bc => {
+      if (shouldPreserveLocalCollection(backendConfigs, localConfigs, _lastHash.webdav === '')) {
+        _hasPendingPush = true;
+      } else {
+        const mergedConfigs = backendConfigs.map(bc => {
         if (bc.passwordStatus === 'decrypt_failed' || !bc.password) {
           const local = localConfigs.find(lc => lc.id === bc.id);
           if (local && local.password) {
@@ -369,15 +412,19 @@ export async function syncFromBackend(): Promise<void> {
           }
         }
         return bc;
-      });
-      state.setWebDAVConfigs(mergedConfigs);
-      // Store raw backend hash for consistent change detection
-      _lastHash.webdav = hashes.webdav;
+        });
+        state.setWebDAVConfigs(mergedConfigs);
+        // Store raw backend hash for consistent change detection
+        _lastHash.webdav = hashes.webdav;
+      }
     }
     if (changed.embedding && embeddingResult.status === 'fulfilled') {
       const backendConfigs = embeddingResult.value;
       const localConfigs = state.embeddingConfigs;
-      const mergedConfigs = backendConfigs.map(bc => {
+      if (shouldPreserveLocalCollection(backendConfigs, localConfigs, _lastHash.embedding === '')) {
+        _hasPendingPush = true;
+      } else {
+        const mergedConfigs = backendConfigs.map(bc => {
         if (bc.apiKeyStatus === 'decrypt_failed' || !bc.apiKey) {
           const local = localConfigs.find(lc => lc.id === bc.id);
           if (local && local.apiKey) {
@@ -386,9 +433,10 @@ export async function syncFromBackend(): Promise<void> {
           }
         }
         return bc;
-      });
-      state.setEmbeddingConfigs(mergedConfigs);
-      _lastHash.embedding = hashes.embedding;
+        });
+        state.setEmbeddingConfigs(mergedConfigs);
+        _lastHash.embedding = hashes.embedding;
+      }
     }
     if (changed.vectorSearch && vectorSearchResult.status === 'fulfilled') {
       const backendConfig = vectorSearchResult.value;
@@ -494,15 +542,15 @@ export async function syncFromBackend(): Promise<void> {
  * Push current local state to backend.
  * Silent: errors logged to console only.
  */
-export async function syncToBackend(): Promise<void> {
-  if (!backend.isAvailable) return;
+export async function syncToBackend(): Promise<boolean> {
+  if (!backend.isAvailable) return false;
   // If a pull is in-flight, queue this push for after pull completes
   if (_isSyncingFromBackendActive) {
     _hasPendingPush = true;
-    return;
+    return false;
   }
-  if (_isSyncingFromBackend) return;
-  if (_isPushingToBackend) return;
+  if (_isSyncingFromBackend) return false;
+  if (_isPushingToBackend) return false;
 
   _isPushingToBackend = true;
   _hasPendingPush = false;
@@ -528,6 +576,7 @@ export async function syncToBackend(): Promise<void> {
     if (failures.length > 0) {
       logger.warn('sync.pushToBackend', `Synced to backend with ${failures.length} error(s)`, { failureCount: failures.length, durationMs: Date.now() - pushStartTime });
       _hasPendingLocalChanges = true;
+      return false;
     } else {
       logger.info('sync.pushToBackend', 'Synced to backend', { durationMs: Date.now() - pushStartTime });
       _hasPendingLocalChanges = false;
@@ -541,23 +590,15 @@ export async function syncToBackend(): Promise<void> {
     if (embeddingSync.status === 'fulfilled') _lastHash.embedding = quickHash(state.embeddingConfigs);
     if (vectorSearchSync.status === 'fulfilled') _lastHash.vectorSearch = vectorSearchFingerprint(state.vectorSearchConfig);
     if (settingsSync.status === 'fulfilled') {
-      _lastHash.settings = quickHash({
-        activeAIConfig: state.activeAIConfig,
-        activeWebDAVConfig: state.activeWebDAVConfig,
-        activeEmbeddingConfig: state.activeEmbeddingConfig,
-        hiddenDefaultCategoryIds: state.hiddenDefaultCategoryIds,
-        categoryOrder: state.categoryOrder,
-        customCategories: state.customCategories,
-        assetFilters: state.assetFilters,
-        releaseSourceSettings: state.releaseSourceSettings,
-        collapsedSidebarCategoryCount: state.collapsedSidebarCategoryCount,
-      });
+      _lastHash.settings = quickHash(buildAppStateSnapshot(state));
     }
     if (discoveryAnalysesSync.status === 'fulfilled') {
       _lastHash.discoveryAnalyses = quickHash(discoveryAnalyses);
     }
+    return true;
   } catch (err) {
     logger.errorFromError('sync.pushToBackend', 'Failed to sync to backend', err, { durationMs: Date.now() - pushStartTime });
+    return false;
   } finally {
     setRepositorySyncVisualState(false);
     _isPushingToBackend = false;
@@ -612,16 +653,7 @@ export function startAutoSync(): () => void {
       state.webdavConfigs !== prevState.webdavConfigs ||
       state.embeddingConfigs !== prevState.embeddingConfigs ||
       state.vectorSearchConfig !== prevState.vectorSearchConfig ||
-      state.activeAIConfig !== prevState.activeAIConfig ||
-      state.activeWebDAVConfig !== prevState.activeWebDAVConfig ||
-      state.activeEmbeddingConfig !== prevState.activeEmbeddingConfig ||
-      state.hiddenDefaultCategoryIds !== prevState.hiddenDefaultCategoryIds ||
-      state.categoryOrder !== prevState.categoryOrder ||
-      state.customCategories !== prevState.customCategories ||
-      state.assetFilters !== prevState.assetFilters ||
-      state.releaseSourceSettings !== prevState.releaseSourceSettings ||
-      state.collapsedSidebarCategoryCount !== prevState.collapsedSidebarCategoryCount ||
-      state.discoveryRepos !== prevState.discoveryRepos;
+      hasAppStateSnapshotChanged(state, prevState);
 
     if (!changed) return;
 

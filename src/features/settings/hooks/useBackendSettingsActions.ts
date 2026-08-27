@@ -3,7 +3,11 @@ import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '../../../store/useAppStore';
 import { useDialog } from '../../../hooks/useDialog';
 import { backend } from '../../../services/backendAdapter';
-import { syncLocalGitHubTokenToBackend, tryRestoreAuthFromBackend } from '../../../services/autoSync';
+import {
+  syncLocalGitHubTokenToBackend,
+  syncToBackend as syncAllToBackend,
+  tryRestoreAuthFromBackend,
+} from '../../../services/autoSync';
 
 interface UseBackendSettingsActionsOptions {
   t: (zh: string, en: string) => string;
@@ -108,23 +112,15 @@ export const useBackendSettingsActions = ({ t }: UseBackendSettingsActionsOption
     }
     setIsSyncingToBackend(true);
     try {
-      const results = await Promise.allSettled([
-        backend.syncRepositories(state.repositories),
-        backend.syncReleases(state.releases),
-        backend.syncAIConfigs(state.aiConfigs),
-        backend.syncWebDAVConfigs(state.webdavConfigs),
-        backend.syncSettings({
-          activeAIConfig: state.activeAIConfig,
-          activeWebDAVConfig: state.activeWebDAVConfig,
-          hiddenDefaultCategoryIds: state.hiddenDefaultCategoryIds,
-          categoryOrder: state.categoryOrder,
-          customCategories: state.customCategories,
-          assetFilters: state.assetFilters,
-          collapsedSidebarCategoryCount: state.collapsedSidebarCategoryCount,
-        }),
-      ]);
-      const failures = results.filter((result) => result.status === 'rejected');
-      const successes = results.filter((result) => result.status === 'fulfilled');
+      // syncAllToBackend owns the complete D1 sync and logs per-slice failures.
+      // Keep the existing success/failure toast contract for this settings UI.
+      const synced = await syncAllToBackend();
+      const failures: PromiseRejectedResult[] = synced
+        ? []
+        : [{ status: 'rejected', reason: new Error('sync failed') }];
+      const successes: PromiseFulfilledResult<void>[] = synced
+        ? [{ status: 'fulfilled', value: undefined }]
+        : [];
       if (failures.length) {
         console.warn('Some syncs failed:', failures.map((failure) => (failure as PromiseRejectedResult).reason));
         toast(t(`同步部分失败：${failures.length} 项失败，${successes.length} 项成功`, `Partial sync failure: ${failures.length} failed, ${successes.length} succeeded`), 'error');

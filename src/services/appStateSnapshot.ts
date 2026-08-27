@@ -3,12 +3,95 @@ import { useAppStore } from '../store/useAppStore';
 type AppStoreState = ReturnType<typeof useAppStore.getState>;
 
 /**
- * Data that should follow the account across browser origins. Secrets are
- * deliberately excluded; Worker ENV and browser session storage remain the
- * source of truth for credentials.
+ * Fields stored in the backend settings snapshot. The GitHub token remains
+ * client-side; the IndexedDB copy is only a cache. The backend API secret is
+ * a connection credential and remains in the browser session.
+ */
+export const APP_STATE_SNAPSHOT_KEYS = [
+  'user',
+  'gists',
+  'starredGists',
+  'gistSearchFilters',
+  'selectedGistCategory',
+  'forks',
+  'readForks',
+  'releaseSubscriptions',
+  'readReleases',
+  'releaseViewMode',
+  'releaseShowMode',
+  'releaseLatestMode',
+  'releaseSelectedFilters',
+  'releaseSearchQuery',
+  'releaseExpandedRepositories',
+  'forkViewMode',
+  'forkSelectedFilters',
+  'forkSearchQuery',
+  'forkExpandedRepositories',
+  'discoveryRepos',
+  'discoveryChannels',
+  'discoveryLastRefresh',
+  'discoveryTotalCount',
+  'discoveryHasMore',
+  'discoveryNextPage',
+  'discoveryScrollPositions',
+  'selectedDiscoveryChannel',
+  'discoveryPlatform',
+  'discoveryLanguage',
+  'discoverySortBy',
+  'discoverySortOrder',
+  'discoverySearchQuery',
+  'discoverySelectedTopic',
+  'trendingTimeRange',
+  'subscriptionRepos',
+  'subscriptionLastRefresh',
+  'subscriptionChannels',
+  'headerMenuConfig',
+  'syncMode',
+  'syncModeConfigured',
+  'categoryListIdMap',
+  'activeAIConfig',
+  'activeWebDAVConfig',
+  'activeEmbeddingConfig',
+  'customCategories',
+  'hiddenDefaultCategoryIds',
+  'defaultCategoryOverrides',
+  'categoryOrder',
+  'collapsedSidebarCategoryCount',
+  'categoryMatchMode',
+  'assetFilters',
+  'releaseSourceSettings',
+  'includePreRelease',
+  'includeKeysInBackup',
+  'theme',
+  'themePreset',
+  'currentView',
+  'selectedCategory',
+  'language',
+  'translationEngine',
+  'isSidebarCollapsed',
+  'lastSync',
+  'lastBackup',
+  'repositoryViewMode',
+  'searchFilters',
+  'vectorSearchStatus',
+  'proxyConfig',
+  'rpcDownloadConfig',
+  'mcpConfig',
+] as const;
+
+export function hasAppStateSnapshotChanged(state: AppStoreState, previousState: AppStoreState): boolean {
+  const current = state as unknown as Record<string, unknown>;
+  const previous = previousState as unknown as Record<string, unknown>;
+  return APP_STATE_SNAPSHOT_KEYS.some((key) => current[key] !== previous[key]);
+}
+
+/**
+ * Data that should follow the account across browser origins. The GitHub token
+ * and backend API secret are deliberately excluded from this snapshot.
  */
 export function buildAppStateSnapshot(state: AppStoreState): Record<string, unknown> {
   return {
+    user: state.user,
     gists: state.gists,
     starredGists: state.starredGists,
     gistSearchFilters: state.gistSearchFilters,
@@ -66,6 +149,8 @@ export function buildAppStateSnapshot(state: AppStoreState): Record<string, unkn
     currentView: state.currentView,
     selectedCategory: state.selectedCategory,
     language: state.language,
+    themePreset: state.themePreset,
+    translationEngine: state.translationEngine,
     isSidebarCollapsed: state.isSidebarCollapsed,
     lastSync: state.lastSync,
     lastBackup: state.lastBackup,
@@ -77,17 +162,21 @@ export function buildAppStateSnapshot(state: AppStoreState): Record<string, unkn
       host: state.proxyConfig.host,
       port: state.proxyConfig.port,
       username: state.proxyConfig.username,
+      password: state.proxyConfig.password,
     },
     rpcDownloadConfig: {
       enabled: state.rpcDownloadConfig.enabled,
       host: state.rpcDownloadConfig.host,
       port: state.rpcDownloadConfig.port,
+      secret: state.rpcDownloadConfig.secret,
     },
     mcpConfig: {
       enabled: state.mcpConfig.enabled,
       host: state.mcpConfig.host,
       port: state.mcpConfig.port,
+      token: state.mcpConfig.token,
     },
+    vectorSearchStatus: state.vectorSearchStatus,
   };
 }
 
@@ -114,6 +203,7 @@ export function applyAppStateSnapshot(snapshot: Record<string, unknown>): void {
     'isSidebarCollapsed', 'repositoryViewMode', 'proxyConfig', 'rpcDownloadConfig', 'mcpConfig',
     'activeAIConfig', 'activeWebDAVConfig', 'activeEmbeddingConfig', 'collapsedSidebarCategoryCount',
     'categoryMatchMode', 'includePreRelease', 'includeKeysInBackup', 'lastSync', 'lastBackup',
+    'themePreset', 'translationEngine', 'vectorSearchStatus',
   ] as const;
 
   for (const field of arrayFields) {
@@ -125,7 +215,12 @@ export function applyAppStateSnapshot(snapshot: Record<string, unknown>): void {
     }
   }
   for (const field of scalarFields) {
-    if (snapshot[field] !== undefined && snapshot[field] !== null) next[field] = snapshot[field];
+    if (Object.prototype.hasOwnProperty.call(snapshot, field) && snapshot[field] !== undefined) next[field] = snapshot[field];
+  }
+
+  if (Object.prototype.hasOwnProperty.call(snapshot, 'user') && (snapshot.user === null || useAppStore.getState().githubToken)) {
+    next.user = snapshot.user;
+    next.isAuthenticated = !!snapshot.user && !!useAppStore.getState().githubToken;
   }
 
   if (Array.isArray(next.readForks)) next.readForks = new Set(next.readForks as number[]);

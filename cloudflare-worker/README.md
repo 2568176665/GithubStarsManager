@@ -141,19 +141,29 @@ npm run dev
 | Ollama nomic-embed-text | **768** | ✅ | 免费 |
 | Ollama bge-m3 | **1024** | ✅ | 免费 |
 | 硅基流动 BAAI/bge-large-zh-v1.5 | **1024** | ✅ | ¥0.5/M |
-# Worker ENV deployment
+# D1-backed AI configuration
 
-The web deployment reads credentials only from Worker configuration. They are
-never returned to the browser:
+AI configurations are persisted in the D1 `sync_state` table by the app's
+`/api/configs/ai/bulk` endpoint. The Worker reads the saved configuration for
+`/api/configs/ai` and `/api/proxy/ai`; no AI environment variables are needed.
 
-Copy `.env.example` for local development. Do not commit a real `.env` file.
+Keep `GITHUB_TOKEN` as a Worker secret for `/api/session` and
+`/api/proxy/github/*`:
 
 ```powershell
 npx wrangler secret put GITHUB_TOKEN
-npx wrangler secret put AI_API_KEY
-npx wrangler deploy --var AI_API_TYPE:openai-compatible --var AI_BASE_URL:https://api.openai.com --var AI_MODEL:<model>
+npx wrangler d1 migrations apply github-stars-manager --remote
+npx wrangler deploy
 ```
 
-`GITHUB_TOKEN` is used by `/api/session` and `/api/proxy/github/*`. The AI
-secret is used by `/api/proxy/ai`; the browser receives only the public model
-metadata. Replace the AI values with the provider and model you actually use.
+Configure the AI provider, endpoint, API key, and model in the application's
+**Settings → AI Service Configuration** panel. The API key is stored as part of
+the D1 state, so treat the Worker URL and its API access as sensitive.
+
+# D1-backed application state
+
+The frontend's complete application snapshot (except the GitHub token) is synchronized to
+the D1 `sync_state` row named `settings`. This includes preferences, gists,
+forks, discovery/subscription state, categories, filters, and network/MCP
+configuration. IndexedDB remains only a local cache when the backend is
+unavailable. `github_token` is ignored by the Worker and is never stored in D1.

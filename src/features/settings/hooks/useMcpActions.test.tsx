@@ -24,7 +24,7 @@ vi.mock('../../../hooks/useDialog', () => ({
 vi.mock('../../../services/electronProxy', () => ({ isElectron: () => false }));
 
 describe('useMcpActions', () => {
-  it('does not query unsupported MCP admin APIs in Worker ENV mode', async () => {
+  it('does not query unsupported MCP admin APIs in Worker mode', async () => {
     const { result } = renderHook(() => useMcpActions({ t: (_zh, en) => en }));
 
     await waitFor(() => expect(result.current.loading).toBe(false));

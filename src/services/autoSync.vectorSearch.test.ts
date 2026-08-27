@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { shouldPreserveLocalVectorSearch, shouldQueueVectorSearchRepairPush, vectorSearchFingerprint } from './autoSync';
+import { shouldPreserveLocalAIConfigs, shouldPreserveLocalCollection, shouldPreserveLocalVectorSearch, shouldQueueVectorSearchRepairPush, vectorSearchFingerprint } from './autoSync';
 
 const canonical = {
   enabled: true,
@@ -153,5 +153,31 @@ describe('shouldQueueVectorSearchRepairPush (decrypt_failed / empty token)', () 
     // The stored fingerprint (effective config, cycle 1) must match the backend
     // payload (cycle 2) so the second poll detects no change.
     expect(vectorSearchFingerprint(effectiveAfterRepair)).toBe(vectorSearchFingerprint(cycle2Backend));
+  });
+});
+
+describe('shouldPreserveLocalAIConfigs (bootstrap guard)', () => {
+  it('preserves local AI configs when D1 is empty on first sync', () => {
+    expect(shouldPreserveLocalAIConfigs([], [{ id: 'ai-1', apiKey: 'secret' }], true)).toBe(true);
+  });
+
+  it('accepts an empty backend after the first sync', () => {
+    expect(shouldPreserveLocalAIConfigs([], [{ id: 'ai-1', apiKey: 'secret' }], false)).toBe(false);
+  });
+
+  it('does not preserve when there are no local AI configs', () => {
+    expect(shouldPreserveLocalAIConfigs([], [], true)).toBe(false);
+  });
+});
+
+describe('shouldPreserveLocalCollection (D1 bootstrap guard)', () => {
+  it('preserves local data when the first D1 pull is empty', () => {
+    expect(shouldPreserveLocalCollection([{ id: 1 }], [{ id: 2 }], true)).toBe(false);
+    expect(shouldPreserveLocalCollection([], [{ id: 2 }], true)).toBe(true);
+  });
+
+  it('accepts an empty D1 collection after the initial synchronization', () => {
+    expect(shouldPreserveLocalCollection([], [{ id: 2 }], false)).toBe(false);
+    expect(shouldPreserveLocalCollection([], [], true)).toBe(false);
   });
 });

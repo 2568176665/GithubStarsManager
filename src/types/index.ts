@@ -294,7 +294,7 @@ export type MiMoPlan = 'api' | 'token-plan';
 /** README 文档翻译使用的引擎：微软 Edge 翻译（免费）、Google 翻译（免费）或用户配置的 AI。 */
 export type TranslationEngine = 'microsoft' | 'google' | 'ai';
 
-export type SecretStatus = 'ok' | 'empty' | 'decrypt_failed' | 'env';
+export type SecretStatus = 'ok' | 'empty' | 'decrypt_failed';
 
 export interface AIConfig {
   id: string;

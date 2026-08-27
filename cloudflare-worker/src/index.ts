@@ -4,10 +4,6 @@ interface Env {
   VECTORIZE?: Vectorize;
   AUTH_TOKEN?: string;
   GITHUB_TOKEN?: string;
-  AI_API_KEY?: string;
-  AI_API_TYPE?: string;
-  AI_BASE_URL?: string;
-  AI_MODEL?: string;
 }
 
 const CORS_HEADERS: Record<string, string> = {
@@ -29,13 +25,73 @@ async function writeState(env: Env, key: string, value: unknown): Promise<void> 
     .bind(key, JSON.stringify(value), Date.now()).run();
 }
 
-async function getAIConfigs(): Promise<unknown[]> {
-  return [];
+/** GitHub credentials are browser/session data and must never enter Worker D1. */
+function withoutGitHubToken(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => key !== 'github_token' && key !== 'github_token_status'),
+  );
 }
 
-async function saveAIConfigs(env: Env, configs: Array<Record<string, unknown>>): Promise<void> {
-  void env;
-  void configs;
+async function readSettings(env: Env): Promise<Record<string, unknown>> {
+  const stored = await readState(env, 'settings', {});
+  const sanitized = withoutGitHubToken(stored);
+  // Also clean up settings written by older Worker versions that accepted the
+  // token field, so the credential is removed from D1 at the next read.
+  if (stored && typeof stored === 'object' && !Array.isArray(stored)) {
+    const storedKeys = Object.keys(stored as Record<string, unknown>);
+    if (storedKeys.length !== Object.keys(sanitized).length) {
+      await writeState(env, 'settings', sanitized);
+    }
+  }
+  return sanitized;
+}
+
+type AIConfig = {
+  id?: unknown;
+  apiType?: unknown;
+  baseUrl?: unknown;
+  apiKey?: unknown;
+  model?: unknown;
+  reasoningEffort?: unknown;
+  [key: string]: unknown;
+};
+
+function buildApiUrl(baseUrl: string, pathWithVersion: string): string {
+  const baseUrlWithSlash = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
+  const versionPrefix = pathWithVersion.split('/')[0] || '';
+
+  try {
+    const base = new URL(baseUrlWithSlash);
+    const basePath = base.pathname.replace(/\/$/, '');
+    const hasVersionInBase = /\/v\d+(?:beta|alpha)?$/.test(basePath);
+
+    if (hasVersionInBase) {
+      const endpointPath = pathWithVersion.includes('/') ? pathWithVersion.split('/').slice(1).join('/') : pathWithVersion;
+      return new URL(endpointPath, baseUrlWithSlash).toString();
+    }
+    if (versionPrefix && new RegExp(`/${versionPrefix}$`).test(basePath) && pathWithVersion.startsWith(`${versionPrefix}/`)) {
+      return new URL(pathWithVersion.slice(versionPrefix.length + 1), baseUrlWithSlash).toString();
+    }
+    return new URL(pathWithVersion, baseUrlWithSlash).toString();
+  } catch {
+    return `${baseUrlWithSlash}${pathWithVersion}`;
+  }
+}
+
+function normalizeReasoningEffort(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  return value === 'minimal' ? 'low' : value;
+}
+
+async function getAIConfigs(env: Env): Promise<AIConfig[]> {
+  const configs = await readState(env, 'configs/ai', []);
+  return Array.isArray(configs) ? configs as AIConfig[] : [];
+}
+
+async function saveAIConfigs(env: Env, configs: AIConfig[]): Promise<void> {
+  await writeState(env, 'configs/ai', configs);
 }
 
 async function handleApi(request: Request, env: Env): Promise<Response> {
@@ -64,26 +120,53 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     });
     return new Response(response.body, { status: response.status, headers: { ...CORS_HEADERS, 'Content-Type': response.headers.get('Content-Type') || 'application/json' } });
   }
-  if (url.pathname === '/api/configs/ai' && request.method === 'GET') {
-    if (!env.AI_API_KEY || !env.AI_BASE_URL || !env.AI_MODEL) return json([]);
-    return json([{ id: 'worker-env-ai', name: 'Worker ENV AI', apiType: env.AI_API_TYPE || 'openai-compatible', baseUrl: env.AI_BASE_URL, apiKey: '', model: env.AI_MODEL, isActive: true, concurrency: 4, apiKeyStatus: 'env' }]);
-  }
   if (url.pathname === '/api/proxy/ai' && request.method === 'POST') {
-    if (!env.AI_API_KEY || !env.AI_BASE_URL || !env.AI_MODEL) return json({ error: 'AI environment is not configured' }, 503);
-    const body = await request.json() as { body?: Record<string, unknown> };
-    const base = env.AI_BASE_URL.replace(/\/+$/, '');
-    const endpoint = /\/chat\/completions$|\/responses$/.test(base)
-      ? base
-      : base.endsWith('/v1')
-        ? `${base}/chat/completions`
-        : `${base}/v1/chat/completions`;
-    const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.AI_API_KEY}` }, body: JSON.stringify({ ...(body.body || {}), model: env.AI_MODEL }) });
+    const payload = await request.json() as { configId?: unknown; config?: AIConfig; body?: Record<string, unknown> };
+    const configId = typeof payload.configId === 'string' ? payload.configId : '';
+    const configs = configId ? await getAIConfigs(env) : [];
+    const storedConfig = configId ? configs.find((config) => config.id === configId) : undefined;
+
+    if (configId && !storedConfig) return json({ error: 'AI config not found', code: 'AI_CONFIG_NOT_FOUND' }, 404);
+    const config = storedConfig || payload.config;
+    if (!config) return json({ error: 'configId or config required', code: 'CONFIG_ID_REQUIRED' }, 400);
+
+    const apiKey = typeof config.apiKey === 'string' ? config.apiKey : '';
+    const baseUrl = typeof config.baseUrl === 'string' ? config.baseUrl : '';
+    const model = typeof config.model === 'string' ? config.model : '';
+    const apiType = typeof config.apiType === 'string' ? config.apiType : 'openai';
+    if (!baseUrl || !apiKey || !model) return json({ error: 'baseUrl, apiKey, and model are required', code: 'INVALID_REQUEST' }, 400);
+
+    let endpoint: string;
+    const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json' };
+    if (apiType === 'claude') {
+      endpoint = buildApiUrl(baseUrl, 'v1/messages');
+      headers['x-api-key'] = apiKey;
+      headers['anthropic-version'] = '2023-06-01';
+    } else if (apiType === 'gemini') {
+      const modelName = model.trim().replace(/^models\//, '');
+      const endpointUrl = new URL(buildApiUrl(baseUrl, `v1beta/models/${encodeURIComponent(modelName)}:generateContent`));
+      endpointUrl.searchParams.set('key', apiKey);
+      endpoint = endpointUrl.toString();
+    } else {
+      endpoint = apiType === 'openai-compatible'
+        ? baseUrl.replace(/\/+$/, '')
+        : buildApiUrl(baseUrl, apiType === 'openai-responses' ? 'v1/responses' : 'v1/chat/completions');
+      headers.Authorization = `Bearer ${apiKey}`;
+    }
+
+    const requestBody = { ...(payload.body || {}), model };
+    const reasoningEffort = normalizeReasoningEffort(config.reasoningEffort);
+    const supportsReasoning = ['openai', 'openai-responses', 'openai-compatible', 'deepseek', 'mimo'].includes(apiType);
+    const effectiveBody = reasoningEffort && model.trim() !== 'deepseek-reasoner' && supportsReasoning && !('reasoning' in requestBody)
+      ? { ...requestBody, reasoning: { effort: reasoningEffort } }
+      : requestBody;
+    const response = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(effectiveBody) });
     return new Response(response.body, { status: response.status, headers: { ...CORS_HEADERS, 'Content-Type': response.headers.get('Content-Type') || 'application/json' } });
   }
   const path = url.pathname.replace(/^\/api\//, '');
-  if (path === 'configs/ai' && request.method === 'GET') return json(await getAIConfigs());
+  if (path === 'configs/ai' && request.method === 'GET') return json(await getAIConfigs(env));
   if (path === 'configs/ai/bulk' && request.method === 'PUT') {
-    const body = await request.json() as { configs?: Array<Record<string, unknown>> };
+    const body = await request.json() as { configs?: AIConfig[] };
     if (!Array.isArray(body.configs)) return json({ error: 'configs array required' }, 400);
     await saveAIConfigs(env, body.configs);
     return json({ synced: body.configs.length, skipped: 0, errors: [] });
@@ -177,8 +260,11 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
       return json({ success: false, error: error instanceof Error ? error.message : String(error) }, 502);
     }
   }
-  if (path === 'settings' && request.method === 'GET') return json(await readState(env, path, {}));
-  if (path === 'settings' && request.method === 'PUT') { await writeState(env, path, await request.json()); return json({ success: true }); }
+  if (path === 'settings' && request.method === 'GET') return json(await readSettings(env));
+  if (path === 'settings' && request.method === 'PUT') {
+    await writeState(env, path, withoutGitHubToken(await request.json()));
+    return json({ success: true });
+  }
   return json({ error: 'Not Found' }, 404);
 }
 

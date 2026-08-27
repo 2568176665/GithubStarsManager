@@ -592,10 +592,8 @@ class BackendAdapter {
   async syncAIConfigs(configs: AIConfig[]): Promise<void> {
     if (!this._backendUrl) return;
 
-    // Worker ENV AI intentionally has no browser-visible API key. It is
-    // resolved inside the Worker, so an empty key is valid for that config.
     for (const c of configs) {
-      if (!c.apiKey && !(this._workerEnvMode && c.id === 'worker-env-ai')) {
+      if (!c.apiKey) {
         logger.warn('backendAdapter', 'AI config has empty apiKey, will be skipped', { name: c.name, id: c.id });
       }
     }
@@ -810,7 +808,7 @@ class BackendAdapter {
   /**
    * Restore the GitHub token stored on the backend for cross-browser/device
    * session recovery. Only callable when the backend is reachable AND this
-   * Legacy backend session restore endpoint. Worker ENV mode uses fetchManagedSession.
+   * Legacy backend session restore endpoint. Worker mode uses fetchManagedSession.
    */
   async restoreAuth(): Promise<{ github_token: string | null } | null> {
     if (!this._backendUrl) return null;

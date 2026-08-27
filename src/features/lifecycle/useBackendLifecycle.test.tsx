@@ -91,10 +91,10 @@ describe('useBackendLifecycle', () => {
     consoleError.mockRestore();
   });
 
-  it('loads Worker ENV authentication and AI configuration before synchronization', async () => {
+  it('loads Worker authentication and D1 AI configuration before synchronization', async () => {
     mocks.backend.isWorkerEnvMode = true;
     mocks.backend.fetchAIConfigs.mockResolvedValueOnce([
-      { id: 'worker-env-ai' },
+      { id: 'ai-1' },
     ]);
 
     renderHook(() => useBackendLifecycle(true));
@@ -103,9 +103,20 @@ describe('useBackendLifecycle', () => {
     expect(mocks.backend.fetchManagedSession).toHaveBeenCalledOnce();
     expect(mocks.backend.fetchAIConfigs).toHaveBeenCalledOnce();
     expect(mocks.store.setGitHubToken).toHaveBeenCalledWith('worker-managed');
-    expect(mocks.store.setAIConfigs).toHaveBeenCalledWith([{ id: 'worker-env-ai' }]);
-    expect(mocks.store.setActiveAIConfig).toHaveBeenCalledWith('worker-env-ai');
+    expect(mocks.store.setAIConfigs).toHaveBeenCalledWith([{ id: 'ai-1' }]);
+    expect(mocks.store.setActiveAIConfig).toHaveBeenCalledWith('ai-1');
     expect(mocks.tryRestoreAuthFromBackend).not.toHaveBeenCalled();
+    expect(mocks.syncFromBackend).toHaveBeenCalledOnce();
+  });
+
+  it('keeps local AI configuration when the Worker D1 store is empty', async () => {
+    mocks.backend.isWorkerEnvMode = true;
+
+    renderHook(() => useBackendLifecycle(true));
+    await waitFor(() => expect(mocks.startAutoSync).toHaveBeenCalledOnce());
+
+    expect(mocks.store.setAIConfigs).not.toHaveBeenCalled();
+    expect(mocks.store.setActiveAIConfig).not.toHaveBeenCalled();
     expect(mocks.syncFromBackend).toHaveBeenCalledOnce();
   });
 

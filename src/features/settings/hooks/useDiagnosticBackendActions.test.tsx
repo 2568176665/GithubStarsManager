@@ -48,7 +48,7 @@ describe('useDiagnosticBackendActions', () => {
     expect(result.current.backendLogCount).toBe(1);
   });
 
-  it('does not probe Docker diagnostics in Worker ENV mode', () => {
+  it('does not probe Docker diagnostics in Worker mode', () => {
     backendMock.isWorkerEnvMode = true;
 
     const { result } = renderHook(() => useDiagnosticBackendActions({ selectedScope: 'all' }));
