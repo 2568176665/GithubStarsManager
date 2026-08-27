@@ -92,7 +92,7 @@ const runOptions = (repositories: Repository[], syncOnComplete = false) => ({
   syncOnComplete,
 });
 
-const renderJob = () => renderHook(() => useRepositoryAnalysisJob({ allCategories: [] }));
+const renderJob = (onAnalysisResult?: Parameters<typeof useRepositoryAnalysisJob>[0]['onAnalysisResult']) => renderHook(() => useRepositoryAnalysisJob({ allCategories: [], onAnalysisResult }));
 
 describe('useRepositoryAnalysisJob', () => {
   beforeEach(() => {
@@ -132,6 +132,33 @@ describe('useRepositoryAnalysisJob', () => {
     }));
     expect(mocks.forceSyncToBackend).not.toHaveBeenCalled();
     expect(result.current).toMatchObject({ isRunning: false, isPaused: false, progress: { current: 0, total: 0 } });
+  });
+
+  it('uses the same pipeline while allowing discovery views to own result persistence', async () => {
+    const target = repository(2);
+    const onAnalysisResult = vi.fn();
+    mocks.analyzeRepositoriesPipelined.mockImplementation(async (...args: unknown[]) => {
+      const onResult = args[6] as (result: object) => void;
+      onResult({
+        repo: target,
+        success: true,
+        summary: 'summary',
+        tags: ['tag'],
+        platforms: ['web'],
+        duration: 1,
+      });
+    });
+
+    const { result } = renderJob(onAnalysisResult);
+    await act(async () => {
+      await result.current.run(runOptions([target]));
+    });
+
+    expect(onAnalysisResult).toHaveBeenCalledWith(
+      expect.objectContaining({ repo: target, success: true }),
+      expect.objectContaining({ analyzedAt: expect.any(String) }),
+    );
+    expect(storeState.updateRepository).not.toHaveBeenCalled();
   });
 
   it('stores both successful and failed results from a partially failing job and syncs once when requested', async () => {

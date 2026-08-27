@@ -16,6 +16,9 @@ export const useSearchShortcuts = ({
   onToggleFilters
 }: UseSearchShortcutsProps) => {
   const isListening = useRef(true);
+  const callbacksRef = useRef({ onFocusSearch, onClearSearch, onToggleFilters });
+
+  callbacksRef.current = { onFocusSearch, onClearSearch, onToggleFilters };
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -29,27 +32,27 @@ export const useSearchShortcuts = ({
       // Ctrl/Cmd + K: 聚焦搜索框
       if ((event.ctrlKey || event.metaKey) && event.key === 'k') {
         event.preventDefault();
-        onFocusSearch();
+        callbacksRef.current.onFocusSearch();
         return;
       }
 
       // Escape: 清除搜索（仅在搜索框中时）
       if (event.key === 'Escape' && isInInput) {
-        onClearSearch();
+        callbacksRef.current.onClearSearch();
         return;
       }
 
       // Ctrl/Cmd + Shift + F: 切换过滤器
       if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'F') {
         event.preventDefault();
-        onToggleFilters();
+        callbacksRef.current.onToggleFilters();
         return;
       }
 
       // / 键: 快速聚焦搜索框（仅在非输入状态下）
       if (event.key === '/' && !isInInput) {
         event.preventDefault();
-        onFocusSearch();
+        callbacksRef.current.onFocusSearch();
         return;
       }
     };
@@ -59,7 +62,8 @@ export const useSearchShortcuts = ({
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [onFocusSearch, onClearSearch, onToggleFilters]);
+    // Callbacks are read via callbacksRef so the listener remains registered once.
+  }, []);
 
   // 提供暂停/恢复监听的方法
   const pauseListening = () => {

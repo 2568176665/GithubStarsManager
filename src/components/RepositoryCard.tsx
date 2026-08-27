@@ -1072,16 +1072,6 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
 
 // 使用 React.memo 优化，避免不必要的重渲染
 export const RepositoryCard = React.memo(RepositoryCardComponent, (prevProps, nextProps) => {
-  const allCategoriesEqual = 
-    prevProps.allCategories.length === nextProps.allCategories.length &&
-    prevProps.allCategories.every((cat, i) => {
-      const nextCat = nextProps.allCategories[i];
-      return nextCat && 
-             cat.id === nextCat.id && 
-             cat.name === nextCat.name && 
-             JSON.stringify(cat.keywords) === JSON.stringify(nextCat.keywords);
-    });
-
   return (
     prevProps.repository.id === nextProps.repository.id &&
     prevProps.repository.analyzed_at === nextProps.repository.analyzed_at &&
@@ -1106,6 +1096,6 @@ export const RepositoryCard = React.memo(RepositoryCardComponent, (prevProps, ne
     prevProps.selectionMode === nextProps.selectionMode &&
     prevProps.isExitingSelection === nextProps.isExitingSelection &&
     prevProps.viewMode === nextProps.viewMode &&
-    allCategoriesEqual
+    prevProps.allCategories === nextProps.allCategories
   );
 });

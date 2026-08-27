@@ -64,7 +64,7 @@ const COMPONENT_BOUNDARY_ALLOWLIST = [
 ];
 
 export default tseslint.config(
-  { ignores: ['dist'] },
+  { ignores: ['dist', '**/.wrangler/**'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],

@@ -14,6 +14,8 @@ import { useAppStore } from './store/useAppStore';
 import { selectAppShellState } from './store/selectors';
 import { useShallow } from 'zustand/react/shallow';
 import { applyThemePreset } from './lib/themePresets';
+import { loadThemeFonts } from './lib/themeFonts';
+import { getThemePreset } from './constants/themePresets';
 import { useAutoUpdateCheck } from './hooks/useAutoUpdateCheck';
 import { logger } from './services/logger';
 import { UpdateNotificationBanner } from './components/UpdateNotificationBanner';
@@ -194,6 +196,11 @@ function App() {
   // Theme preset (palette/radius/font/shadow skin) rides on data-theme.
   useEffect(() => {
     applyThemePreset(themePreset);
+  }, [themePreset]);
+
+  // Font files are fetched only for the active preset and never delay rendering.
+  useEffect(() => {
+    void loadThemeFonts(getThemePreset(themePreset));
   }, [themePreset]);
 
   const handleCategorySelect = useCallback((category: string) => {

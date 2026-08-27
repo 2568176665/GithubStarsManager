@@ -75,7 +75,7 @@ const repository: Repository = {
 const createStoreState = () => ({
   releaseSubscriptions: new Set<number>(),
   analyzingRepositoryIds: new Set<number>(),
-  githubToken: 'github-token',
+  githubToken: 'github-token' as string | null,
   activeAIConfig: 'ai-config',
   setAnalyzingRepository: vi.fn(),
   language: 'zh' as const,
@@ -128,6 +128,7 @@ describe('useRepositoryCardActions', () => {
     mockUseAppStore.mockImplementation(((selector?: (state: typeof storeState) => unknown) => (
       selector ? selector(storeState) : storeState
     )) as typeof useAppStore);
+    (mockUseAppStore as unknown as { getState: () => typeof storeState }).getState = () => storeState;
     mocks.confirm.mockResolvedValue(true);
     mocks.forceSyncToBackend.mockResolvedValue(undefined);
     mocks.unstarRepository.mockResolvedValue(undefined);
@@ -150,6 +151,18 @@ describe('useRepositoryCardActions', () => {
     rerender();
 
     expect(result.current).toBe(actions);
+  });
+
+  it('reads the latest store configuration when an action is invoked', async () => {
+    const { result } = renderActions();
+    storeState.githubToken = null;
+
+    await act(async () => {
+      await result.current.analyze();
+    });
+
+    expect(mocks.analyzeRepository).not.toHaveBeenCalled();
+    expect(mocks.toast).toHaveBeenCalledWith('GitHub token 未找到，请重新登录。', 'error');
   });
 
   it('aborts an in-flight analysis and clears the store marker on unmount', async () => {

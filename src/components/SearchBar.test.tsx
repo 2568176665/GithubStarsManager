@@ -127,6 +127,20 @@ describe('SearchBar', () => {
     expect(setSearchFilters).toHaveBeenCalledWith({ query: '' });
   });
 
+  it('loads search history only when mounted, not when repositories change', () => {
+    const { rerender } = render(<SearchBar />);
+
+    expect(localStorage.getItem).toHaveBeenCalledTimes(1);
+
+    currentState = createStoreState({
+      repositories: [createRepository({ id: 2, name: 'vite', full_name: 'vitejs/vite' })],
+    });
+    mockUseAppStore.mockReturnValue(currentState as ReturnType<typeof useAppStore>);
+    rerender(<SearchBar />);
+
+    expect(localStorage.getItem).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the committed query empty when sorting after manual clearing', () => {
     const storeState = createStoreState({
       searchFilters: {

@@ -122,6 +122,18 @@ beforeEach(() => {
 });
 
 describe('RepositoryCard view modes', () => {
+  it('treats allCategories as a stable-reference prop', () => {
+    const initialCategories: [] = [];
+    const { rerender } = render(
+      <RepositoryCard repository={repository} allCategories={initialCategories} viewMode="grid" />
+    );
+
+    expect(actionMocks.actions.analyze).not.toHaveBeenCalled();
+    rerender(<RepositoryCard repository={repository} allCategories={[]} viewMode="grid" />);
+
+    expect(mockUseAppStore).toHaveBeenCalledTimes(2);
+  });
+
   it('moves single-card actions into an accessible more-actions menu in list mode', async () => {
     const user = userEvent.setup();
     renderRepositoryCard('list');

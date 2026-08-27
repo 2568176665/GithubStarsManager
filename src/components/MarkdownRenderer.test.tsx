@@ -209,6 +209,13 @@ describe('MarkdownRenderer', () => {
   });
 
   describe('Code Blocks', () => {
+    it('uses the common highlight.js build', () => {
+      const source = readFileSync('src/components/MarkdownRenderer.tsx', 'utf8');
+
+      expect(source).toContain("from 'highlight.js/lib/common'");
+      expect(source).not.toContain("from 'highlight.js';");
+    });
+
     it('should render GitHub-native code blocks without manual line numbers', () => {
       const content = '```javascript\nline1\nline2\nline3\nline4\n```';
       const { container } = render(<MarkdownRenderer content={content} />);

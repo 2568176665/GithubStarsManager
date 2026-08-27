@@ -118,6 +118,9 @@ export const selectGistViewState = (state: AppStoreState) => ({
 export const selectDiscoveryViewState = (state: AppStoreState) => ({
   githubToken: state.githubToken,
   language: state.language,
+  customCategories: state.customCategories,
+  hiddenDefaultCategoryIds: state.hiddenDefaultCategoryIds,
+  defaultCategoryOverrides: state.defaultCategoryOverrides,
   discoveryChannels: state.discoveryChannels,
   discoveryRepos: state.discoveryRepos,
   discoveryLastRefresh: state.discoveryLastRefresh,

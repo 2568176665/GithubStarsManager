@@ -6,6 +6,7 @@ import { SimilarViewBanner } from './SimilarViewBanner';
 import { BulkActionToolbar } from './BulkActionToolbar';
 import { BulkCategorizeModal } from './BulkCategorizeModal';
 import { BulkRestoreModal, RestoreConfig } from './BulkRestoreModal';
+import { VirtualizedRepositoryRows } from './VirtualizedRepositoryRows';
 
 import { Repository } from '../types';
 import { useAppStore, getAllCategories } from '../store/useAppStore';
@@ -107,7 +108,6 @@ export const RepositoryList: React.FC<RepositoryListProps> = ({
   // Infinite scroll (瀑布流按需加载)
   const LOAD_BATCH = 50;
   const [visibleCount, setVisibleCount] = useState(LOAD_BATCH);
-  const sentinelRef = useRef<HTMLDivElement | null>(null);
 
   const startIndex = filteredRepositories.length === 0 ? 0 : 1;
   const endIndex = Math.min(visibleCount, filteredRepositories.length);
@@ -189,28 +189,6 @@ export const RepositoryList: React.FC<RepositoryListProps> = ({
       if (filteredRepositories.length === 0) return LOAD_BATCH;
       return Math.min(count, filteredRepositories.length);
     });
-  }, [filteredRepositories.length]);
-
-  // IntersectionObserver to load more on demand
-  useEffect(() => {
-    const node = sentinelRef.current;
-    if (!node) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const entry = entries[0];
-        if (entry.isIntersecting) {
-          setVisibleCount((count) => {
-            if (count >= filteredRepositories.length) return count;
-            return Math.min(count + LOAD_BATCH, filteredRepositories.length);
-          });
-        }
-      },
-      { root: null, rootMargin: '200px', threshold: 0 }
-    );
-
-    observer.observe(node);
-    return () => observer.disconnect();
   }, [filteredRepositories.length]);
 
   useEffect(() => {
@@ -390,6 +368,37 @@ export const RepositoryList: React.FC<RepositoryListProps> = ({
       handleDeselectAll();
     }
   };
+
+  const handleReachEnd = useCallback(() => {
+    setVisibleCount((count) => {
+      if (count >= filteredRepositories.length) return count;
+      return Math.min(count + LOAD_BATCH, filteredRepositories.length);
+    });
+  }, [filteredRepositories.length]);
+
+  const renderRepository = useCallback((repo: Repository) => (
+    <RepositoryCard
+      key={repo.id}
+      repository={repo}
+      showAISummary={showAISummary}
+      searchQuery={searchFilters.query}
+      isSelected={selectedRepoIds.has(repo.id)}
+      onSelect={handleSelectRepo}
+      selectionMode={showBulkToolbar}
+      isExitingSelection={isExitingSelection}
+      allCategories={allCategories}
+      viewMode={repositoryViewMode}
+    />
+  ), [
+    allCategories,
+    handleSelectRepo,
+    isExitingSelection,
+    repositoryViewMode,
+    searchFilters.query,
+    selectedRepoIds,
+    showAISummary,
+    showBulkToolbar,
+  ]);
 
   if (filteredRepositories.length === 0) {
     const selectedCategoryObj = allCategories.find(cat => cat.id === selectedCategory);
@@ -593,34 +602,16 @@ export const RepositoryList: React.FC<RepositoryListProps> = ({
         </div>
       </div>
 
-      {/* Repository Grid with consistent card widths */}
-      <div
-        className={repositoryViewMode === 'list'
-          ? 'space-y-2 min-h-[200px]'
-          : 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 min-h-[200px]'}
-        onClick={handleClick}
-        onDoubleClick={handleDoubleClick}
-      >
-        {visibleRepositories.map(repo => (
-          <RepositoryCard
-            key={repo.id}
-            repository={repo}
-            showAISummary={showAISummary}
-            searchQuery={searchFilters.query}
-            isSelected={selectedRepoIds.has(repo.id)}
-            onSelect={handleSelectRepo}
-            selectionMode={showBulkToolbar}
-            isExitingSelection={isExitingSelection}
-            allCategories={allCategories}
-            viewMode={repositoryViewMode}
-          />
-        ))}
+      {/* Repository rows are windowed while preserving the existing window scroll UX. */}
+      <div onClick={handleClick} onDoubleClick={handleDoubleClick}>
+        <VirtualizedRepositoryRows
+          repositories={visibleRepositories}
+          viewMode={repositoryViewMode}
+          hasMore={visibleCount < filteredRepositories.length}
+          onReachEnd={handleReachEnd}
+          renderRepository={renderRepository}
+        />
       </div>
-
-      {/* Sentinel for on-demand loading */}
-      {visibleCount < filteredRepositories.length && (
-        <div ref={sentinelRef} className="h-8" />
-      )}
 
       {/* Bulk Action Toolbar */}
       {showBulkToolbar && (

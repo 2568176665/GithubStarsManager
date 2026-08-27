@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { shallow } from 'zustand/shallow';
 import type { Category, Repository } from '../../../types';
 import { useAppStore } from '../../../store/useAppStore';
+import type { AppStoreState } from '../../../store/types';
 import { useDialog } from '../../../hooks/useDialog';
 import { EmbeddingClient, VectorSearchService, findSimilarRepositories } from '../../../services/vectorSearchService';
 import { analyzeRepository, createFailedAnalysisResult } from '../../../services/aiAnalysisHelper';
@@ -27,6 +27,28 @@ export interface RepositoryCardActions {
   vectorSearchAvailable: boolean;
 }
 
+const isVectorSearchAvailable = (state: Pick<
+  AppStoreState,
+  'vectorSearchConfig' | 'vectorSearchStatus' | 'embeddingConfigs' | 'activeEmbeddingConfig'
+>) => {
+  const activeConfig = state.embeddingConfigs.find(
+    (config) => config.id === state.activeEmbeddingConfig,
+  );
+  const configComplete = !!activeConfig
+    && !!activeConfig.baseUrl
+    && !!activeConfig.model
+    && (activeConfig.apiType === 'ollama' || !!activeConfig.apiKey);
+
+  return (
+    state.vectorSearchConfig.enabled
+    && !!state.vectorSearchStatus?.connected
+    && (state.vectorSearchStatus?.vectorCount ?? 0) > 0
+    && configComplete
+    && !!state.vectorSearchConfig.workerUrl
+    && !!state.vectorSearchConfig.authToken
+  );
+};
+
 /**
  * Encapsulates RepositoryCard's domain operations while leaving card-local UI
  * state, layout, keyboard handling, and drag behaviour in the view component.
@@ -42,42 +64,8 @@ export const useRepositoryCardActions = ({
   const isStoreAnalyzing = useAppStore(
     useCallback((state) => state.analyzingRepositoryIds.has(repoId), [repoId]),
   );
-  const {
-    githubToken,
-    activeAIConfig,
-    setAnalyzingRepository,
-    language,
-    updateRepository,
-    deleteRepository,
-    vectorSearchConfig,
-    vectorSearchStatus,
-    embeddingConfigs,
-    activeEmbeddingConfig,
-    repositories,
-    enterSimilarView,
-    aiConfigs,
-    toggleReleaseSubscription: toggleStoreReleaseSubscription,
-  } = useAppStore(
-    useCallback(
-      (state) => ({
-        githubToken: state.githubToken,
-        activeAIConfig: state.activeAIConfig,
-        setAnalyzingRepository: state.setAnalyzingRepository,
-        language: state.language,
-        updateRepository: state.updateRepository,
-        deleteRepository: state.deleteRepository,
-        vectorSearchConfig: state.vectorSearchConfig,
-        vectorSearchStatus: state.vectorSearchStatus,
-        embeddingConfigs: state.embeddingConfigs,
-        activeEmbeddingConfig: state.activeEmbeddingConfig,
-        repositories: state.repositories,
-        enterSimilarView: state.enterSimilarView,
-        aiConfigs: state.aiConfigs,
-        toggleReleaseSubscription: state.toggleReleaseSubscription,
-      }),
-      [],
-    ),
-    shallow,
+  const vectorSearchAvailable = useAppStore(
+    useCallback((state) => isVectorSearchAvailable(state), []),
   );
   const { toast, confirm } = useDialog();
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -87,27 +75,18 @@ export const useRepositoryCardActions = ({
 
   useEffect(() => () => {
     abortControllerRef.current?.abort();
-    setAnalyzingRepository(repoId, false);
-  }, [repoId, setAnalyzingRepository]);
-
-  const vectorSearchAvailable = useMemo(() => {
-    const activeConfig = embeddingConfigs.find((config) => config.id === activeEmbeddingConfig);
-    const configComplete = !!activeConfig
-      && !!activeConfig.baseUrl
-      && !!activeConfig.model
-      && (activeConfig.apiType === 'ollama' || !!activeConfig.apiKey);
-
-    return (
-      vectorSearchConfig.enabled
-      && !!vectorSearchStatus?.connected
-      && (vectorSearchStatus?.vectorCount ?? 0) > 0
-      && configComplete
-      && !!vectorSearchConfig.workerUrl
-      && !!vectorSearchConfig.authToken
-    );
-  }, [embeddingConfigs, activeEmbeddingConfig, vectorSearchConfig, vectorSearchStatus]);
+    useAppStore.getState().setAnalyzingRepository(repoId, false);
+  }, [repoId]);
 
   const analyze = useCallback(async () => {
+    const {
+      githubToken,
+      activeAIConfig,
+      aiConfigs,
+      language,
+      setAnalyzingRepository,
+      updateRepository,
+    } = useAppStore.getState();
     if (!githubToken) {
       toast(
         language === 'zh'
@@ -264,23 +243,20 @@ export const useRepositoryCardActions = ({
         setAnalyzingRepository(repoId, false);
       }
     }
-  }, [
-    activeAIConfig,
-    aiConfigs,
-    allCategories,
-    confirm,
-    githubToken,
-    language,
-    repoId,
-    repository,
-    setAnalyzingRepository,
-    toast,
-    updateRepository,
-  ]);
+  }, [allCategories, confirm, repoId, repository, toast]);
 
   const findSimilar = useCallback(async () => {
+    const state = useAppStore.getState();
+    const {
+      activeEmbeddingConfig,
+      embeddingConfigs,
+      enterSimilarView,
+      language,
+      repositories,
+      vectorSearchConfig,
+    } = state;
     if (isFindingSimilar) return;
-    if (!vectorSearchAvailable) {
+    if (!isVectorSearchAvailable(state)) {
       toast(
         language === 'zh'
           ? '向量搜索未就绪：请先在设置中开启向量搜索并完成索引。'
@@ -331,24 +307,14 @@ export const useRepositoryCardActions = ({
     } finally {
       setIsFindingSimilar(false);
     }
-  }, [
-    activeEmbeddingConfig,
-    embeddingConfigs,
-    enterSimilarView,
-    isFindingSimilar,
-    language,
-    repositories,
-    repository,
-    toast,
-    vectorSearchAvailable,
-    vectorSearchConfig,
-  ]);
+  }, [isFindingSimilar, repository, toast]);
 
   const toggleReleaseSubscription = useCallback(() => {
-    toggleStoreReleaseSubscription(repoId);
-  }, [repoId, toggleStoreReleaseSubscription]);
+    useAppStore.getState().toggleReleaseSubscription(repoId);
+  }, [repoId]);
 
   const unstar = useCallback(async () => {
+    const { githubToken, language, deleteRepository } = useAppStore.getState();
     if (!githubToken) {
       toast(
         language === 'zh'
@@ -393,7 +359,7 @@ export const useRepositoryCardActions = ({
     } finally {
       setIsUnstarring(false);
     }
-  }, [confirm, deleteRepository, githubToken, language, repository, toast]);
+  }, [confirm, repository, toast]);
 
   return useMemo(() => ({
     analyze,

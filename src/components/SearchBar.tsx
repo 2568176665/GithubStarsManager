@@ -120,10 +120,6 @@ export const SearchBar: React.FC = () => {
   const [showFilters, setShowFilters] = useState(false);
   const [searchQuery, setSearchQuery] = useState(searchFilters.query);
   const [isSearching, setIsSearching] = useState(false);
-  const [availableLanguages, setAvailableLanguages] = useState<string[]>([]);
-  const [availableTags, setAvailableTags] = useState<string[]>([]);
-  const [availablePlatforms, setAvailablePlatforms] = useState<string[]>([]);
-  const [availableLicenses, setAvailableLicenses] = useState<string[]>([]);
   const [isRealTimeSearch, setIsRealTimeSearch] = useState(false);
   const [isComposing, setIsComposing] = useState(false);
   
@@ -182,7 +178,6 @@ export const SearchBar: React.FC = () => {
   }, [repositories, releaseSubscriptions, allCategories]);
   const [searchHistory, setSearchHistory] = useState<string[]>([]);
   const [showSearchHistory, setShowSearchHistory] = useState(false);
-  const [searchSuggestions, setSearchSuggestions] = useState<string[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const skipNextTextSearchRef = useRef(false);
@@ -193,7 +188,7 @@ export const SearchBar: React.FC = () => {
   const filterChipInactiveClass = '';
   const filterTagBaseClass = 'linear-filter-chip px-3 py-1.5 text-sm';
 
-  useEffect(() => {
+  const { availableLanguages, availableTags, availablePlatforms, availableLicenses, searchSuggestions } = useMemo(() => {
     // Extract unique languages, tags, and platforms from repositories
     const languages = [...new Set(repositories.map(r => r.language).filter(Boolean))] as string[];
     // 标签包含AI标签、GitHub topics和用户自定义标签
@@ -210,20 +205,21 @@ export const SearchBar: React.FC = () => {
       return a.localeCompare(b);
     });
 
-    setAvailableLanguages(languages);
-    setAvailableTags(tags);
-    setAvailablePlatforms(platforms);
-    setAvailableLicenses(licenses);
-
-    // Generate search suggestions from available data
     const suggestions = [
       ...languages.slice(0, 5),
       ...tags.slice(0, 10),
       ...platforms.slice(0, 5)
     ].filter(Boolean);
-    setSearchSuggestions([...new Set(suggestions)]);
+    return {
+      availableLanguages: languages,
+      availableTags: tags,
+      availablePlatforms: platforms,
+      availableLicenses: licenses,
+      searchSuggestions: [...new Set(suggestions)],
+    };
+  }, [repositories]);
 
-    // Load search history from localStorage
+  useEffect(() => {
     const savedHistory = localStorage.getItem('github-stars-search-history');
     if (savedHistory) {
       try {
@@ -233,7 +229,7 @@ export const SearchBar: React.FC = () => {
         console.warn('Failed to load search history:', error);
       }
     }
-  }, [repositories]);
+  }, []);
 
   useEffect(() => {
     const performSearch = async () => {

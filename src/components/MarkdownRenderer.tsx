@@ -11,7 +11,7 @@ import rehypeSanitize from 'rehype-sanitize';
 import remarkAlert from 'remark-github-blockquote-alert';
 import remarkGemoji from 'remark-gemoji';
 import { Copy, Check, Download } from 'lucide-react';
-import hljs from 'highlight.js';
+import hljs from 'highlight.js/lib/common';
 import MermaidBlock from './MermaidBlock';
 import { githubMarkdownSchema } from '../utils/sanitizeSchema';
 import 'highlight.js/styles/github.min.css';

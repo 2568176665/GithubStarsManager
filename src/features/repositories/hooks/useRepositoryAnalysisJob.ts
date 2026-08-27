@@ -14,6 +14,7 @@ export type RepositoryAnalysisScope = 'all' | 'unanalyzed' | 'failed' | 'selecte
 
 interface UseRepositoryAnalysisJobOptions {
   allCategories: Category[];
+  onAnalysisResult?: (result: AnalysisResult, context: RepositoryAnalysisResultContext) => void;
 }
 
 interface RunRepositoryAnalysisOptions {
@@ -30,6 +31,11 @@ export interface RepositoryAnalysisJob {
   isRunning: boolean;
   isPaused: boolean;
   progress: { current: number; total: number };
+}
+
+export interface RepositoryAnalysisResultContext {
+  analyzedAt: string;
+  resolvedCategory?: string;
 }
 
 const createOptimizer = (concurrency?: number, requestsPerMinute?: number) => new AIAnalysisOptimizer({
@@ -54,6 +60,7 @@ const createOptimizer = (concurrency?: number, requestsPerMinute?: number) => ne
  */
 export const useRepositoryAnalysisJob = ({
   allCategories,
+  onAnalysisResult,
 }: UseRepositoryAnalysisJobOptions): RepositoryAnalysisJob => {
   const {
     githubToken,
@@ -237,22 +244,32 @@ export const useRepositoryAnalysisJob = ({
             allCategories,
           );
           const wasCategoryLocked = !!result.repo.category_locked;
-          updateRepository(applyAnalysisSuccess(result.repo, {
-            summary: result.summary,
-            tags: result.tags,
-            platforms: result.platforms,
-            category: resolvedCategory,
-            categoryLocked: wasCategoryLocked,
-            analyzedAt: new Date().toISOString(),
-          }));
+          const analyzedAt = new Date().toISOString();
+          if (onAnalysisResult) {
+            onAnalysisResult(result, { analyzedAt, resolvedCategory });
+          } else {
+            updateRepository(applyAnalysisSuccess(result.repo, {
+              summary: result.summary,
+              tags: result.tags,
+              platforms: result.platforms,
+              category: resolvedCategory,
+              categoryLocked: wasCategoryLocked,
+              analyzedAt,
+            }));
+          }
           successCount += 1;
           return;
         }
 
-        updateRepository(applyAnalysisFailure(result.repo, {
-          analyzedAt: new Date().toISOString(),
-          error: result.error?.message || undefined,
-        }));
+        const analyzedAt = new Date().toISOString();
+        if (onAnalysisResult) {
+          onAnalysisResult(result, { analyzedAt });
+        } else {
+          updateRepository(applyAnalysisFailure(result.repo, {
+            analyzedAt,
+            error: result.error?.message || undefined,
+          }));
+        }
         failedCount += 1;
       };
 
@@ -314,7 +331,7 @@ export const useRepositoryAnalysisJob = ({
         resetVisibleState();
       }
     }
-  }, [aiConfigs, activeAIConfig, allCategories, confirm, githubToken, language, resetVisibleState, setAnalysisProgress, setLoading, t, toast, updateRepository]);
+  }, [aiConfigs, activeAIConfig, allCategories, confirm, githubToken, language, onAnalysisResult, resetVisibleState, setAnalysisProgress, setLoading, t, toast, updateRepository]);
 
   return useMemo(() => ({
     run,
