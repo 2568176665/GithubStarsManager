@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { TooltipProvider } from './ui/tooltip';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RepositoryCard } from './RepositoryCard';
@@ -6,6 +7,9 @@ import { useAppStore } from '../store/useAppStore';
 import type { Repository } from '../types';
 
 const actionMocks = vi.hoisted(() => ({
+  releaseSheet: {
+    suspend: null as Promise<void> | null,
+  },
   actions: {
     analyze: vi.fn(),
     findSimilar: vi.fn(),
@@ -32,8 +36,14 @@ vi.mock('./FloatingTooltip', () => ({
 }));
 
 vi.mock('./RepositoryEditModal', () => ({
-  RepositoryEditModal: ({ isOpen }: { isOpen: boolean }) => (
-    isOpen ? <div data-testid="repository-edit-modal" /> : null
+  RepositoryEditModal: ({
+    isOpen,
+    onOutsideDismiss,
+  }: {
+    isOpen: boolean;
+    onOutsideDismiss?: () => void;
+  }) => (
+    isOpen ? <div data-testid="repository-edit-modal" onPointerDown={onOutsideDismiss} /> : null
   ),
 }));
 
@@ -41,6 +51,13 @@ vi.mock('./ReadmeModal', () => ({
   ReadmeModal: ({ isOpen }: { isOpen: boolean }) => (
     isOpen ? <div data-testid="readme-modal" /> : null
   ),
+}));
+
+vi.mock('./RepositoryReleaseSheet', () => ({
+  RepositoryReleaseSheet: ({ isOpen }: { isOpen: boolean }) => {
+    if (actionMocks.releaseSheet.suspend) throw actionMocks.releaseSheet.suspend;
+    return isOpen ? <div data-testid="repository-release-sheet" /> : null;
+  },
 }));
 
 const repository: Repository = {
@@ -101,12 +118,18 @@ const storeState = {
 
 const mockUseAppStore = vi.mocked(useAppStore);
 
-const renderRepositoryCard = (viewMode: 'list' | 'grid') => render(
-  <RepositoryCard repository={repository} allCategories={[]} viewMode={viewMode} />
+const renderRepositoryCard = (
+  viewMode: 'list' | 'grid',
+  options: { onAskRepository?: (repository: Repository) => void; selectionMode?: boolean } = {},
+) => render(
+  <TooltipProvider>
+  <RepositoryCard repository={repository} allCategories={[]} viewMode={viewMode} {...options} />
+  </TooltipProvider>
 );
 
 beforeEach(() => {
   vi.clearAllMocks();
+  actionMocks.releaseSheet.suspend = null;
   storeState.releaseSubscriptions = new Set<number>([1]);
   storeState.vectorSearchConfig.enabled = true;
   Object.assign(actionMocks.actions, {
@@ -122,7 +145,7 @@ beforeEach(() => {
 });
 
 describe('RepositoryCard view modes', () => {
-  it('treats allCategories as a stable-reference prop', () => {
+  it('treats equivalent allCategories values as stable props', () => {
     const initialCategories: [] = [];
     const { rerender } = render(
       <RepositoryCard repository={repository} allCategories={initialCategories} viewMode="grid" />
@@ -131,12 +154,12 @@ describe('RepositoryCard view modes', () => {
     expect(actionMocks.actions.analyze).not.toHaveBeenCalled();
     rerender(<RepositoryCard repository={repository} allCategories={[]} viewMode="grid" />);
 
-    expect(mockUseAppStore).toHaveBeenCalledTimes(2);
+    expect(mockUseAppStore).toHaveBeenCalledTimes(1);
   });
 
   it('moves single-card actions into an accessible more-actions menu in list mode', async () => {
     const user = userEvent.setup();
-    renderRepositoryCard('list');
+    renderRepositoryCard('list', { onAskRepository: vi.fn() });
 
     const lastPushed = screen.getByText(/最近提交/);
     expect(lastPushed).toBeInTheDocument();
@@ -151,7 +174,9 @@ describe('RepositoryCard view modes', () => {
 
     expect(screen.getByText('仓库操作')).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: 'AI 分析' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: '问答此仓库' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: '查找同类仓库' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: '查看 Release' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: '取消 Star' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: '在 GitHub 中查看' })).toHaveAttribute('href', repository.html_url);
     await user.keyboard('{Escape}');
@@ -247,13 +272,88 @@ describe('RepositoryCard view modes', () => {
     expect(actionMocks.actions.unstar).toHaveBeenCalledOnce();
   });
 
-  it('retains the existing quick action row in grid mode', () => {
+  it('emits a repository-chat intent from both grid and list controls without invoking a service', async () => {
+    const user = userEvent.setup();
+    const onAskRepository = vi.fn();
+    const { unmount } = renderRepositoryCard('grid', { onAskRepository });
+
+    await user.click(screen.getByRole('button', { name: '问答此仓库' }));
+    expect(onAskRepository).toHaveBeenCalledWith(repository);
+    unmount();
+
+    renderRepositoryCard('list', { onAskRepository });
+    await user.click(screen.getByRole('button', { name: '更多操作' }));
+    await user.click(screen.getByRole('menuitem', { name: '问答此仓库' }));
+    expect(onAskRepository).toHaveBeenCalledTimes(2);
+  });
+
+  it('opens the release sheet from the grid action immediately before the DeepWiki/Zread action', async () => {
+    const user = userEvent.setup();
     renderRepositoryCard('grid');
+
+    const releaseButton = screen.getByRole('button', { name: '查看 Release' });
+    const zreadLink = screen.getByTitle('在Zread中查看');
+    expect(releaseButton.compareDocumentPosition(zreadLink) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    await user.click(releaseButton);
+    expect(screen.getByTestId('repository-release-sheet')).toBeInTheDocument();
+  });
+
+  it('opens the release sheet from the list action menu without opening README', async () => {
+    const user = userEvent.setup();
+    renderRepositoryCard('list');
+
+    await user.click(screen.getByRole('button', { name: '更多操作' }));
+    await user.click(screen.getByRole('menuitem', { name: '查看 Release' }));
+
+    expect(screen.getByTestId('repository-release-sheet')).toBeInTheDocument();
+    expect(screen.queryByTestId('readme-modal')).not.toBeInTheDocument();
+  });
+
+  it('does not open README when an outside click closes the lazy release-sheet fallback', async () => {
+    const user = userEvent.setup();
+    actionMocks.releaseSheet.suspend = new Promise(() => undefined);
+    const { container } = renderRepositoryCard('grid');
+    const card = container.firstElementChild as HTMLElement;
+
+    await user.click(screen.getByRole('button', { name: '查看 Release' }));
+    expect(await screen.findByText('Loading releases...')).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.pointerDown(document.body);
+      fireEvent.click(card);
+    });
+
+    expect(screen.queryByTestId('readme-modal')).not.toBeInTheDocument();
+  });
+
+  it('does not open README when an outside click closes the edit modal', async () => {
+    const user = userEvent.setup();
+    const { container } = renderRepositoryCard('grid');
+    const card = container.firstElementChild as HTMLElement;
+
+    await user.click(screen.getByTitle('编辑仓库信息'));
+    const editModal = screen.getByTestId('repository-edit-modal');
+
+    await act(async () => {
+      fireEvent.pointerDown(editModal);
+      fireEvent.click(card);
+    });
+
+    expect(screen.queryByTestId('readme-modal')).not.toBeInTheDocument();
+  });
+
+  it('retains the existing quick action row in grid mode', () => {
+    renderRepositoryCard('grid', { onAskRepository: vi.fn() });
 
     expect(screen.queryByRole('button', { name: '更多操作' })).not.toBeInTheDocument();
     expect(screen.getByTitle('AI分析此仓库')).toBeInTheDocument();
+    expect(screen.getByTitle('问答此仓库')).toBeInTheDocument();
     expect(screen.getByTitle('取消订阅发布')).toBeInTheDocument();
     expect(screen.getByTitle('编辑仓库信息')).toBeInTheDocument();
+
+    const actionRow = screen.getByTestId('grid-action-row');
+    expect(actionRow).toHaveClass('w-full', 'justify-start', 'overflow-hidden');
 
     const footer = screen.getByText(/最近提交/).closest('.border-t');
     expect(footer?.parentElement).toHaveClass('mt-4');
@@ -265,5 +365,30 @@ describe('RepositoryCard view modes', () => {
     fireEvent.mouseEnter(screen.getByText('Repository description'));
 
     expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+  });
+
+  it('collapses trailing grid actions into a more-actions menu when the card is narrow', async () => {
+    const user = userEvent.setup();
+    renderRepositoryCard('grid', { onAskRepository: vi.fn() });
+    const actionRow = screen.getByTestId('grid-action-row');
+    Object.defineProperty(actionRow, 'clientWidth', { configurable: true, value: 190 });
+
+    await act(async () => {
+      window.dispatchEvent(new Event('resize'));
+    });
+
+    expect(screen.queryByTitle('在Zread中查看')).not.toBeInTheDocument();
+    const moreActions = screen.getByRole('button', { name: '更多仓库操作' });
+    await user.click(moreActions);
+
+    expect(screen.getByRole('menuitem', { name: '在 Zread 中查看' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: '在 GitHub 中查看' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: '取消 Star' })).toBeInTheDocument();
+
+    Object.defineProperty(actionRow, 'clientWidth', { configurable: true, value: 76 });
+    await act(async () => {
+      window.dispatchEvent(new Event('resize'));
+    });
+    expect(screen.getByRole('menuitem', { name: '问答此仓库' })).toBeInTheDocument();
   });
 });

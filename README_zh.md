@@ -30,12 +30,15 @@
 | **语义搜索** | 按意图而非精确名称查找仓库 |
 | **向量语义搜索** | 将仓库描述/README 嵌入 Cloudflare Vectorize 向量库，自然语言查询实现高精度语义匹配 |
 | **MCP 服务** | 可选 Streamable HTTP / SSE，供 Claude Code、Cursor 等 Agent 检索 AI 加工后的星标；需后端或 Electron/客户端（纯前端模式不显示）；设置中开关，无需额外安装 |
+| **仓库问答助手（早期阶段）** | 在单个仓库内进行简单、聚焦的问答，提供提交固定的只读证据、可追溯来源与本地会话历史。它不会索引仓库的全部文件，复杂代码分析建议使用成熟的本地 Coding Agent。 |
+| **仓库页 Release 下载** | 从仓库卡片直接打开该仓库的最新 Release；浏览分页资产、更新日志、源码压缩包和可选 AI 摘要，并通过浏览器或已配置的 RPC 下载器下载。 |
 | **Release 追踪** | 订阅仓库并在统一时间线查看新版本 |
 | **一键下载** | 展开 Release 资产并即时下载 |
 | **智能资产过滤** | 按关键词匹配资产 (dmg / mac / arm64 / aarch64) |
 | **发现中心** | 浏览 GitHub 趋势、热门发布、最受欢迎项目 |
 | **Fork 管理** | 查看、同步 Fork 仓库并触发 GitHub Actions 工作流 |
 | **Gist 管理** | 浏览、创建、编辑、删除 Gist；AI 摘要与语义搜索 |
+| **12 套主题预设** | 在设置中一键切换 12 套内置主题，每套均有协调的亮色与暗色配色，并提供实时预览。 |
 | **网络代理** | HTTP / SOCKS5 代理支持，协议级连接探测测试 |
 | **远程下载 (aria2)** | 通过 aria2 JSON-RPC 将 Release 资产推送到远程下载 |
 | **诊断日志** | 前后端统一日志查看器，支持 Debug 捕获模式 |
@@ -72,7 +75,24 @@
 
 ---
 
-### 2. Release 时间线 (`Releases` 视图)
+### 2. 仓库问答助手（早期阶段）
+
+直接从仓库卡片对单个仓库提出简洁的问题。每个会话都绑定到启动会话时选定的特定提交，并展示生成答案所依据的证据。
+
+**功能列表：**
+- **提交固定的只读证据** — 会话中的来源始终绑定到创建会话时的仓库版本。
+- **可追溯回答** — 可在每条回答旁查看来源链接与助手的检索过程。
+- **本地会话历史** — 按仓库独立查看、搜索与管理历史对话。
+- **可配置检索预算** — 在 AI 设置中控制轮次、工具调用、文档/代码读取与响应时长的上限。
+
+> **早期阶段说明：** 此功能面向简单的仓库问答，可能会出现检索失败、证据不完整或无法回答的情况。它不会索引被提问仓库的全部文件；如需进行复杂的全仓库代码分析、多文件推理、调试或代码修改，请将仓库克隆到本地并使用成熟的 Coding Agent。
+
+**截图：**
+![Repository Q&A Assistant](upload/copilot.png)
+
+---
+
+### 3. Release 时间线 (`Releases` 视图)
 
 **功能列表：**
 - **订阅管理** — 订阅/取消订阅仓库的 Release 通知；支持批量取消订阅
@@ -89,7 +109,7 @@
 
 ---
 
-### 3. 发现中心 (`Discover` 视图)
+### 4. 发现中心 (`Discover` 视图)
 
 **功能列表：**
 - **五大发现渠道** — 趋势(Trending) / 热门发布(Hot Release) / 最受欢迎(Most Popular) / 话题(Topic) / 搜索(Search)
@@ -108,7 +128,7 @@
 
 ---
 
-### 4. Fork 管理 (`Forks` 视图)
+### 5. Fork 管理 (`Forks` 视图)
 
 **功能列表：**
 - **Fork 列表** — 自动获取所有 Fork 仓库，检测上游更新
@@ -122,7 +142,7 @@
 
 ---
 
-### 5. Gist 管理 (`Gist` 视图)
+### 6. Gist 管理 (`Gist` 视图)
 
 **功能列表：**
 - **Gist 列表** — 自动同步所有 Gist 和星标 Gist，支持分类筛选（全部 / 我的 / 星标）
@@ -138,7 +158,7 @@
 
 ---
 
-### 6. 搜索与过滤
+### 7. 搜索与过滤
 
 **功能列表：**
 - **多维度搜索** — 关键词搜索、仓库状态筛选、标签筛选、语言筛选、平台筛选
@@ -154,13 +174,13 @@
 
 ---
 
-### 7. 设置面板
+### 8. 设置面板
 
 **设置分组：**
 
 | 分组 | 功能 |
 |------|------|
-| **General** | 语言切换 (中/英)、主题设置 |
+| **General** | 语言切换（中/英）、亮色/暗色模式，以及 12 套内置主题的实时预览与切换 |
 | **AI Config** | 配置 OpenAI / Anthropic / Ollama / 兼容 API；支持自定义端点和密钥 |
 | **WebDAV** | 坚果云、Nextcloud、ownCloud 等标准 WebDAV 服务备份配置 |
 | **Backup** | 备份历史记录、手动备份/恢复、增量备份 |
@@ -174,9 +194,11 @@
 **截图：**
 ![Settings Panel Interface](upload/settings.png)
 
+**外观：** 在 **设置 → General → Appearance** 中任选 12 套内置主题预设。每套主题均提供匹配的亮色和暗色配色，并会立即应用到整个应用。
+
 ---
 
-### 8. 自定义 AI 模型
+### 9. 自定义 AI 模型
 
 **功能列表：**
 - **多 AI 提供商支持** — OpenAI (GPT-3.5/GPT-4)、Anthropic (Claude)、Ollama (本地模型)、任何兼容 OpenAI 接口的 API
@@ -368,7 +390,7 @@ npm run build
 
 ### Docker 部署
 
-GHCR 上提供预构建的**后端和前端**镜像，无需本地构建：
+GHCR 上提供预构建的**后端和前端**镜像，无需本地构建。现有 Docker 用户可继续使用完全不变的前后端分离 Compose 部署：
 
 ```bash
 docker pull ghcr.io/amintacccp/github-stars-manager-server:latest
@@ -376,9 +398,16 @@ docker pull ghcr.io/amintacccp/github-stars-manager-frontend:latest
 docker-compose up -d
 ```
 
-> 如果镜像为私有，需先执行 `docker login ghcr.io`（使用具有 `read:packages` 权限的 [PAT](https://github.com/settings/tokens)）。
+此外，项目新增了一个**可选的全栈单镜像**（`ghcr.io/amintacccp/github-stars-manager-fullstack`），适合希望只运行一个容器、一个镜像标签和一个数据卷的用户。它在同一来源下提供网页、`/api` 和 MCP 端点。先在仓库根目录的 `.env` 设置 `API_SECRET`，全栈 Compose 会拒绝在无认证配置下启动：
 
-请参阅 [DOCKER.md](DOCKER.md) 获取详细的构建和部署说明。Docker 设置正确处理了 CORS，并允许您直接在应用程序中配置任何 AI 或 WebDAV 服务 URL。
+```bash
+API_SECRET=替换为足够长的随机密钥
+docker compose -f docker-compose.fullstack.yml up -d
+```
+
+新增方式不会替换或修改现有的前端镜像、后端镜像、`docker-compose.yml`、桌面客户端或 API 路径。规范名称以角色结尾：`-frontend`、`-backend` 与 `-fullstack`；已有用户使用的 `-server` 后端镜像会继续作为兼容别名发布。正式的 `vX.Y.Z` Docker 标签必须与根目录 `package.json` 的客户端版本一致，`latest` 与 `sha-*` 则分别用于开发和提交追溯。完整的中文部署、数据备份、从分离部署迁移和回滚说明请参阅 [DOCKER_zh.md](DOCKER_zh.md)。英文说明请参阅 [DOCKER.md](DOCKER.md)。
+
+> 如果镜像为私有，需先执行 `docker login ghcr.io`（使用具有 `read:packages` 权限的 [PAT](https://github.com/settings/tokens)）。
 
 ### 🖥️ 后端服务器（可选）
 
@@ -392,14 +421,14 @@ docker-compose up -d
 ```bash
 docker-compose up -d
 ```
-前端运行在 8080 端口，后端运行在 3000 端口。数据持久化存储在 Docker 卷中。
+前端运行在 8080 端口，后端运行在 3000 端口。数据持久化存储在 Docker 卷中。该现有分离部署方式不会因全栈镜像而变化；需要独立升级、运维或扩缩容前后端时，仍建议继续使用它。若希望简化为单容器部署，请参阅 [DOCKER_zh.md](DOCKER_zh.md)。
 
 自定义配置，创建 `.env` 文件：
 ```bash
 API_SECRET=your-secret
 ENCRYPTION_KEY=your-key
-BACKEND_IMAGE_TAG=0.6.2   # 固定后端版本（默认：latest）
-FRONTEND_IMAGE_TAG=0.6.2  # 固定前端版本（默认：latest）
+BACKEND_IMAGE_TAG=0.7.8   # 固定后端版本（默认：latest）
+FRONTEND_IMAGE_TAG=0.7.8  # 固定前端版本（默认：latest）
 ```
 
 #### 仅后端（docker run）

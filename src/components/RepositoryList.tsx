@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { useShallow } from 'zustand/react/shallow';
 import { Bot, ChevronDown, LayoutGrid, List, Pause, Play } from 'lucide-react';
 import { RepositoryCard } from './RepositoryCard';
@@ -7,16 +8,22 @@ import { BulkActionToolbar } from './BulkActionToolbar';
 import { BulkCategorizeModal } from './BulkCategorizeModal';
 import { BulkRestoreModal, RestoreConfig } from './BulkRestoreModal';
 import { VirtualizedRepositoryRows } from './VirtualizedRepositoryRows';
+import { ErrorBoundary } from './ErrorBoundary';
 
 import { Repository } from '../types';
 import { useAppStore, getAllCategories } from '../store/useAppStore';
 import { matchesCategory } from '../utils/categoryUtils';
+import { sortRepositories } from '../utils/repoSearch';
 import { useRepositoryAnalysisJob } from '../features/repositories/hooks/useRepositoryAnalysisJob';
 import { useBulkRepositoryActions } from '../features/repositories/hooks/useBulkRepositoryActions';
 import { useDialog } from '../hooks/useDialog';
 import { Button } from './ui/button';
 import { RadioGroup, RadioGroupItem } from './ui/radio-group';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from './ui/dropdown-menu';
+
+const LazyRepositoryChatSheet = React.lazy(() =>
+  import('./RepositoryChatSheet').then((module) => ({ default: module.default }))
+);
 
 interface RepositoryListProps {
   repositories: Repository[];
@@ -67,6 +74,8 @@ export const RepositoryList: React.FC<RepositoryListProps> = ({
   const [showCategorizeModal, setShowCategorizeModal] = useState(false);
   const [showRestoreModal, setShowRestoreModal] = useState(false);
   const [isExitingSelection, setIsExitingSelection] = useState(false);
+  const [activeChatRepository, setActiveChatRepository] = useState<Repository | null>(null);
+  const activeChatTriggerRef = useRef<HTMLElement | null>(null);
 
   const allCategories = useMemo(
     () => getAllCategories(customCategories, language, hiddenDefaultCategoryIds, defaultCategoryOverrides),
@@ -77,13 +86,32 @@ export const RepositoryList: React.FC<RepositoryListProps> = ({
   const isLoading = analysisJob.isRunning;
   const { isPaused, progress: analysisProgress } = analysisJob;
 
+  useEffect(() => {
+    try {
+      const pending = JSON.parse(sessionStorage.getItem('gsm:repository-chat-return') || 'null') as { repoId?: unknown } | null;
+      if (typeof pending?.repoId !== 'number') return;
+      const targetRepository = repositories.find((repository) => repository.id === pending.repoId);
+      if (targetRepository) setActiveChatRepository(targetRepository);
+    } catch {
+      sessionStorage.removeItem('gsm:repository-chat-return');
+    }
+  }, [repositories]);
+
   const filteredRepositories = useMemo(() => {
-    if (selectedCategory === 'all') return repositories;
-    
-    const selectedCategoryObj = allCategories.find(cat => cat.id === selectedCategory);
-    if (!selectedCategoryObj) return [];
-    return repositories.filter(repo => matchesCategory(repo, selectedCategoryObj, categoryMatchMode));
-  }, [repositories, selectedCategory, allCategories, categoryMatchMode]);
+    const categoryRepositories = selectedCategory === 'all'
+      ? repositories
+      : (() => {
+        const selectedCategoryObj = allCategories.find(cat => cat.id === selectedCategory);
+        return selectedCategoryObj
+          ? repositories.filter(repo => matchesCategory(repo, selectedCategoryObj, categoryMatchMode))
+          : [];
+      })();
+    // Similar results arrive pre-ranked by the vector worker's cosine score.
+    // Do not let the normal list preference (stars/updated/name) overwrite that
+    // relevance ordering after the card action has entered similar-view mode.
+    if (similarView?.active) return categoryRepositories;
+    return sortRepositories(categoryRepositories, searchFilters.sortBy, searchFilters.sortOrder);
+  }, [repositories, selectedCategory, allCategories, categoryMatchMode, searchFilters.sortBy, searchFilters.sortOrder, similarView?.active]);
 
   // 根据当前筛选的仓库中是否有AI分析内容来动态设置默认显示模式
   const hasAnalyzedRepos = useMemo(() => 
@@ -309,6 +337,12 @@ export const RepositoryList: React.FC<RepositoryListProps> = ({
     }
   }, [showBulkToolbar, handleDeselectAll]);
 
+  const handleAskRepository = useCallback((repository: Repository) => {
+    const trigger = document.activeElement;
+    activeChatTriggerRef.current = trigger instanceof HTMLElement ? trigger : null;
+    setActiveChatRepository(repository);
+  }, []);
+
   const handleBulkAction = async (action: string, selectedRepositories: Repository[]) => {
     try {
       let completed = false;
@@ -388,6 +422,7 @@ export const RepositoryList: React.FC<RepositoryListProps> = ({
       isExitingSelection={isExitingSelection}
       allCategories={allCategories}
       viewMode={repositoryViewMode}
+      onAskRepository={handleAskRepository}
     />
   ), [
     allCategories,
@@ -398,15 +433,31 @@ export const RepositoryList: React.FC<RepositoryListProps> = ({
     selectedRepoIds,
     showAISummary,
     showBulkToolbar,
+    handleAskRepository,
   ]);
+
+  const chatPortal = activeChatRepository && createPortal(
+    <ErrorBoundary>
+      <React.Suspense fallback={<div className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 text-sm text-muted-foreground" role="status">{t('正在打开仓库问答…', 'Opening repository chat…')}</div>}>
+        <LazyRepositoryChatSheet
+          isOpen
+          repository={activeChatRepository}
+          onClose={() => setActiveChatRepository(null)}
+          onCloseAutoFocus={() => activeChatTriggerRef.current?.focus()}
+        />
+      </React.Suspense>
+    </ErrorBoundary>,
+    document.body,
+  );
 
   if (filteredRepositories.length === 0) {
     const selectedCategoryObj = allCategories.find(cat => cat.id === selectedCategory);
     const categoryName = selectedCategoryObj?.name || selectedCategory;
     
     return (
-      <div className="text-center py-12">
-        <p className="text-muted-foreground dark:text-muted-foreground mb-4">
+      <>
+        <div className="text-center py-12">
+          <p className="text-muted-foreground dark:text-muted-foreground mb-4">
           {searchFilters.query ? (
             language === 'zh' 
               ? `未找到与"${searchFilters.query}"相关的仓库。`
@@ -430,8 +481,10 @@ export const RepositoryList: React.FC<RepositoryListProps> = ({
               <li>• {language === 'zh' ? '检查拼写或尝试英文/中文关键词' : 'Check spelling or try English/Chinese keywords'}</li>
             </ul>
           </div>
-        )}
-      </div>
+          )}
+        </div>
+        {chatPortal}
+      </>
     );
   }
 
@@ -648,6 +701,8 @@ export const RepositoryList: React.FC<RepositoryListProps> = ({
         repositories={selectedRepositories}
         onRestore={handleBulkRestore}
       />
+
+      {chatPortal}
     </div>
   );
 };

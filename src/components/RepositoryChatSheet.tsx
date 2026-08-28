@@ -1,0 +1,414 @@
+import React, { useEffect, useRef, useState } from 'react';
+import { AlertCircle, CheckCircle2, ChevronRight, CircleDot, Copy, ExternalLink, History, Loader2, MessageSquareText, Plus, RotateCcw, Send, Square } from 'lucide-react';
+import type { Repository } from '../types';
+import type { RepositoryChatToolEvent } from '../types/repositoryChat';
+import { useAppStore } from '../store/useAppStore';
+import { useDialog } from '../hooks/useDialog';
+import { safeWriteText } from '../utils/clipboardUtils';
+import { useShallow } from 'zustand/react/shallow';
+import { useRepositoryChatSessions } from '../features/repository-chat/hooks/useRepositoryChatSessions';
+import { useRepositoryChat } from '../features/repository-chat/hooks/useRepositoryChat';
+import { RepositoryChatHistoryPanel } from './RepositoryChatHistoryPanel';
+import MarkdownRenderer from './MarkdownRenderer';
+import { Button } from './ui/button';
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from './ui/sheet';
+import { Textarea } from './ui/textarea';
+
+interface RepositoryChatSheetProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onCloseAutoFocus?: () => void;
+  repository: Repository;
+}
+
+const shortSha = (sha: string) => sha.slice(0, 7);
+
+const formatToolDuration = (durationMs?: number): string | null => {
+  if (!durationMs || durationMs < 1) return null;
+  return durationMs >= 1000 ? `${(durationMs / 1000).toFixed(durationMs >= 10_000 ? 0 : 1)}s` : `${durationMs}ms`;
+};
+
+const stageLabels = (stage: RepositoryChatToolEvent['stage'], language: 'zh' | 'en'): string => {
+  const zh = language === 'zh';
+  if (stage === 'understanding') return zh ? '理解问题' : 'Understand question';
+  if (stage === 'context') return zh ? '查看项目结构' : 'Inspect repository structure';
+  if (stage === 'planning') return zh ? '制定阅读计划' : 'Plan what to read';
+  if (stage === 'retrieval') return zh ? '阅读相关资料' : 'Read relevant sources';
+  if (stage === 'verification') return zh ? '评估问题是否已可回答' : 'Assess whether the question is answerable';
+  if (stage === 'replanning') return zh ? '补充阅读计划' : 'Plan additional reading';
+  if (stage === 'escalation') return zh ? '补充实现细节' : 'Inspect implementation details';
+  if (stage === 'answer') return zh ? '整理最终回答' : 'Prepare final answer';
+  return zh ? '工具调用' : 'Tool call';
+};
+
+const ExecutionTimeline: React.FC<{ events: RepositoryChatToolEvent[]; language: 'zh' | 'en'; isRunning: boolean }> = ({ events, language, isRunning }) => {
+  const t = (zh: string, en: string) => language === 'zh' ? zh : en;
+  const completed = events.filter((event) => event.status === 'success').length;
+  const failed = events.filter((event) => event.status === 'error').length;
+  const latest = events[events.length - 1];
+  const grouped = events.reduce<Array<{ stage: RepositoryChatToolEvent['stage']; round?: number; events: RepositoryChatToolEvent[] }>>((groups, event) => {
+    const previous = groups[groups.length - 1];
+    if (previous && previous.stage === event.stage && previous.round === event.round) {
+      previous.events.push(event);
+    } else {
+      groups.push({ stage: event.stage, round: event.round, events: [event] });
+    }
+    return groups;
+  }, []);
+
+  return (
+    <section className="mt-4 rounded-lg border border-border bg-muted/15 p-3 text-xs" aria-label={t('Agent 执行摘要', 'Agent execution summary')}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h4 className="font-semibold text-foreground">{t('本轮任务执行', 'This turn’s work')}</h4>
+          <p className="mt-0.5 text-muted-foreground">{t('这里会展示为回答问题实际查阅的文档、章节和补充资料。只有用户问题仍缺少必要来源时，助手才会继续阅读；展开单项可查看读取原因、已确认内容和仍需确认的信息。', 'This shows the documents, sections, and supplementary sources actually read to answer your question. The assistant continues only when a necessary part of your question still lacks evidence. Expand an item to see why it was read, what is confirmed, and what still needs confirmation.')}</p>
+        </div>
+        <span className={`shrink-0 text-[11px] ${failed > 0 ? 'text-destructive' : 'text-muted-foreground'}`}>{latest ? `${stageLabels(latest.stage, language)} · ${completed}/${events.length}` : `${events.length}`}{failed > 0 ? ` · ${t(`${failed} 项需注意`, `${failed} attention`)}` : ''}</span>
+      </div>
+      <div className="mt-3 divide-y divide-border/70">
+        {grouped.map((group, groupIndex) => {
+          const stageHasRunning = group.events.some((event) => event.status === 'running');
+          const stageErrors = group.events.filter((event) => event.status === 'error').length;
+          const duration = group.events.reduce((total, event) => total + (event.durationMs ?? 0), 0);
+          const Icon = stageErrors > 0 ? AlertCircle : stageHasRunning ? CircleDot : CheckCircle2;
+          const label = group.round && ['planning', 'retrieval', 'verification', 'replanning'].includes(group.stage ?? '')
+            ? `${t('第', 'Round ')}${group.round}${t('轮 · ', ' · ')}${stageLabels(group.stage, language)}`
+            : stageLabels(group.stage, language);
+          return (
+            <details key={`${group.stage ?? 'other'}-${group.round ?? 'global'}-${groupIndex}`} className="group py-2" open={isRunning && stageHasRunning}>
+              <summary className="flex cursor-pointer list-none items-center gap-2">
+                <Icon className={`h-4 w-4 shrink-0 ${stageErrors > 0 ? 'text-destructive' : stageHasRunning ? 'animate-pulse text-primary' : 'text-emerald-500'}`} aria-hidden="true" />
+                <span className="min-w-0 flex-1 font-medium text-foreground">{label}</span>
+                <span className={`text-[11px] ${stageErrors > 0 ? 'text-destructive' : 'text-muted-foreground'}`}>{stageErrors > 0 ? t('需注意', 'Needs attention') : stageHasRunning ? t('进行中', 'In progress') : t('已完成', 'Completed')}{duration > 0 ? ` · ${formatToolDuration(duration)}` : ''}</span>
+                <ChevronRight className="h-3.5 w-3.5 text-muted-foreground transition-transform group-open:rotate-90" aria-hidden="true" />
+              </summary>
+              <ol className="mt-2 ml-2 space-y-2 border-l border-border pl-3">
+                {group.events.map((event) => {
+                  const statusLabel = event.status === 'success' ? t('完成', 'Done') : event.status === 'running' ? t('进行中', 'Running') : event.status === 'error' ? t('失败', 'Failed') : t('准备中', 'Queued');
+                  const eventDuration = formatToolDuration(event.durationMs);
+                  return (
+                    <li key={event.id} className="grid gap-1">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <span className="font-medium text-foreground">{event.paramSummary}</span>
+                        <span className={`ml-auto text-[11px] ${event.status === 'error' ? 'text-destructive' : 'text-muted-foreground'}`}>{statusLabel}{eventDuration ? ` · ${eventDuration}` : ''}</span>
+                      </div>
+                      {event.detail && <p className="break-words text-muted-foreground">{event.detail}</p>}
+                    </li>
+                  );
+                })}
+              </ol>
+            </details>
+          );
+        })}
+      </div>
+    </section>
+  );
+};
+
+const RepositoryChatSheet: React.FC<RepositoryChatSheetProps> = ({
+  isOpen,
+  onClose,
+  onCloseAutoFocus,
+  repository,
+}) => {
+  const { language, setCurrentView } = useAppStore(useShallow((state) => ({
+    language: state.language,
+    setCurrentView: state.setCurrentView,
+  })));
+  const [showHistory, setShowHistory] = useState(false);
+  const [draft, setDraft] = useState('');
+  const { toast } = useDialog();
+  const messageRegionRef = useRef<HTMLDivElement>(null);
+  const t = (zh: string, en: string) => language === 'zh' ? zh : en;
+  const {
+    sessions,
+    activeSession,
+    messages,
+    isLoading,
+    error,
+    createSession,
+    selectSession,
+    deleteSession,
+    updateSession,
+    setMessages,
+  } = useRepositoryChatSessions({ repository, language });
+  const {
+    canChat,
+    unavailableReason,
+    isSending,
+    error: chatError,
+    toolEvents,
+    evidenceById,
+    send,
+    stop,
+    retry,
+  } = useRepositoryChat({
+    repository,
+    session: activeSession,
+    messages,
+    onMessagesChange: setMessages,
+    onSessionChange: updateSession,
+  });
+
+  useEffect(() => {
+    if (!isOpen) {
+      setShowHistory(false);
+      return;
+    }
+    if (repository) {
+      try {
+        const pending = JSON.parse(sessionStorage.getItem('gsm:repository-chat-return') || 'null') as { repoId?: unknown; draft?: unknown } | null;
+        if (pending?.repoId === repository.id && typeof pending.draft === 'string') {
+          setDraft(pending.draft);
+          sessionStorage.removeItem('gsm:repository-chat-return');
+        }
+      } catch {
+        sessionStorage.removeItem('gsm:repository-chat-return');
+      }
+    }
+    messageRegionRef.current?.scrollTo({ top: messageRegionRef.current.scrollHeight });
+  }, [isOpen, messages.length, repository]);
+
+  const handleCreateSession = () => {
+    if (isLoading || isSending) return;
+    void createSession();
+    setShowHistory(false);
+  };
+
+  const navigateToAiSettings = () => {
+    if (repository) {
+      sessionStorage.setItem('gsm:repository-chat-return', JSON.stringify({ repoId: repository.id, draft }));
+    }
+    sessionStorage.setItem('gsm:pending-settings-tab', 'ai');
+    setCurrentView('settings');
+    window.dispatchEvent(new CustomEvent('gsm:navigate-to-settings-tab', { detail: { tab: 'ai' } }));
+  };
+
+  const handleSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    const question = draft.trim();
+    if (!question || !canChat || !activeSession || isSending) return;
+    setDraft('');
+    void send(question);
+  };
+
+  const handleCopyAnswer = async (content: string) => {
+    const result = await safeWriteText(content);
+    toast(
+      result.success ? t('回答已复制', 'Answer copied') : (result.error || t('复制失败', 'Copy failed')),
+      result.success ? 'success' : 'error'
+    );
+  };
+
+  return (
+    <Sheet open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      <SheetContent
+        side="right"
+        className="w-[min(100vw-1rem,48rem)] sm:max-w-none"
+        closeLabel={t('关闭仓库问答', 'Close repository chat')}
+        onPointerDownOutside={(event) => {
+          event.preventDefault();
+          window.setTimeout(onClose, 0);
+        }}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          onCloseAutoFocus?.();
+        }}
+      >
+        <SheetHeader>
+          <div className="flex min-w-0 items-start gap-3">
+            <img src={repository.owner.avatar_url} alt="" className="h-9 w-9 shrink-0 rounded-md border border-border" />
+            <div className="min-w-0 flex-1">
+              <SheetTitle className="flex items-center gap-2 text-base">
+                <MessageSquareText className="h-4 w-4 shrink-0" aria-hidden="true" />
+                <span className="truncate">{repository.full_name}</span>
+              </SheetTitle>
+              <SheetDescription className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+                {repository.language && <span>{repository.language}</span>}
+                {activeSession?.sourceRefSha ? (
+                  <span>{t(`基于 ${shortSha(activeSession.sourceRefSha)}`, `Based on ${shortSha(activeSession.sourceRefSha)}`)}</span>
+                ) : (
+                  <span>{t('新会话将固定源码版本', 'A new session will pin its source version')}</span>
+                )}
+              </SheetDescription>
+            </div>
+          </div>
+        </SheetHeader>
+
+        <div className="flex items-center gap-2 border-b border-border pb-3">
+          <Button type="button" variant="secondary" size="sm" onClick={handleCreateSession} disabled={isLoading || isSending}>
+            {isLoading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <Plus className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />}
+            {t('新建会话', 'New chat')}
+          </Button>
+          <Button
+            type="button"
+            variant={showHistory ? 'secondary' : 'ghost'}
+            size="sm"
+            className="ml-auto"
+            onClick={() => setShowHistory((previous) => !previous)}
+            aria-pressed={showHistory}
+          >
+            <History className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />
+            {t('历史', 'History')}
+          </Button>
+        </div>
+
+        <div className="min-h-0 flex flex-1 gap-4 overflow-hidden">
+          {showHistory ? (
+            <div className="min-h-0 w-full max-w-sm border-r border-border pr-3">
+              <RepositoryChatHistoryPanel
+                sessions={sessions}
+                activeSessionId={activeSession?.id}
+                language={language}
+                disabled={isLoading || isSending}
+                onSelect={(sessionId) => {
+                  void selectSession(sessionId);
+                  setShowHistory(false);
+                }}
+                onDelete={(sessionId) => void deleteSession(sessionId)}
+              />
+            </div>
+          ) : (
+            <div ref={messageRegionRef} className="min-h-0 flex-1 overflow-y-auto pr-1" aria-live="polite">
+              {error ? (
+                <div className="flex min-h-40 flex-col items-center justify-center gap-2 rounded-md border border-destructive/40 bg-muted/20 px-5 text-center">
+                  <p className="text-sm text-destructive">{error}</p>
+                </div>
+              ) : isLoading ? (
+                <div className="flex min-h-40 items-center justify-center gap-2 text-sm text-muted-foreground" role="status">
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                  {t('正在恢复会话…', 'Restoring conversation…')}
+                </div>
+              ) : !canChat ? (
+                <div className="flex min-h-56 flex-col items-center justify-center gap-4 rounded-md border border-dashed border-border px-6 text-center">
+                  <MessageSquareText className="h-8 w-8 text-muted-foreground" aria-hidden="true" />
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium">{t('仓库问答尚未就绪', 'Repository chat is not ready')}</p>
+                    <p className="text-xs text-muted-foreground">{unavailableReason}</p>
+                  </div>
+                  <Button type="button" onClick={navigateToAiSettings}>{t('配置 AI 服务', 'Configure AI service')}</Button>
+                </div>
+              ) : !activeSession ? (
+                <div className="flex min-h-56 flex-col items-center justify-center gap-4 rounded-md border border-dashed border-border px-6 text-center">
+                  <MessageSquareText className="h-8 w-8 text-muted-foreground" aria-hidden="true" />
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium">{t('开始询问这个仓库', 'Ask this repository')}</p>
+                    <p className="text-xs text-muted-foreground">{t('新会话会固定当前源码版本，并在回答中保留可点击的来源。', 'A new conversation pins the current source version and keeps clickable sources in answers.')}</p>
+                  </div>
+                  <Button type="button" onClick={handleCreateSession} disabled={isLoading || isSending}>
+                    <Plus className="mr-1.5 h-4 w-4" aria-hidden="true" />
+                    {t('新建会话', 'New conversation')}
+                  </Button>
+                </div>
+              ) : messages.length === 0 ? (
+                <div className="space-y-3 rounded-md border border-border bg-muted/20 p-4">
+                  <p className="text-sm font-medium">{t('你可以从这些问题开始：', 'You can start with:')}</p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {[
+                      t('这个仓库是做什么的？', 'What does this repository do?'),
+                      t('如何安装并开始使用这个项目？', 'How do I install and get started with this project?'),
+                    ].map((prompt) => (
+                      <Button key={prompt} type="button" variant="outline" className="h-auto justify-start whitespace-normal p-3 text-left text-xs" onClick={() => setDraft(prompt)}>
+                        {prompt}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {chatError && (
+                    <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/40 bg-muted/20 px-3 py-2 text-sm text-destructive">
+                      <span>{chatError}</span>
+                      <Button type="button" variant="secondary" size="sm" onClick={() => void retry()}>{t('重试', 'Retry')}</Button>
+                    </div>
+                  )}
+                  {messages.map((message) => {
+                    const messageToolEvents = toolEvents.filter((event) => event.messageId === message.id);
+                    return (
+                    <article key={message.id} className={`rounded-md border border-border p-3 text-sm ${message.role === 'user' ? 'bg-muted/30' : 'bg-card'}`}>
+                      <div className="mb-1 flex items-center justify-between gap-2">
+                        <p className="text-xs font-medium text-muted-foreground">{message.role === 'user' ? t('你', 'You') : t('仓库助手', 'Repository copilot')}</p>
+                        {message.role === 'assistant' && message.content && message.status === 'complete' && !/未能生成可与精确来源核验的总结性结果|无法完成可验证的判断|did not produce a source-verifiable summary|a verifiable determination cannot be made/i.test(message.content) && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2 text-xs"
+                            onClick={() => void handleCopyAnswer(message.content)}
+                            aria-label={t('复制回答', 'Copy answer')}
+                            title={t('复制回答', 'Copy answer')}
+                          >
+                            <Copy className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+                            {t('复制', 'Copy')}
+                          </Button>
+                        )}
+                      </div>
+                      {message.role === 'assistant' && messageToolEvents.length > 0 && (
+                        <ExecutionTimeline events={messageToolEvents} language={language} isRunning={message.status === 'streaming'} />
+                      )}
+                      <div className={message.role === 'assistant' && messageToolEvents.length > 0 ? 'mt-4' : ''}>
+                        {message.content ? <MarkdownRenderer content={message.content} shouldRender breaks fontSize="small" /> : <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" aria-label={t('正在生成', 'Generating')} />}
+                      </div>
+                      {message.evidenceIds.length > 0 && (
+                        <details className="mt-3 rounded-md border border-border bg-muted/20 px-3 py-2 text-xs">
+                          <summary className="cursor-pointer font-medium text-foreground">{t(`来源与证据 (${message.evidenceIds.length})`, `Sources and evidence (${message.evidenceIds.length})`)}</summary>
+                          <p className="mt-1 text-muted-foreground">{t('展开后可查看本轮已读取文件的固定版本、行号与原始证据窗口。', 'Expand to inspect this turn’s pinned versions, line ranges, and retrieved evidence windows.')}</p>
+                          <div className="mt-2 grid gap-2">
+                            {message.evidenceIds.map((evidenceId) => {
+                              const evidence = evidenceById[evidenceId];
+                              if (!evidence) return null;
+                              return (
+                                <a key={evidence.id} href={evidence.url} target="_blank" rel="noopener noreferrer" className="flex min-w-0 items-center gap-2 rounded-md border border-border bg-background/60 px-2.5 py-2 text-xs hover:bg-muted" aria-label={t(`查看来源：${evidence.path ?? evidence.repoFullName}`, `View source: ${evidence.path ?? evidence.repoFullName}`)}>
+                                  <ExternalLink className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                                  <span className="min-w-0 flex-1 truncate">{evidence.repoFullName} · {evidence.path ? `${evidence.path}:L${evidence.lineStart ?? 1}-L${evidence.lineEnd ?? 1}` : t('仓库元数据', 'repository metadata')}</span>
+                                  {evidence.refSha && <code className="shrink-0 text-muted-foreground">{shortSha(evidence.refSha)}</code>}
+                                </a>
+                              );
+                            })}
+                          </div>
+                        </details>
+                      )}
+                    </article>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <form
+          className="border-t border-border pt-3"
+          onSubmit={handleSubmit}
+        >
+          <label className="sr-only" htmlFor="repository-chat-draft">{t('问题', 'Question')}</label>
+          <div className="flex items-end gap-2">
+            <Textarea
+              id="repository-chat-draft"
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              placeholder={t('例如：这个仓库是做什么的？如何安装和使用？', 'For example: What does this repository do? How do I install and use it?')}
+              className="min-h-20 resize-y text-sm"
+              disabled={!activeSession || !canChat || isSending}
+            />
+            {isSending ? (
+              <Button type="button" size="icon" variant="secondary" onClick={stop} aria-label={t('停止生成', 'Stop generating')} title={t('停止生成', 'Stop generating')}>
+                <Square className="h-3.5 w-3.5" aria-hidden="true" />
+              </Button>
+            ) : (
+              <Button type="submit" size="icon" disabled={!activeSession || !canChat || !draft.trim()} aria-label={t('发送问题', 'Send question')} title={t('发送问题', 'Send question')}>
+                <Send className="h-4 w-4" aria-hidden="true" />
+              </Button>
+            )}
+          </div>
+          <div className="mt-1.5 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+            <p>{t('适合围绕仓库文档、功能和使用方式进行简明问答；复杂代码分析、跨文件改造或调试建议先克隆代码到本地，再使用专业 Coding Agent 完成。', 'Best for concise questions about a repository’s documentation, features, and usage. For complex code analysis, cross-file changes, or debugging, clone the repository locally and use a dedicated coding agent.')}</p>
+            {!isSending && messages.some((message) => message.status === 'error' || message.status === 'aborted') && <Button type="button" variant="ghost" size="sm" className="h-7 px-2" onClick={() => void retry()}><RotateCcw className="mr-1 h-3.5 w-3.5" aria-hidden="true" />{t('重试', 'Retry')}</Button>}
+          </div>
+        </form>
+      </SheetContent>
+    </Sheet>
+  );
+};
+
+export default RepositoryChatSheet;

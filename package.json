@@ -1,7 +1,7 @@
 {
   "name": "github-stars-manager",
   "private": true,
-  "version": "0.7.7",
+  "version": "0.7.8",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -31,6 +31,7 @@
     "deploy": "npm run build && wrangler deploy"
   },
   "dependencies": {
+    "@ai-sdk/openai-compatible": "^3.0.37",
     "@fontsource-variable/dm-sans": "^5.3.0",
     "@fontsource-variable/fira-code": "^5.3.0",
     "@fontsource-variable/geist": "^5.3.0",
@@ -46,6 +47,7 @@
     "@fontsource/merriweather": "^5.3.0",
     "@fontsource/playfair-display": "^5.3.0",
     "@fontsource/space-mono": "^5.3.0",
+    "@radix-ui/react-accordion": "^1.2.20",
     "@radix-ui/react-alert-dialog": "^1.1.23",
     "@radix-ui/react-avatar": "^1.2.6",
     "@radix-ui/react-checkbox": "^1.3.11",
@@ -64,6 +66,7 @@
     "@radix-ui/react-toast": "^1.2.23",
     "@radix-ui/react-tooltip": "^1.2.16",
     "@tanstack/react-virtual": "^3.13.12",
+    "ai": "^7.0.79",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "^3.3.1",
@@ -85,6 +88,7 @@
     "remark-github-blockquote-alert": "^2.1.0",
     "remark-math": "^6.0.0",
     "tailwind-merge": "^3.6.0",
+    "zod": "^4.1.8",
     "zustand": "^4.5.0"
   },
   "devDependencies": {
@@ -96,8 +100,8 @@
     "@types/node": "^26.3.0",
     "@types/react": "^18.3.5",
     "@types/react-dom": "^18.3.0",
-    "@vitejs/plugin-legacy": "^8.0.1",
-    "@vitejs/plugin-react": "^6.0.0",
+    "@vitejs/plugin-legacy": "^7.2.1",
+    "@vitejs/plugin-react": "^5.1.2",
     "autoprefixer": "^10.4.18",
     "concurrently": "^8.2.0",
     "eslint": "^9.9.1",
@@ -110,8 +114,8 @@
     "tailwindcss-animate": "^1.0.7",
     "typescript": "^5.5.3",
     "typescript-eslint": "^8.3.0",
-    "vite": "^8.0.9",
-    "vitest": "^1.3.1",
+    "vite": "^7.3.6",
+    "vitest": "^4.1.11",
     "xml2js": "^0.6.2"
   }
 }

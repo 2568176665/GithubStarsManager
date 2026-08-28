@@ -83,6 +83,8 @@ const mockUseAppStore = vi.mocked(useAppStore);
 beforeEach(() => {
   vi.clearAllMocks();
   storeState.repositoryViewMode = 'grid';
+  storeState.similarView = null;
+  Object.assign(searchFilters, { sortBy: 'stars', sortOrder: 'desc' });
   mockUseAppStore.mockImplementation(() => storeState as ReturnType<typeof useAppStore>);
   Object.assign(mockUseAppStore, {
     getState: () => storeState,
@@ -90,6 +92,40 @@ beforeEach(() => {
 });
 
 describe('RepositoryList view mode controls', () => {
+  it('sorts the raw default repository list by stars before rendering cards', () => {
+    const lowerStarRepository = { ...repository, id: 2, name: 'lower-star', full_name: 'owner/lower-star', stargazers_count: 1 };
+    const higherStarRepository = { ...repository, id: 3, name: 'higher-star', full_name: 'owner/higher-star', stargazers_count: 999 };
+
+    render(<RepositoryList repositories={[lowerStarRepository, higherStarRepository, repository]} selectedCategory="all" />);
+
+    expect(screen.getAllByTestId(/repository-card-/).map((card) => card.textContent)).toEqual([
+      'higher-star',
+      'repository-one',
+      'lower-star',
+    ]);
+  });
+
+  it('preserves the card vector-result order in similar view instead of applying the normal star sort', () => {
+    const lowScoreLowStarRepository = { ...repository, id: 2, name: 'first-by-vector-score', full_name: 'owner/first-by-vector-score', stargazers_count: 1 };
+    const highScoreHighStarRepository = { ...repository, id: 3, name: 'second-by-vector-score', full_name: 'owner/second-by-vector-score', stargazers_count: 999 };
+    storeState.similarView = {
+      active: true,
+      anchorRepoFullName: repository.full_name,
+      anchorRepoName: repository.name,
+      similarResults: [lowScoreLowStarRepository, highScoreHighStarRepository, repository],
+      originalSearchResults: [],
+      originalSearchFilters: searchFilters,
+    } as never;
+
+    render(<RepositoryList repositories={[lowScoreLowStarRepository, highScoreHighStarRepository, repository]} selectedCategory="all" />);
+
+    expect(screen.getAllByTestId(/repository-card-/).map((card) => card.textContent)).toEqual([
+      'first-by-vector-score',
+      'second-by-vector-score',
+      'repository-one',
+    ]);
+  });
+
   it('keeps the established grid as default and switches cards to the compact list mode', () => {
     const { rerender } = render(<RepositoryList repositories={[repository]} selectedCategory="all" />);
 

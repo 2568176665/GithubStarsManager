@@ -12,7 +12,9 @@ import type {
   SearchFilters,
   VectorSearchConfig,
   VectorSearchStatus,
+  RepositoryChatSettings,
 } from '../types';
+import { defaultRepositoryChatAgentBudget, defaultRepositoryChatSettings } from '../types/repositoryChat';
 import { EMBEDDING_FORMAT_VERSION } from '../services/vectorSearchService';
 import { MCP_DEFAULT_HOST, MCP_DEFAULT_PORT, normalizeMcpHost } from '../utils/mcpHost';
 import { PRESET_FILTERS } from '../constants/presetFilters';
@@ -57,6 +59,7 @@ export type PersistedAppState = Partial<
     | 'lastSync'
     | 'aiConfigs'
     | 'activeAIConfig'
+    | 'repositoryChatSettings'
     | 'embeddingConfigs'
     | 'activeEmbeddingConfig'
     | 'vectorSearchConfig'
@@ -128,6 +131,45 @@ export type PersistedAppState = Partial<
   analyzingGistIds?: unknown;
   releaseExpandedRepositories?: unknown;
   forkExpandedRepositories?: unknown;
+};
+
+export const normalizeRepositoryChatSettings = (value: unknown): RepositoryChatSettings => {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  const retainSessionDays = typeof record.retainSessionDays === 'number' && Number.isFinite(record.retainSessionDays)
+    ? Math.min(365, Math.max(1, Math.round(record.retainSessionDays)))
+    : defaultRepositoryChatSettings.retainSessionDays;
+  const legacyMaxToolsPerTurn = typeof record.maxToolsPerTurn === 'number' && Number.isFinite(record.maxToolsPerTurn)
+    ? Math.min(48, Math.max(1, Math.round(record.maxToolsPerTurn)))
+    : defaultRepositoryChatSettings.maxToolsPerTurn;
+  const rawBudget = record.agentBudget && typeof record.agentBudget === 'object' && !Array.isArray(record.agentBudget)
+    ? record.agentBudget as Record<string, unknown>
+    : {};
+  const inRange = (value: unknown, fallback: number, min: number, max: number): number => (
+    typeof value === 'number' && Number.isFinite(value)
+      ? Math.min(max, Math.max(min, Math.round(value)))
+      : fallback
+  );
+  const maxToolCalls = inRange(rawBudget.maxToolCalls, legacyMaxToolsPerTurn, 1, 48);
+  const maxReadFiles = inRange(rawBudget.maxReadFiles, defaultRepositoryChatAgentBudget.maxReadFiles, 1, 16);
+  const agentBudget = {
+    maxTurns: inRange(rawBudget.maxTurns, defaultRepositoryChatAgentBudget.maxTurns, 1, 8),
+    maxToolCalls,
+    maxReadFiles,
+    maxCodeReads: Math.min(maxReadFiles, inRange(rawBudget.maxCodeReads, defaultRepositoryChatAgentBudget.maxCodeReads, 0, 12)),
+    maxNoProgressRounds: inRange(rawBudget.maxNoProgressRounds, defaultRepositoryChatAgentBudget.maxNoProgressRounds, 1, 4),
+    maxDurationMs: inRange(rawBudget.maxDurationMs, defaultRepositoryChatAgentBudget.maxDurationMs, 15_000, 300_000),
+  };
+  return {
+    enabled: record.enabled !== false,
+    chatConfigId: typeof record.chatConfigId === 'string' ? record.chatConfigId : null,
+    streamingMode: record.streamingMode === 'off' ? 'off' : 'auto',
+    enableWebTools: record.enableWebTools === true,
+    retainSessionDays,
+    maxToolsPerTurn: maxToolCalls,
+    agentBudget,
+  };
 };
 
 export const normalizeNumberSet = (value: unknown): Set<number> => {
