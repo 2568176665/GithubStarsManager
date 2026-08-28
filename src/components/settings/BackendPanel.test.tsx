@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BackendPanel } from './BackendPanel';
 
@@ -47,6 +47,7 @@ const mocks = vi.hoisted(() => {
     },
     tryRestoreAuthFromBackend: vi.fn(),
     syncLocalGitHubTokenToBackend: vi.fn(),
+    syncToBackend: vi.fn(),
     toast: vi.fn(),
     confirm: vi.fn(),
   };
@@ -57,6 +58,7 @@ vi.mock('../../services/backendAdapter', () => ({ backend: mocks.backend }));
 vi.mock('../../services/autoSync', () => ({
   tryRestoreAuthFromBackend: mocks.tryRestoreAuthFromBackend,
   syncLocalGitHubTokenToBackend: mocks.syncLocalGitHubTokenToBackend,
+  syncToBackend: mocks.syncToBackend,
 }));
 vi.mock('../../hooks/useDialog', () => ({
   useDialog: () => ({ toast: mocks.toast, confirm: mocks.confirm }),
@@ -72,6 +74,14 @@ describe('BackendPanel token synchronization', () => {
     mocks.backend.verifyAuth.mockResolvedValue(true);
     mocks.syncLocalGitHubTokenToBackend.mockResolvedValue(true);
     mocks.tryRestoreAuthFromBackend.mockResolvedValue(false);
+    mocks.syncToBackend.mockResolvedValue(true);
+    mocks.confirm.mockResolvedValue(true);
+    mocks.backend.checkHealth.mockResolvedValue(null);
+    mocks.backend.fetchRepositories.mockResolvedValue({ repositories: [], total: 0 });
+    mocks.backend.fetchReleases.mockResolvedValue({ releases: [], total: 0 });
+    mocks.backend.fetchAIConfigs.mockResolvedValue([]);
+    mocks.backend.fetchWebDAVConfigs.mockResolvedValue([]);
+    mocks.backend.fetchSettings.mockResolvedValue({ hiddenDefaultCategoryIds: [] });
   });
 
   it('syncs the local GitHub token when the backend becomes reachable on panel mount', async () => {
@@ -117,5 +127,49 @@ describe('BackendPanel token synchronization', () => {
 
     expect(mocks.syncLocalGitHubTokenToBackend).not.toHaveBeenCalled();
     expect(screen.getByText('Not Connected')).toBeTruthy();
+  });
+
+  it('starts a local-to-backend sync from the first sync button and reports success', async () => {
+    render(<BackendPanel t={t} />);
+
+    const syncButtons = screen.getAllByRole('button', { name: 'Start Sync' });
+    expect(syncButtons).toHaveLength(2);
+    fireEvent.click(syncButtons[0]);
+
+    await waitFor(() => expect(mocks.syncToBackend).toHaveBeenCalledOnce());
+    expect(mocks.toast).toHaveBeenCalledWith(expect.stringContaining('Synced to backend'), 'success');
+  });
+
+  it('confirms and applies backend data from the second sync button', async () => {
+    mocks.backend.fetchRepositories.mockResolvedValue({ repositories: [{ id: 1 }], total: 1 });
+    mocks.backend.fetchReleases.mockResolvedValue({ releases: [{ id: 2 }], total: 1 });
+    mocks.backend.fetchAIConfigs.mockResolvedValue([{ id: 'ai-1' }]);
+    mocks.backend.fetchWebDAVConfigs.mockResolvedValue([{ id: 'webdav-1' }]);
+
+    render(<BackendPanel t={t} />);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Start Sync' })[1]);
+
+    await waitFor(() => expect(mocks.backend.fetchSettings).toHaveBeenCalledOnce());
+    expect(mocks.confirm).toHaveBeenCalledWith(
+      'Sync from Backend',
+      'Syncing from backend will overwrite local data. Continue?',
+      { type: 'warning' },
+    );
+    expect(mocks.storeState.setRepositories).toHaveBeenCalledWith([{ id: 1 }]);
+    expect(mocks.storeState.setReleases).toHaveBeenCalledWith([{ id: 2 }]);
+    expect(mocks.storeState.setAIConfigs).toHaveBeenCalledWith([{ id: 'ai-1' }]);
+    expect(mocks.storeState.setWebDAVConfigs).toHaveBeenCalledWith([{ id: 'webdav-1' }]);
+    expect(mocks.toast).toHaveBeenCalledWith(expect.stringContaining('Synced from backend'), 'success');
+  });
+
+  it('does not overwrite local data when the pull sync is cancelled', async () => {
+    mocks.confirm.mockResolvedValue(false);
+
+    render(<BackendPanel t={t} />);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Start Sync' })[1]);
+
+    await waitFor(() => expect(mocks.confirm).toHaveBeenCalledOnce());
+    expect(mocks.backend.fetchRepositories).not.toHaveBeenCalled();
+    expect(mocks.storeState.setRepositories).not.toHaveBeenCalled();
   });
 });
