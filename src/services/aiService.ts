@@ -1,4 +1,5 @@
 import { Repository, Gist, AIConfig, AIApiType } from '../types';
+import { isToolCallCapableApiType } from '../constants/aiCapabilities';
 import { backend } from './backendAdapter';
 import { buildApiUrl, buildFinalApiUrl } from '../utils/apiUrlBuilder';
 import { NO_LICENSE_SENTINEL, normalizeLicense } from '../utils/licenseFilter';
@@ -104,6 +105,198 @@ function parseRetryAfterMs(response: Response): number | undefined {
   return undefined;
 }
 
+/** 流式请求不可用（如走后端代理等仅支持整段 JSON 的通道）。调用方应降级为非流式。 */
+export class AIStreamUnsupportedError extends Error {
+  constructor(message = 'Streaming is not supported on this transport') {
+    super(message);
+    this.name = 'AIStreamUnsupportedError';
+  }
+}
+
+export function isAIStreamUnsupportedError(error: unknown): boolean {
+  return error instanceof AIStreamUnsupportedError;
+}
+
+/** 当前 AI 配置/端点不支持模型原生工具调用（function calling）。调用方应降级到编排式循环。 */
+export class AIToolCallUnsupportedError extends Error {
+  constructor(message = 'Tool calling is not supported on this AI configuration') {
+    super(message);
+    this.name = 'AIToolCallUnsupportedError';
+  }
+}
+
+export function isAIToolCallUnsupportedError(error: unknown): boolean {
+  return error instanceof AIToolCallUnsupportedError;
+}
+
+export interface AIToolDefinition {
+  name: string;
+  description: string;
+  /** JSON Schema 格式的参数定义。 */
+  parameters: Record<string, unknown>;
+}
+
+export interface AIToolCall {
+  id: string;
+  name: string;
+  /** 原始 JSON 字符串参数（由调用方解析，解析失败按空对象处理）。 */
+  arguments: string;
+}
+
+export type AIToolLoopMessage =
+  | { role: 'system' | 'user'; content: string }
+  | { role: 'assistant'; content: string | null; toolCalls: AIToolCall[] }
+  | { role: 'tool'; toolCallId: string; content: string };
+
+/**
+ * 该配置是否实际启用原生工具调用：协议族支持 且 用户在该 AI 配置中显式
+ * 勾选“支持工具调用”。两者缺一不可——避免未经验证的端点默认进入工具循环。
+ * 端点实际能力不足时由请求失败降级兜底。
+ */
+export function supportsChatToolCalls(config: Pick<AIConfig, 'apiType' | 'supportsToolCalls'>): boolean {
+  return isToolCallCapableApiType(config.apiType) && config.supportsToolCalls === true;
+}
+
+/** 逐事件消费 SSE 字节流，把每个 data: 载荷交给回调（自动跨 chunk 缓冲不完整行）。 */
+export async function consumeSseStream(body: ReadableStream<Uint8Array>, onData: (payload: string) => void): Promise<void> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let dataLines: string[] = [];
+  const flush = () => {
+    if (dataLines.length > 0) {
+      onData(dataLines.join('\n'));
+      dataLines = [];
+    }
+  };
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let separatorIndex: number;
+      // SSE 行分隔符按规范接受 CRLF / LF / 裸 CR。
+      while ((separatorIndex = buffer.search(/[\r\n]/)) >= 0) {
+        // 末尾的 \r 可能与下一块开头的 \n 组成 CRLF，先等更多数据再定。
+        if (buffer[separatorIndex] === '\r' && separatorIndex === buffer.length - 1) break;
+        const separatorLength = buffer[separatorIndex] === '\r' && buffer[separatorIndex + 1] === '\n' ? 2 : 1;
+        const line = buffer.slice(0, separatorIndex);
+        buffer = buffer.slice(separatorIndex + separatorLength);
+        if (line === '') {
+          flush();
+        } else if (line.startsWith('data:')) {
+          dataLines.push(line.slice(5).replace(/^ /, ''));
+        }
+        // event:/id:/注释行与这些 API 无关，直接忽略。
+      }
+    }
+    // 冲刷解码器中剩余的多字节序列，EOF 残余按同样规则切分：覆盖未以换行
+    // 结尾的最后一行、裸 CR 分隔与末尾悬挂的 \r。
+    buffer += decoder.decode();
+    const residualLines = buffer.split(/\r\n|\r|\n/);
+    buffer = '';
+    for (const line of residualLines) {
+      if (line === '') {
+        flush();
+      } else if (line.startsWith('data:')) {
+        dataLines.push(line.slice(5).replace(/^ /, ''));
+      }
+    }
+    flush();
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+export function extractOpenAiChatDelta(payload: string): string {
+  if (!payload || payload === '[DONE]') return '';
+  try {
+    const json = JSON.parse(payload) as { choices?: Array<{ delta?: { content?: string | null } }> };
+    const delta = json.choices?.[0]?.delta?.content;
+    return typeof delta === 'string' ? delta : '';
+  } catch {
+    return '';
+  }
+}
+
+export function extractOpenAiResponsesDelta(payload: string): string {
+  try {
+    const json = JSON.parse(payload) as { type?: string; delta?: unknown };
+    if (json.type === 'response.output_text.delta' && typeof json.delta === 'string') return json.delta;
+    return '';
+  } catch {
+    return '';
+  }
+}
+
+export function extractClaudeDelta(payload: string): string {
+  try {
+    const json = JSON.parse(payload) as { type?: string; delta?: { type?: string; text?: string } };
+    if (json.type === 'content_block_delta' && json.delta?.type === 'text_delta' && typeof json.delta.text === 'string') {
+      return json.delta.text;
+    }
+    return '';
+  } catch {
+    return '';
+  }
+}
+
+export function extractGeminiDelta(payload: string): string {
+  try {
+    const json = JSON.parse(payload) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }> };
+    const parts = json.candidates?.[0]?.content?.parts;
+    if (!Array.isArray(parts)) return '';
+    return parts
+      .filter((p) => p && !p.thought && typeof p.text === 'string')
+      .map((p) => p.text as string)
+      .join('');
+  } catch {
+    return '';
+  }
+}
+
+/** 服务端未按 SSE 返回时，从整段 JSON 响应里提取文本（与 requestText 的解析保持一致）。 */
+function extractFullTextFromResponse(apiType: AIApiType, data: unknown): string {
+  if (apiType === 'openai-responses') {
+    const typed = data as OpenAIResponse;
+    if (typeof typed.output_text === 'string' && typed.output_text) return typed.output_text;
+    if (Array.isArray(typed.output)) {
+      return typed.output
+        .flatMap((item) => Array.isArray(item?.content) ? item.content : [])
+        .map((part) => part?.text || '')
+        .join('');
+    }
+    return '';
+  }
+  if (apiType === 'claude') {
+    const blocks = (data as { content?: unknown }).content;
+    if (!Array.isArray(blocks)) return '';
+    return blocks
+      .map((b) => {
+        if (!b || typeof b !== 'object') return '';
+        const block = b as { type?: unknown; text?: unknown };
+        return block.type === 'text' && typeof block.text === 'string' ? block.text : '';
+      })
+      .join('');
+  }
+  if (apiType === 'gemini') {
+    const candidates = (data as { candidates?: unknown }).candidates;
+    if (!Array.isArray(candidates) || candidates.length === 0) return '';
+    const parts = (candidates[0] as { content?: { parts?: unknown } }).content?.parts;
+    if (!Array.isArray(parts)) return '';
+    return parts
+      .filter((p) => p && typeof p === 'object' && !(p as { thought?: boolean }).thought)
+      .map((p) => {
+        if (!p || typeof p !== 'object') return '';
+        const part = p as { text?: unknown };
+        return typeof part.text === 'string' ? part.text : '';
+      })
+      .join('');
+  }
+  const content = (data as { choices?: OpenAIResponseChoice[] }).choices?.[0]?.message?.content;
+  return typeof content === 'string' ? content : '';
+}
+
 function getStatusCodeMeaning(statusCode: number, language: string): string {
   const meanings: Record<number, { zh: string; en: string }> = {
     400: { zh: '请求参数错误', en: 'Bad Request' },
@@ -154,6 +347,8 @@ export class AIService {
       responseHeaders?: Record<string, string>;
       responseBody?: string;
       status?: number;
+      /** 是否走 SSE 流式返回（流式调试日志使用）。 */
+      streamed?: boolean;
     }
   ): void {
     if (logger.isDebugMode()) {
@@ -185,6 +380,29 @@ export class AIService {
 
   private getApiType(): AIApiType {
     return this.config.apiType || 'openai';
+  }
+
+  /**
+   * 直连模式安全守卫：禁止把 Authorization / x-api-key / URL key 通过明文
+   * HTTP 发往远端。仅 localhost / 127.0.0.1 / [::1] / 0.0.0.0 等本机地址豁免
+   * （本地推理服务场景）。走后端代理时由代理负责，不在此检查。
+   */
+  private requireSecureDirectEndpoint(): void {
+    if (backend.isAvailable) return;
+    const base = this.config.baseUrl.trim();
+    if (!/^http:\/\//i.test(base)) return;
+    let host = base.replace(/^http:\/\//i, '').split('/')[0] || '';
+    try {
+      host = new URL(base).hostname;
+    } catch {
+      // 保留字符串解析结果
+    }
+    const isLocal = /^(localhost|127\.0\.0\.1|0\.0\.0\.0|::1|\[::1\])$/i.test(host);
+    if (!isLocal) {
+      throw new Error(this.language === 'zh'
+        ? 'AI 服务地址必须使用 HTTPS：为保护 API Key，仅 localhost / 127.0.0.1 等本机地址允许 HTTP。'
+        : 'The AI endpoint must use HTTPS: to protect your API key, plain HTTP is only allowed for local addresses (localhost / 127.0.0.1).');
+    }
   }
 
   private getOpenAIReasoningPayload(): { effort: 'none' | 'low' | 'medium' | 'high' | 'xhigh' } | undefined {
@@ -234,6 +452,7 @@ export class AIService {
     maxTokens: number;
     signal?: AbortSignal;
   }): Promise<string> {
+    this.requireSecureDirectEndpoint();
     const startTime = Date.now();
     const apiType = this.getApiType();
     const model = this.config.model;
@@ -287,6 +506,8 @@ export class AIService {
         data = await backend.proxyAIRequestWithFallback(this.config.id, this.config, requestBody, options.signal) as Record<string, unknown>;
       } else {
         const response = await fetch(requestUrl, {
+          // 直连携带 API Key，禁止跟随重定向以防凭据外泄。
+          redirect: 'error',
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -400,6 +621,8 @@ export class AIService {
         data = await backend.proxyAIRequestWithFallback(this.config.id, this.config, requestBody, options.signal);
       } else {
         const response = await fetch(requestUrl, {
+          // 直连携带 API Key，禁止跟随重定向以防凭据外泄。
+          redirect: 'error',
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -498,6 +721,8 @@ ${options.user}` : options.user;
       data = await backend.proxyAIRequestWithFallback(this.config.id, this.config, requestBody, options.signal);
     } else {
       const response = await fetch(requestUrl, {
+        // 直连在 URL 携带 API Key，禁止跟随重定向以防凭据外泄。
+        redirect: 'error',
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -560,6 +785,225 @@ ${options.user}` : options.user;
     throw new Error('No content received from AI service');
   }
 
+  /**
+   * 流式文本生成（SSE）。仅支持直连模式；走后端代理时抛 AIStreamUnsupportedError，
+   * 由调用方决定降级。返回完整拼接文本；增量通过 onChunk 逐段回调。
+   */
+  private async requestTextStream(options: {
+    system: string;
+    user: string;
+    temperature: number;
+    maxTokens: number;
+    signal?: AbortSignal;
+    onChunk: (delta: string) => void;
+  }): Promise<string> {
+    if (backend.isAvailable) {
+      // /api/proxy/ai 会整体缓冲 JSON 响应，无法转发 SSE 帧。
+      throw new AIStreamUnsupportedError();
+    }
+    this.requireSecureDirectEndpoint();
+    if (this.isDeepSeekReasonerModel()) {
+      // deepseek-reasoner 的最终文本可能仅存在于 reasoning_content（思考链），
+      // 非流式路径对此有专门处理（且思考链不得用于其他 DeepSeek 模型）。流式
+      // 增量无法安全区分思考与正文，直接走阻塞路径以复用既有语义。
+      throw new AIStreamUnsupportedError();
+    }
+
+    const apiType = this.getApiType();
+    const model = this.config.model;
+    const configId = this.config.id;
+    const startTime = Date.now();
+
+    let requestUrl: string;
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Accept': 'text/event-stream',
+    };
+    let body: unknown;
+    let extractDelta: (payload: string) => string;
+
+    if (apiType === 'claude') {
+      requestUrl = buildApiUrl(this.config.baseUrl, 'v1/messages');
+      headers['x-api-key'] = this.config.apiKey;
+      headers['anthropic-version'] = '2023-06-01';
+      body = {
+        model,
+        stream: true,
+        ...(options.system.trim() ? { system: options.system } : {}),
+        messages: [{ role: 'user', content: options.user }],
+        temperature: options.temperature,
+        max_tokens: options.maxTokens,
+      };
+      extractDelta = extractClaudeDelta;
+    } else if (apiType === 'gemini') {
+      const rawModel = this.config.model.trim();
+      const geminiModel = rawModel.startsWith('models/') ? rawModel.slice('models/'.length) : rawModel;
+      const prompt = options.system ? `${options.system}\n\n${options.user}` : options.user;
+      const urlObj = new URL(buildApiUrl(this.config.baseUrl, `v1beta/models/${encodeURIComponent(geminiModel)}:streamGenerateContent`));
+      urlObj.searchParams.set('alt', 'sse');
+      urlObj.searchParams.set('key', this.config.apiKey);
+      requestUrl = urlObj.toString();
+      body = {
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: options.temperature,
+          maxOutputTokens: options.maxTokens,
+        },
+      };
+      extractDelta = extractGeminiDelta;
+    } else if (apiType === 'openai' || apiType === 'openai-responses' || apiType === 'openai-compatible' || apiType === 'deepseek' || apiType === 'mimo') {
+      const messages = [
+        ...(options.system.trim() ? [{ role: 'system', content: options.system }] : []),
+        { role: 'user', content: options.user },
+      ];
+      const isDeepSeekReasoner = this.isDeepSeekReasonerModel();
+      const isDeepSeekThinking = this.isDeepSeekThinkingModel();
+      const isMiMoModel = this.isMiMoModel();
+      const reasoning = this.getOpenAIReasoningPayload();
+
+      body = apiType === 'openai-responses'
+        ? {
+            model,
+            input: messages,
+            stream: true,
+            temperature: options.temperature,
+            max_output_tokens: options.maxTokens,
+            ...(reasoning ? { reasoning } : {}),
+            ...(isMiMoModel || isDeepSeekThinking ? { thinking: { type: 'disabled' } } : {}),
+          }
+        : {
+            model,
+            messages,
+            stream: true,
+            max_tokens: options.maxTokens,
+            ...(!isDeepSeekReasoner ? { temperature: options.temperature } : {}),
+            ...(!isDeepSeekReasoner && !isDeepSeekThinking && !isMiMoModel && reasoning && apiType !== 'openai-compatible' ? { reasoning } : {}),
+            ...(isMiMoModel || isDeepSeekThinking ? { thinking: { type: 'disabled' } } : {}),
+          };
+      requestUrl = buildFinalApiUrl(this.config.baseUrl, apiType);
+      headers['Authorization'] = `Bearer ${this.config.apiKey}`;
+      extractDelta = apiType === 'openai-responses' ? extractOpenAiResponsesDelta : extractOpenAiChatDelta;
+    } else {
+      throw new AIStreamUnsupportedError();
+    }
+
+    // 请求头仅在 debug 日志中展示，密钥做掩码
+    const debugHeaders: Record<string, string> = { ...headers };
+    if (debugHeaders['Authorization']) debugHeaders['Authorization'] = 'Bearer ***';
+    if (debugHeaders['x-api-key']) debugHeaders['x-api-key'] = '***';
+    const maskedUrl = requestUrl.replace(/([?&]key=)[^&]+/, '$1***');
+
+    const response = await fetch(requestUrl, {
+      // 直连携带 API Key（URL 或请求头），禁止跟随重定向以防凭据外泄。
+      redirect: 'error',
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: options.signal,
+    });
+    if (!response.ok) {
+      const errorDetail = await this.extractErrorDetail(response);
+      this.logAIRequestDebug(startTime, { apiType, model, configId }, { error: 'request failed' }, {
+        url: maskedUrl, requestHeaders: debugHeaders, status: response.status,
+      });
+      throw new AIRequestError(
+        `AI API error: ${response.status} ${response.statusText}${errorDetail ? ` - ${errorDetail}` : ''}`,
+        response.status,
+        parseRetryAfterMs(response)
+      );
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType) {
+      // 缺失 Content-Type 时按内容嗅探：body 含 data: 帧走 SSE 解析，
+      // 否则按整段 JSON / 纯文本回退（此时 body 已整体读入，逐段回调）。
+      const raw = await response.text();
+      const ssePayloads: string[] = [];
+      let dataLines: string[] = [];
+      // SSE 行分隔符按规范接受 CRLF / LF / 裸 CR。
+      for (const line of raw.split(/\r\n|\r|\n/)) {
+        if (line === '') {
+          if (dataLines.length > 0) {
+            ssePayloads.push(dataLines.join('\n'));
+            dataLines = [];
+          }
+        } else if (line.startsWith('data:')) {
+          dataLines.push(line.slice(5).replace(/^ /, ''));
+        }
+      }
+      if (dataLines.length > 0) ssePayloads.push(dataLines.join('\n'));
+
+      if (ssePayloads.length > 0) {
+        // 只有至少一帧解出当前 API 的有效增量才算 SSE；普通文本里恰好出现
+        // "data:" 开头的行时继续走下方 JSON / 纯文本回退。
+        const deltas = ssePayloads
+          .map((payload) => extractDelta(payload))
+          .filter((delta) => delta !== '');
+        if (deltas.length > 0) {
+          let full = '';
+          for (const delta of deltas) {
+            full += delta;
+            options.onChunk(delta);
+          }
+          this.logAIRequestDebug(startTime, { apiType, model, configId }, { responseLength: full.length }, { url: maskedUrl, streamed: true });
+          return full;
+        }
+      }
+
+      let text = '';
+      try {
+        text = extractFullTextFromResponse(apiType, JSON.parse(raw));
+      } catch {
+        text = raw;
+      }
+      if (!text) {
+        this.logAIRequestDebug(startTime, { apiType, model, configId }, { error: 'request failed' }, { url: maskedUrl });
+        throw new Error('No content received from AI service');
+      }
+      options.onChunk(text);
+      this.logAIRequestDebug(startTime, { apiType, model, configId }, { responseLength: text.length }, { url: maskedUrl, streamed: false });
+      return text;
+    }
+
+    if (!contentType.includes('text/event-stream')) {
+      // 服务端忽略 stream:true 时可能返回整段 JSON（application/json）或纯文本
+      // 回答：先按 JSON 解析提取结构化文本，失败则把原始文本作为一次性 chunk。
+      const raw = await response.text();
+      let text = '';
+      try {
+        text = extractFullTextFromResponse(apiType, JSON.parse(raw));
+      } catch {
+        text = raw;
+      }
+      if (!text) {
+        this.logAIRequestDebug(startTime, { apiType, model, configId }, { error: 'request failed' }, { url: maskedUrl });
+        throw new Error('No content received from AI service');
+      }
+      options.onChunk(text);
+      this.logAIRequestDebug(startTime, { apiType, model, configId }, { responseLength: text.length }, { url: maskedUrl, streamed: false });
+      return text;
+    }
+
+    if (!response.body) {
+      this.logAIRequestDebug(startTime, { apiType, model, configId }, { error: 'empty response body' }, { url: maskedUrl });
+      throw new Error('No content received from AI service (empty body)');
+    }
+    let full = '';
+    await consumeSseStream(response.body, (payload) => {
+      const delta = extractDelta(payload);
+      if (delta) {
+        full += delta;
+        options.onChunk(delta);
+      }
+    });
+
+    this.logAIRequestDebug(startTime, { apiType, model, configId }, { responseLength: full.length }, { url: maskedUrl, streamed: true });
+    if (!full.trim()) {
+      throw new Error('No content received from AI service (stream)');
+    }
+    return full;
+  }
+
   async generateChatText(options: {
     system: string;
     user: string;
@@ -574,6 +1018,190 @@ ${options.user}` : options.user;
       maxTokens: options.maxTokens ?? 4000,
       signal: options.signal,
     });
+  }
+
+  /** 流式版本的 generateChatText；不支持流式的通道抛 AIStreamUnsupportedError。 */
+  async generateChatTextStream(options: {
+    system: string;
+    user: string;
+    temperature?: number;
+    maxTokens?: number;
+    signal?: AbortSignal;
+    onChunk: (delta: string) => void;
+  }): Promise<string> {
+    return await this.requestTextStream({
+      system: options.system,
+      user: options.user,
+      temperature: options.temperature ?? 0.2,
+      maxTokens: options.maxTokens ?? 4000,
+      signal: options.signal,
+      onChunk: options.onChunk,
+    });
+  }
+
+  /**
+   * 原生 function calling（OpenAI chat completions 线格式）。与 generateChatText
+   * 共享 URL/鉴权/重定向守卫；只做单次请求——多轮对话由调用方把返回的
+   * tool_calls 与工具结果追加进 messages 后再次调用。端点不支持 tools 时抛
+   * AIToolCallUnsupportedError，调用方可降级到编排式循环。
+   */
+  async generateWithTools(options: {
+    system: string;
+    messages: AIToolLoopMessage[];
+    tools: AIToolDefinition[];
+    temperature?: number;
+    maxTokens?: number;
+    signal?: AbortSignal;
+  }): Promise<{ content: string; toolCalls: AIToolCall[] }> {
+    const apiType = this.getApiType();
+    if (!supportsChatToolCalls(this.config)) {
+      throw new AIToolCallUnsupportedError(`API type "${apiType}" does not support native tool calling`);
+    }
+    this.requireSecureDirectEndpoint();
+    const startTime = Date.now();
+    const model = this.config.model;
+    const configId = this.config.id;
+    const isDeepSeekReasoner = this.isDeepSeekReasonerModel();
+    const isDeepSeekThinking = this.isDeepSeekThinkingModel();
+    const isMiMoModel = this.isMiMoModel();
+    const reasoning = this.getOpenAIReasoningPayload();
+
+    const messages = [
+      ...(options.system.trim() ? [{ role: 'system', content: options.system }] : []),
+      ...options.messages.map((message): Record<string, unknown> => {
+        if (message.role === 'assistant') {
+          return {
+            role: 'assistant',
+            // content 为空（null/''）时直接省略该字段：显式 null 与空字符串在
+            // 部分网关与模型上会被拒绝；带 tool_calls 的消息省略 content 是
+            // 兼容性最好的线格式。
+            ...(message.content ? { content: message.content } : {}),
+            // 空 tool_calls 会与 content:null 组合成部分网关拒绝的请求体，直接省略。
+            ...(message.toolCalls.length > 0 ? {
+              tool_calls: message.toolCalls.map((call) => ({
+                id: call.id,
+                type: 'function',
+                function: { name: call.name, arguments: call.arguments },
+              })),
+            } : {}),
+          };
+        }
+        if (message.role === 'tool') {
+          return { role: 'tool', tool_call_id: message.toolCallId, content: message.content };
+        }
+        return { role: message.role, content: message.content };
+      }),
+    ];
+
+    const requestBody = {
+      model: this.config.model,
+      messages,
+      tools: options.tools.map((tool) => ({
+        type: 'function',
+        function: { name: tool.name, description: tool.description, parameters: tool.parameters },
+      })),
+      tool_choice: 'auto',
+      max_tokens: options.maxTokens ?? 4_000,
+      ...(!isDeepSeekReasoner ? { temperature: options.temperature ?? 0 } : {}),
+      ...(!isDeepSeekReasoner && !isDeepSeekThinking && !isMiMoModel && reasoning && apiType !== 'openai-compatible' ? { reasoning } : {}),
+      ...(isMiMoModel || isDeepSeekThinking ? { thinking: { type: 'disabled' } } : {}),
+    };
+
+    const requestUrl = buildFinalApiUrl(this.config.baseUrl, apiType);
+    const requestHeaders: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'Authorization': 'Bearer ***',
+    };
+    let responseHeaders: Record<string, string> | undefined;
+    let responseBodyPreview: string | undefined;
+    let responseStatus: number | undefined;
+    let data: Record<string, unknown>;
+
+    if (backend.isAvailable) {
+      // 代理整体透传请求体（含 tools 字段），响应仍由客户端解析。
+      try {
+        data = await backend.proxyAIRequestWithFallback(this.config.id, this.config, requestBody, options.signal) as Record<string, unknown>;
+      } catch (error) {
+        // 代理错误不保留上游响应体：按状态码 + 消息识别端点拒绝 tools 的情形，
+        // 与直连路径同样转为 AIToolCallUnsupportedError，让调用方落回编排式循环。
+        const carrier = error as { status?: unknown; statusCode?: unknown };
+        const status = typeof carrier.status === 'number' ? carrier.status : carrier.statusCode;
+        const message = error instanceof Error ? error.message : String(error ?? '');
+        if ((status === 400 || status === 404 || status === 422) && /\btools?\b|function/i.test(message)) {
+          throw new AIToolCallUnsupportedError(`Endpoint rejected tool calling: ${message.slice(0, 200)}`);
+        }
+        throw error;
+      }
+    } else {
+      const response = await fetch(requestUrl, {
+        // 直连携带 API Key，禁止跟随重定向以防凭据外泄。
+        redirect: 'error',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Authorization': `Bearer ${this.config.apiKey}`,
+        },
+        body: JSON.stringify(requestBody),
+        signal: options.signal,
+      });
+      responseHeaders = {};
+      response.headers.forEach((v, k) => { responseHeaders![k] = v; });
+      responseStatus = response.status;
+      try {
+        const cloned = response.clone();
+        const text = await cloned.text();
+        if (text.length > 0) {
+          responseBodyPreview = text.length > 4000 ? text.slice(0, 4000) + '...[truncated]' : text;
+        }
+      } catch { /* body not readable */ }
+      if (!response.ok) {
+        const errorDetail = await this.extractErrorDetail(response);
+        this.logAIRequestDebug(startTime, { apiType, model, configId }, { error: 'request failed' }, {
+          url: requestUrl, requestHeaders, requestBody, responseHeaders, responseBody: responseBodyPreview, status: responseStatus,
+        });
+        const error = new AIRequestError(
+          `AI API error: ${response.status} ${response.statusText}${errorDetail ? ` - ${errorDetail}` : ''}`,
+          response.status,
+          parseRetryAfterMs(response),
+        );
+        // 网关不支持 tools 时通常以 4xx 拒绝并提及 tools/function：识别为
+        // 能力缺失而非瞬时故障，让调用方落回编排式循环。
+        if ((response.status === 400 || response.status === 404 || response.status === 422) && /\btools?\b|function/i.test(errorDetail)) {
+          throw new AIToolCallUnsupportedError(`Endpoint rejected tool calling: ${errorDetail.slice(0, 200)}`);
+        }
+        throw error;
+      }
+      data = await response.json();
+    }
+
+    const httpDetails = logger.isDebugMode() ? {
+      url: requestUrl, requestHeaders, requestBody, responseHeaders, responseBody: responseBodyPreview, status: responseStatus,
+    } : undefined;
+
+    const message = (data as { choices?: OpenAIResponseChoice[] }).choices?.[0]?.message;
+    const rawToolCalls = (message as { tool_calls?: unknown } | undefined)?.tool_calls;
+    const toolCalls = Array.isArray(rawToolCalls)
+      ? rawToolCalls.flatMap((call): AIToolCall[] => {
+          if (!call || typeof call !== 'object') return [];
+          const typed = call as { id?: unknown; function?: { name?: unknown; arguments?: unknown } };
+          const name = typeof typed.function?.name === 'string' ? typed.function.name : '';
+          if (!name) return [];
+          return [{
+            id: typeof typed.id === 'string' ? typed.id : `call_${name}`,
+            name,
+            arguments: typeof typed.function?.arguments === 'string' ? typed.function.arguments : '{}',
+          }];
+        })
+      : [];
+    const content = typeof message?.content === 'string' ? message.content : '';
+    if (!content && toolCalls.length === 0) {
+      this.logAIRequestDebug(startTime, { apiType, model, configId }, { error: 'request failed' }, httpDetails);
+      throw new Error('No content or tool calls received from AI service');
+    }
+    this.logAIRequestDebug(startTime, { apiType, model, configId }, { responseLength: content.length + toolCalls.length }, httpDetails);
+    return { content, toolCalls };
   }
 
   async analyzeRepository(repository: Repository, readmeContent: string, customCategories?: string[], categoryHints?: string, signal?: AbortSignal): Promise<RepositoryAnalysisResult> {

@@ -61,9 +61,12 @@
     transition: background 0.3s ease;
   }
 
+  /* Scrollbar layout is constant: the gutter is always reserved and only the
+     thumb's color toggles on scroll. Toggling scrollbar-width/overflow instead
+     changed the content width mid-scroll and jittered text and borders (#309). */
   .scrollbar-on-scroll {
-    -ms-overflow-style: none;
-    scrollbar-width: none;
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
   }
 
   .scrollbar-on-scroll::-webkit-scrollbar {
@@ -83,7 +86,6 @@
   }
 
   .scrollbar-on-scroll.scrolling {
-    scrollbar-width: thin;
     scrollbar-color: hsl(var(--foreground) / 0.25) transparent;
   }
 
@@ -446,6 +448,20 @@ html {
    to compensate for a scrollbar that html already reserves permanently. */
 html body[data-scroll-locked] {
   margin-right: 0 !important;
+  /* react-remove-scroll sets overflow:hidden, which turns body into a scroll
+     container and re-anchors position:sticky headers to the document top
+     (off-screen on long pages). overflow:clip blocks scrolling without
+     creating a scroll container, so sticky keeps anchoring to the viewport. */
+  overflow: clip !important;
+}
+
+/* body's overflow never propagates to the viewport (html owns overflow), so the
+   root scroller must be locked directly or the page behind a modal overlay keeps
+   scrolling (scrollbar drag + wheel). hidden — not clip — keeps the viewport a
+   scroll container, so the scroll offset, the sticky header's anchor and the
+   scrollbar-gutter: stable reservation all survive the lock. */
+html:has(body[data-scroll-locked]) {
+  overflow: hidden !important;
 }
 
 /* 窗口滚动条颜色由 --ui-line-strong 等 token 统一驱动（见文件底部 Linear 段落）。 */
@@ -944,6 +960,19 @@ html::-webkit-scrollbar-thumb:hover { background: var(--ui-text-faint); border: 
   background: hsl(var(--muted));
   border: 1px solid hsl(var(--border));
   border-radius: 0.375rem;
+}
+
+/* Release 资产行的方形平台徽章：容器为 muted 底，用 card 底 + 边框做出层次 */
+.asset-platform-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.125rem;
+  height: 1.125rem;
+  color: hsl(var(--muted-foreground));
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.25rem;
 }
 
 .repository-card .status,
