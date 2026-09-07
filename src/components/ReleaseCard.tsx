@@ -1,27 +1,18 @@
-import React, { memo, useCallback, useRef, useState, useEffect } from 'react';
+import React, { memo, useCallback, useMemo, useState, useEffect } from 'react';
 import { ExternalLink, GitBranch, Calendar, Download, ChevronDown, ChevronUp, BookOpen, ArrowUpRight, FolderOpen, Folder, BellOff, FileArchive, Code2, Loader2, CheckCircle2, Sparkles } from 'lucide-react';
 import { Release } from '../types';
 import { formatDistanceToNow } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import MarkdownRenderer from './MarkdownRenderer';
+import AssetLeadingIcon from './AssetLeadingIcon';
 import { useAppStore } from '../store/useAppStore';
 import { useShallow } from 'zustand/react/shallow';
-import { useDialog } from '../hooks/useDialog';
-import { sendToRpcDownload } from '../services/rpcDownloadService';
-import { AIService } from '../services/aiService';
+import { computeRpcDownloadKey, useReleaseArtifactActions } from '../hooks/useReleaseArtifactActions';
 import {
   effectiveReleaseTime,
-  detectAssetPlatform,
   shouldShowAssetsUpdatedIndicator,
 } from '../utils/releaseAssets';
-import { getPlatformDisplayName, getPlatformIcon } from './platformMeta';
 import { Button } from './ui/button';
-
-type SummaryState = {
-  status: 'idle' | 'loading' | 'done' | 'error';
-  content?: string;
-  error?: string;
-};
 
 interface DownloadLink {
   name: string;
@@ -33,24 +24,6 @@ interface DownloadLink {
   updatedAt?: string;
   contentType?: string;
 }
-
-/**
- * 资产行左侧图标：按文件名/扩展名（含 MIME 兜底）推断平台 → 方形品牌徽章；
- * 推断不出时回退到通用下载图标（不猜）。
- * 下载状态图标（进行中/已完成/源码）由调用方优先渲染。
- */
-const AssetLeadingIcon = ({ name, contentType }: { name: string; contentType?: string }) => {
-  const platform = detectAssetPlatform(name, contentType);
-  if (!platform) {
-    return <Download className="w-3.5 h-3.5 text-muted-foreground dark:text-muted-foreground/70 flex-shrink-0" />;
-  }
-  const Icon = getPlatformIcon(platform);
-  return (
-    <span className="asset-platform-badge flex-shrink-0" title={getPlatformDisplayName(platform)}>
-      <Icon className="h-[11px] w-[11px]" />
-    </span>
-  );
-};
 
 /** 资产相对时间：updated_at 非法时不渲染，避免 date-fns 对 Invalid Date 抛错；中文界面用 zhCN。 */
 const AssetUpdatedTime = ({ updatedAt, language }: { updatedAt?: string; language: 'zh' | 'en' }) => {
@@ -111,108 +84,29 @@ const ReleaseCard: React.FC<ReleaseCardProps> = memo(({
   const effectiveTime = effectiveReleaseTime(release);
   const showAssetsUpdatedIndicator = shouldShowAssetsUpdatedIndicator(release);
 
-  // RPC download support — use refs to avoid stale closure in async handler
-  const { rpcDownloadConfig, backendApiSecret, aiConfigs, activeAIConfig } = useAppStore(useShallow((state) => ({
+  // RPC 发送与 AI 总结动作由共享 hook 承担（useRepositoryReleaseSheet 同源委托）
+  const { rpcDownloadConfig } = useAppStore(useShallow((state) => ({
     rpcDownloadConfig: state.rpcDownloadConfig,
-    backendApiSecret: state.backendApiSecret,
-    aiConfigs: state.aiConfigs,
-    activeAIConfig: state.activeAIConfig,
   })));
-  const activeConfig = aiConfigs.find((config) => config.id === activeAIConfig);
-
-  // AI 总结的本地状态（展开态与结果均内聚在卡片内，不持久化）
+  const { summaries, rpcDownloadStates, sendRpcDownload, generateSummary } = useReleaseArtifactActions();
+  // AI 总结状态内聚在 hook（展开态留在卡片内，不持久化）；
+  // 卡片卸载时的请求取消由 hook 的 unmount 副作用承担（卡片卸载即 hook 卸载）。
   const [isSummaryExpanded, setIsSummaryExpanded] = useState(false);
-  const [summary, setSummary] = useState<SummaryState>({ status: 'idle' });
-  const { toast } = useDialog();
-  // 管理进行中的 AI 请求，组件卸载或重新发起时取消，避免内存泄漏与无效网络开销
-  const summaryAbortRef = useRef<AbortController | null>(null);
+  const summary = useMemo(() => summaries[release.id] ?? { status: 'idle' as const }, [summaries, release.id]);
 
+  // 完成或失败后自动展开（原 runSummaryAnalysis 成功/失败分支的 setIsSummaryExpanded(true)）
   useEffect(() => {
-    return () => {
-      summaryAbortRef.current?.abort();
-    };
-  }, []);
-  const downloadingRef = useRef<Record<string, boolean>>({});
-  const downloadedRef = useRef<Record<string, boolean>>({});
-  const [, forceUpdate] = useState(0);
-
-  const handleRpcDownload = useCallback(async (link: DownloadLink) => {
-    const key = link.url;
-    if (downloadingRef.current[key] || downloadedRef.current[key]) return;
-
-    downloadingRef.current = { ...downloadingRef.current, [key]: true };
-    forceUpdate(n => n + 1);
-    try {
-      const result = await sendToRpcDownload(link.url, link.name, backendApiSecret || undefined);
-      if (result.success) {
-        downloadedRef.current = { ...downloadedRef.current, [key]: true };
-        toast(t('已发送到远程下载器', 'Sent to remote downloader'), 'success');
-      } else {
-        toast(
-          result.error === 'RPC service not running'
-            ? t('远程下载服务未运行，请检查配置', 'Remote download service not running, please check config')
-            : result.error || t('发送失败', 'Send failed'),
-          'error'
-        );
-      }
-    } catch {
-      toast(t('远程下载服务未运行，请检查配置', 'Remote download service not running, please check config'), 'error');
-    } finally {
-      downloadingRef.current = { ...downloadingRef.current, [key]: false };
-      forceUpdate(n => n + 1);
+    if (summary.status === 'done' || summary.status === 'error') {
+      setIsSummaryExpanded(true);
     }
-  }, [backendApiSecret, toast, t]);
+  }, [summary.status]);
 
   // 判断是否有任何内容展开
   const isAnyExpanded = isAssetsExpanded || isReleaseNotesExpanded || isSummaryExpanded;
 
-  const runSummaryAnalysis = useCallback(async () => {
-    if (!activeConfig) {
-      toast(
-        language === 'zh' ? '请先在设置中配置 AI 服务。' : 'Please configure AI service in settings first.',
-        'error'
-      );
-      return;
-    }
-
-    // 取消上一次未完成的请求
-    summaryAbortRef.current?.abort();
-    const controller = new AbortController();
-    summaryAbortRef.current = controller;
-
-    const config = activeConfig;
-    setSummary({ status: 'loading' });
-    try {
-      const aiService = new AIService(config, language);
-      const content = await aiService.analyzeReleaseSummary(
-        release.body || '',
-        {
-          repoName: release.repository.full_name,
-          tagName: release.tag_name,
-          releaseName: release.name && release.name !== release.tag_name ? release.name : undefined,
-        },
-        controller.signal
-      );
-      setSummary({ status: 'done', content });
-      setIsSummaryExpanded(true);
-    } catch (error) {
-      // 主动取消（卸载/重新发起）时静默处理，不更新状态、不弹错误
-      if (error instanceof Error && error.name === 'AbortError') {
-        return;
-      }
-      const message = error instanceof Error ? error.message : String(error);
-      setSummary({ status: 'error', error: message });
-      setIsSummaryExpanded(true);
-      toast(
-        language === 'zh' ? `总结生成失败：${message}` : `Summary failed: ${message}`,
-        'error'
-      );
-    } finally {
-      if (summaryAbortRef.current === controller) {
-        summaryAbortRef.current = null;
-      }
-    }
-  }, [activeConfig, language, release, toast]);
+  const handleRpcDownload = useCallback(async (link: DownloadLink) => {
+    await sendRpcDownload(link);
+  }, [sendRpcDownload]);
 
   const handleToggleSummary = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -230,8 +124,8 @@ const ReleaseCard: React.FC<ReleaseCardProps> = memo(({
     }
 
     // 未分析或上次失败 → 触发 AI 分析（按钮转圈，完成后自动展开）
-    await runSummaryAnalysis();
-  }, [isSummaryExpanded, summary, runSummaryAnalysis]);
+    await generateSummary(release);
+  }, [isSummaryExpanded, summary, generateSummary, release]);
 
   return (
     <div
@@ -270,9 +164,12 @@ const ReleaseCard: React.FC<ReleaseCardProps> = memo(({
             </div>
           </div>
 
-          <div className="flex items-center gap-4 flex-shrink-0 self-stretch">
-            <div className="hidden md:flex min-w-[140px] flex-col justify-center gap-2 text-xs text-muted-foreground dark:text-muted-foreground">
-              <div className="flex items-center gap-1.5">
+          {/* 元信息列不设固定上限：出现“资产已更新”徽标时整行向左扩展（min-w 保证
+              无徽标时仍维持 140px 栏宽对齐），否则 140px 内放不下徽标会把时间和
+              徽标文字都挤到换行；按钮区仍固定 344px 靠右，位置不受影响。 */}
+          <div className="flex items-center gap-3 flex-shrink-0 self-center md:justify-end">
+            <div className="hidden md:flex md:min-w-[140px] shrink-0 flex-col justify-center gap-1.5 text-xs text-muted-foreground dark:text-muted-foreground">
+              <div className="flex items-center gap-1.5 whitespace-nowrap">
                 <Calendar className="w-3.5 h-3.5" />
                 <span>
                   {formatDistanceToNow(new Date(effectiveTime), {
@@ -281,7 +178,7 @@ const ReleaseCard: React.FC<ReleaseCardProps> = memo(({
                   })}
                 </span>
                 {showAssetsUpdatedIndicator && (
-                  <span className="text-[10px] px-1 py-px rounded bg-primary/10 text-primary font-medium">
+                  <span className="text-xs px-1 py-px rounded bg-primary/10 text-primary font-medium">
                     {t('资产已更新', 'Assets updated')}
                   </span>
                 )}
@@ -297,7 +194,8 @@ const ReleaseCard: React.FC<ReleaseCardProps> = memo(({
                 </div>
               )}
             </div>
-            <div className="flex items-center space-x-1 flex-shrink-0">
+            {/* 固定宽度需容纳英文五控件（Assets/Notes/Summary+2图标，约340px），否则换行按钮会溢出头部 */}
+            <div className="flex items-center justify-end gap-1 flex-shrink-0 md:w-[344px] md:min-w-[344px]">
             {downloadLinks.length > 0 && (
               <Button
                 onClick={(e) => {
@@ -406,8 +304,10 @@ const ReleaseCard: React.FC<ReleaseCardProps> = memo(({
               <div className="ui-inset-surface max-h-72 overflow-hidden overflow-y-auto">
                 {downloadLinks.map((link, index) => {
                   const isRpcEnabled = rpcDownloadConfig.enabled;
-                  const isDownloading = downloadingRef.current[link.url];
-                  const isDownloaded = downloadedRef.current[link.url];
+                  // 与 sendRpcDownload 使用相同的版本化 key
+                  const rpcKey = computeRpcDownloadKey(link);
+                  const isDownloading = rpcDownloadStates[rpcKey] === 'sending';
+                  const isDownloaded = rpcDownloadStates[rpcKey] === 'sent';
                   const isAssetUpdated = link.assetId !== undefined
                     && release.updated_asset_ids?.includes(link.assetId) === true;
 
@@ -421,16 +321,16 @@ const ReleaseCard: React.FC<ReleaseCardProps> = memo(({
                           if (link.assetId !== undefined) onMarkAssetAsRead(link.assetId);
                           handleRpcDownload(link);
                         }}
-                        disabled={isDownloading || isDownloaded}
+                        disabled={isDownloading}
                         className={`h-auto flex items-center justify-between rounded-none px-4 py-3 w-full text-left hover:bg-muted dark:hover:bg-accent transition-colors border-b border-border last:border-b-0 disabled:opacity-60 ${
                           link.isSourceCode ? 'bg-accent/60' : ''
                         }`}
                       >
                         <div className="flex items-center space-x-1.5 min-w-0 flex-1">
-                          {isDownloaded ? (
-                            <CheckCircle2 className="w-3.5 h-3.5 text-success flex-shrink-0" />
-                          ) : isDownloading ? (
+                          {isDownloading ? (
                             <Loader2 className="w-3.5 h-3.5 text-muted-foreground animate-spin flex-shrink-0" />
+                          ) : isDownloaded ? (
+                            <CheckCircle2 className="w-3.5 h-3.5 text-success flex-shrink-0" />
                           ) : link.isSourceCode ? (
                             <Code2 className="w-3.5 h-3.5 text-muted-foreground dark:text-muted-foreground flex-shrink-0" />
                           ) : (
@@ -442,7 +342,7 @@ const ReleaseCard: React.FC<ReleaseCardProps> = memo(({
                         </div>
                         <div className="flex items-center space-x-2 text-xs text-muted-foreground dark:text-muted-foreground flex-shrink-0">
                           {isAssetUpdated && (
-                            <span className="text-[10px] px-1 py-px rounded bg-primary/10 text-primary font-medium whitespace-nowrap">
+                            <span className="text-xs px-1 py-px rounded bg-primary/10 text-primary font-medium whitespace-nowrap">
                               {t('资产已更新', 'Asset updated')}
                             </span>
                           )}
@@ -484,7 +384,7 @@ const ReleaseCard: React.FC<ReleaseCardProps> = memo(({
                       </div>
                       <div className="flex items-center space-x-2 text-xs text-muted-foreground dark:text-muted-foreground flex-shrink-0">
                         {isAssetUpdated && (
-                          <span className="text-[10px] px-1 py-px rounded bg-primary/10 text-primary font-medium whitespace-nowrap">
+                          <span className="text-xs px-1 py-px rounded bg-primary/10 text-primary font-medium whitespace-nowrap">
                             {t('资产已更新', 'Asset updated')}
                           </span>
                         )}

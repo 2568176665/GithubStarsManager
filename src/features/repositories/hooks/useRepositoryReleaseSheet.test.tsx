@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Repository } from '../../../types';
+import type { Release, Repository, RouteMode } from '../../../types';
 import { useRepositoryReleaseSheet } from './useRepositoryReleaseSheet';
 
 const mocks = vi.hoisted(() => ({
@@ -11,13 +11,16 @@ const mocks = vi.hoisted(() => ({
   },
   githubGetRepositoryReleasesPage: vi.fn(),
   toast: vi.fn(),
+  sendToRpcDownload: vi.fn(),
+  analyzeReleaseSummary: vi.fn(),
   store: {
     language: 'zh' as const,
     githubToken: 'token' as string | null,
     rpcDownloadConfig: { enabled: false, host: '', port: 6800, secret: '' },
     backendApiSecret: null as string | null,
-    aiConfigs: [],
+    aiConfigs: [] as Array<{ id: string; name: string; baseUrl: string; apiKey: string; model: string }>,
     activeAIConfig: null as string | null,
+    routeMode: 'auto' as RouteMode,
   },
 }));
 
@@ -30,8 +33,19 @@ vi.mock('../../../services/githubApi', () => ({
 vi.mock('../../../hooks/useDialog', () => ({
   useDialog: () => ({ toast: mocks.toast, confirm: vi.fn() }),
 }));
+vi.mock('../../../services/rpcDownloadService', () => ({
+  sendToRpcDownload: mocks.sendToRpcDownload,
+}));
+vi.mock('../../../services/aiService', () => ({
+  AIService: class {
+    analyzeReleaseSummary = mocks.analyzeReleaseSummary;
+  },
+}));
 vi.mock('../../../store/useAppStore', () => ({
-  useAppStore: (selector: (state: typeof mocks.store) => unknown) => selector(mocks.store),
+  useAppStore: Object.assign(
+    (selector: (state: typeof mocks.store) => unknown) => selector(mocks.store),
+    { getState: () => mocks.store },
+  ),
 }));
 
 const repository: Repository = {
@@ -67,6 +81,7 @@ describe('useRepositoryReleaseSheet', () => {
     vi.clearAllMocks();
     mocks.backend.isAvailable = false;
     mocks.store.githubToken = 'token';
+    mocks.store.routeMode = 'auto';
   });
 
   it('uses the live backend GitHub proxy when available and maps repository identity locally', async () => {
@@ -177,5 +192,101 @@ describe('useRepositoryReleaseSheet', () => {
 
     expect(mocks.backend.downloadGitHubResource).toHaveBeenCalledWith('/repos/owner/repo/releases/assets/2');
     expect(clickSpy).toHaveBeenCalledOnce();
+  });
+
+  it('skips the backend proxy and fetches releases directly in browser route mode', async () => {
+    mocks.store.routeMode = 'browser';
+    mocks.backend.isAvailable = true;
+    mocks.githubGetRepositoryReleasesPage.mockResolvedValue({
+      releases: [{ ...rawRelease, repository: { id: 0, name: 'repo', full_name: 'owner/repo' } }],
+      hasMore: false,
+    });
+    const { result } = renderHook(() => useRepositoryReleaseSheet(repository));
+
+    await act(async () => {
+      await result.current.loadReleases();
+    });
+
+    expect(mocks.backend.getRepositoryReleases).not.toHaveBeenCalled();
+    expect(mocks.githubGetRepositoryReleasesPage).toHaveBeenCalledWith('owner', 'repo', 1, 100, expect.any(AbortSignal));
+    expect(result.current.error).toBeNull();
+  });
+
+  it('opens a new window instead of the backend proxy for tokenless downloads in browser route mode', async () => {
+    mocks.store.routeMode = 'browser';
+    mocks.store.githubToken = null;
+    mocks.backend.isAvailable = true;
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const { result } = renderHook(() => useRepositoryReleaseSheet(repository));
+
+    await act(async () => {
+      await result.current.downloadAsset({
+        id: 'asset-3',
+        name: 'browser-fallback.zip',
+        url: 'https://github.com/owner/repo/releases/download/v1/browser-fallback.zip',
+        authenticatedPath: '/repos/owner/repo/releases/assets/3',
+        size: 10,
+        isSourceCode: false,
+        assetId: 3,
+      });
+    });
+
+    expect(mocks.backend.downloadGitHubResource).not.toHaveBeenCalled();
+    expect(openSpy).toHaveBeenCalledWith('https://github.com/owner/repo/releases/download/v1/browser-fallback.zip', '_blank', 'noopener,noreferrer');
+    openSpy.mockRestore();
+  });
+
+  it('keeps an in-flight AI summary alive when artifact states update (cancel effect keyed on stable fn)', async () => {
+    mocks.store.rpcDownloadConfig = { enabled: true, host: '', port: 6800, secret: '' };
+    mocks.store.aiConfigs = [{ id: 'ai-config', name: 'Test AI', baseUrl: 'https://example.com/v1', apiKey: 'k', model: 'm' }];
+    mocks.store.activeAIConfig = 'ai-config';
+    // abort 感知 mock：真实 fetch 在 signal 中止时会以 AbortError 拒绝
+    let resolveSummary!: (value: string) => void;
+    mocks.analyzeReleaseSummary.mockImplementation((_b: string, _m: unknown, signal: AbortSignal) =>
+      new Promise<string>((resolve, reject) => {
+        resolveSummary = (value: string) => {
+          if (signal.aborted) {
+            const abortError = new Error('Aborted');
+            abortError.name = 'AbortError';
+            reject(abortError);
+          } else {
+            resolve(value);
+          }
+        };
+      }));
+    mocks.sendToRpcDownload.mockResolvedValue({ success: true });
+    const { result } = renderHook(() => useRepositoryReleaseSheet(repository));
+
+    const sheetRelease: Release = {
+      id: rawRelease.id,
+      tag_name: rawRelease.tag_name,
+      name: rawRelease.name,
+      body: rawRelease.body,
+      published_at: rawRelease.published_at,
+      html_url: rawRelease.html_url,
+      assets: [],
+      prerelease: false,
+      repository: { id: repository.id, full_name: repository.full_name, name: repository.name },
+    };
+
+    let pending!: Promise<void>;
+    act(() => {
+      pending = result.current.generateSummary(sheetRelease);
+    });
+    // RPC 状态更新会换掉 artifactActions 对象引用；总结请求不得被取消 effect 误中止
+    await act(async () => {
+      await result.current.sendAssetToRpc({
+        id: 'asset-4',
+        name: 'a.zip',
+        url: 'https://github.com/owner/repo/releases/download/v1/a.zip',
+        size: 1,
+        isSourceCode: false,
+        updatedAt: '2026-01-03T00:00:00.000Z',
+      });
+    });
+    resolveSummary('# Summary');
+    await act(async () => { await pending; });
+
+    expect(result.current.summaries[sheetRelease.id]).toEqual({ status: 'done', content: '# Summary' });
   });
 });

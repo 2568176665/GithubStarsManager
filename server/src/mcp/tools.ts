@@ -2,14 +2,47 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   getRepository,
+  getRepositories,
+  getRepoEvidence,
   getStats,
   getVectorAvailability,
+  findSimilarRepositories,
   listCategories,
   loadAllRepositories,
   searchRepos,
   vectorSearch,
 } from './provider.js';
 import { projectRepoForAgent } from './repoSearch.js';
+import { MCP_SERVER_VERSION } from './version.js';
+
+const ALWAYS_AVAILABLE_MCP_TOOLS = [
+  'gsm_status',
+  'gsm_search_repos',
+  'gsm_get_repo',
+  'gsm_get_repos',
+  'gsm_get_repo_evidence',
+  'gsm_list_categories',
+  'gsm_list_repos_by_category',
+  'gsm_stats',
+] as const;
+const CONDITIONAL_MCP_TOOLS = ['gsm_find_similar_repos', 'gsm_vector_search'] as const;
+
+/**
+ * conditionalTools lists vector-gated tools even when they are unavailable;
+ * availableTools is the exact set registered for the current configuration.
+ */
+export function getMcpToolAvailability(vectorAvailable: boolean): {
+  availableTools: string[];
+  conditionalTools: string[];
+} {
+  return {
+    availableTools: [
+      ...ALWAYS_AVAILABLE_MCP_TOOLS,
+      ...(vectorAvailable ? CONDITIONAL_MCP_TOOLS : []),
+    ],
+    conditionalTools: [...CONDITIONAL_MCP_TOOLS],
+  };
+}
 
 function textResult(data: unknown) {
   return {
@@ -27,9 +60,10 @@ export function registerMcpTools(server: McpServer): void {
     async () => {
       const repos = loadAllRepositories();
       const vector = getVectorAvailability();
+      const toolAvailability = getMcpToolAvailability(vector.available);
       return textResult({
         name: 'github-stars-manager',
-        version: '0.7.0',
+        version: MCP_SERVER_VERSION,
         mode: 'backend-sqlite',
         repositoryCount: repos.length,
         vector: {
@@ -39,7 +73,8 @@ export function registerMcpTools(server: McpServer): void {
         },
         toolsNote: vector.available
           ? 'gsm_vector_search is available'
-          : 'gsm_vector_search is not listed until vector search is configured and enabled',
+          : 'gsm_find_similar_repos and gsm_vector_search are not listed until vector search is configured and enabled',
+        ...toolAvailability,
       });
     }
   );
@@ -109,6 +144,34 @@ export function registerMcpTools(server: McpServer): void {
   );
 
   server.registerTool(
+    'gsm_get_repos',
+    {
+      description:
+        'Get multiple starred repositories by numeric id or full_name. Preserves input order and reports partial not_found results.',
+      inputSchema: {
+        idsOrFullNames: z
+          .array(z.string().trim().min(1))
+          .min(1)
+          .max(50)
+          .describe('One to 50 repository ids or full_name values'),
+      },
+    },
+    async (args) => textResult(getRepositories(args.idsOrFullNames))
+  );
+
+  server.registerTool(
+    'gsm_get_repo_evidence',
+    {
+      description:
+        'Get deterministic local evidence for one repository, including the latest cached release when present. Does not call GitHub or infer missing fields.',
+      inputSchema: {
+        idOrFullName: z.string().trim().min(1).describe('Repository id or full_name'),
+      },
+    },
+    async (args) => textResult(getRepoEvidence(args.idOrFullName))
+  );
+
+  server.registerTool(
     'gsm_list_categories',
     {
       description: 'List custom categories stored in GithubStarsManager.',
@@ -153,6 +216,26 @@ export function registerMcpTools(server: McpServer): void {
   const vector = getVectorAvailability();
   if (vector.available) {
     server.registerTool(
+      'gsm_find_similar_repos',
+      {
+        description:
+          'Find semantically similar starred repositories using the existing vector index. The source repository is excluded and results use local structured metadata.',
+        inputSchema: {
+          idOrFullName: z.string().trim().min(1).describe('Source repository id or full_name'),
+          topK: z.number().min(1).max(50).optional(),
+          threshold: z.number().min(0).max(1).optional(),
+        },
+      },
+      async (args) =>
+        textResult(
+          await findSimilarRepositories(args.idOrFullName, {
+            topK: args.topK,
+            threshold: args.threshold,
+          })
+        )
+    );
+
+    server.registerTool(
       'gsm_vector_search',
       {
         description:
@@ -161,12 +244,33 @@ export function registerMcpTools(server: McpServer): void {
           query: z.string().min(1).describe('Natural language query'),
           topK: z.number().min(1).max(50).optional(),
           threshold: z.number().min(0).max(1).optional(),
+          languages: z.array(z.string()).optional(),
+          tags: z.array(z.string()).optional(),
+          platforms: z.array(z.string()).optional(),
+          licenses: z
+            .array(z.string())
+            .optional()
+            .describe('SPDX id list; use "__NO_LICENSE__" for repos with no license'),
+          category: z.string().optional(),
+          minStars: z.number().optional(),
+          maxStars: z.number().optional(),
+          isAnalyzed: z.boolean().optional(),
+          isSubscribed: z.boolean().optional(),
         },
       },
       async (args) => {
         const result = await vectorSearch(args.query, {
           topK: args.topK,
           threshold: args.threshold,
+          languages: args.languages,
+          tags: args.tags,
+          platforms: args.platforms,
+          licenses: args.licenses,
+          category: args.category,
+          minStars: args.minStars,
+          maxStars: args.maxStars,
+          isAnalyzed: args.isAnalyzed,
+          isSubscribed: args.isSubscribed,
         });
         return textResult(result);
       }

@@ -297,6 +297,10 @@ export const normalizePersistedState = (
       }
       return { enabled: false, host: '', port: 6800 };
     })(),
+    routeMode: (() => {
+      const m = (safePersisted as Record<string, unknown>).routeMode;
+      return m === 'backend' || m === 'browser' ? m : 'auto';
+    })(),
     headerMenuConfig: (() => {
       const persisted = (safePersisted as Record<string, unknown>).headerMenuConfig;
       if (!Array.isArray(persisted)) return defaultHeaderMenuConfig;

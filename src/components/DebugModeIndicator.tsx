@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { logger } from '../services/logger';
-import { backend } from '../services/backendAdapter';
+import { useDebugActions } from '../features/settings/hooks/useDebugActions';
 import { useAppStore } from '../store/useAppStore';
 import { Button } from './ui/button';
 
@@ -10,9 +10,10 @@ import { Button } from './ui/button';
  * Click to disable all debug modes and navigate to diagnostic logs.
  */
 export const DebugModeIndicator: React.FC = () => {
+  const { disableBackendDebug, backendDebugEnabled } = useDebugActions();
   const [frontendDebug, setFrontendDebug] = useState(() => sessionStorage.getItem('gsm:frontend-debug') === 'true');
   const [backendDebug, setBackendDebug] = useState(() => (
-    !backend.isWorkerEnvMode && sessionStorage.getItem('gsm:backend-debug') === 'true'
+    backendDebugEnabled && sessionStorage.getItem('gsm:backend-debug') === 'true'
   ));
   const setCurrentView = useAppStore(s => s.setCurrentView);
 
@@ -20,7 +21,7 @@ export const DebugModeIndicator: React.FC = () => {
   useEffect(() => {
     const check = () => {
       setFrontendDebug(sessionStorage.getItem('gsm:frontend-debug') === 'true');
-      setBackendDebug(!backend.isWorkerEnvMode && sessionStorage.getItem('gsm:backend-debug') === 'true');
+      setBackendDebug(backendDebugEnabled && sessionStorage.getItem('gsm:backend-debug') === 'true');
     };
     // Also listen for storage events from other tabs
     window.addEventListener('storage', check);
@@ -30,7 +31,7 @@ export const DebugModeIndicator: React.FC = () => {
       window.removeEventListener('storage', check);
       clearInterval(interval);
     };
-  }, []);
+  }, [backendDebugEnabled]);
 
   const handleClick = useCallback(async () => {
     // Disable frontend debug
@@ -39,16 +40,7 @@ export const DebugModeIndicator: React.FC = () => {
     setFrontendDebug(false);
 
     // Disable backend debug
-    if (backend.isAvailable && !backend.isWorkerEnvMode) {
-      try {
-        const secret = sessionStorage.getItem('github-stars-manager-backend-secret');
-        await fetch('/api/logs/debug', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${secret}` },
-          body: JSON.stringify({ enabled: false }),
-        });
-      } catch { /* Backend unreachable */ }
-    }
+    await disableBackendDebug();
     sessionStorage.setItem('gsm:backend-debug', 'false');
     setBackendDebug(false);
 
@@ -59,7 +51,7 @@ export const DebugModeIndicator: React.FC = () => {
     setCurrentView('settings');
     // Also dispatch event as a backup for same-instance navigation
     window.dispatchEvent(new CustomEvent('gsm:navigate-to-settings-tab', { detail: { tab: 'logs' } }));
-  }, [setCurrentView]);
+  }, [setCurrentView, disableBackendDebug]);
 
   if (!frontendDebug && !backendDebug) return null;
 

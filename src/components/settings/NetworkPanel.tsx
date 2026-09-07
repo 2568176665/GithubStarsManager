@@ -164,7 +164,7 @@ export const NetworkPanel: React.FC<NetworkPanelProps> = ({ t }) => {
                 {testing ? (
                   <span className="flex items-center space-x-2">
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>{t('测试中...', 'Testing...')}</span>
+                    <span>{t('测试中…', 'Testing…')}</span>
                   </span>
                 ) : (
                   t('测试连接', 'Test Connection')
@@ -179,7 +179,7 @@ export const NetworkPanel: React.FC<NetworkPanelProps> = ({ t }) => {
                 {saving ? (
                   <span className="flex items-center space-x-2">
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>{t('保存中...', 'Saving...')}</span>
+                    <span>{t('保存中…', 'Saving…')}</span>
                   </span>
                 ) : (
                   t('保存', 'Save')
@@ -302,6 +302,12 @@ export const NetworkPanel: React.FC<NetworkPanelProps> = ({ t }) => {
                 'Requires aria2 with RPC enabled (aria2c --enable-rpc --rpc-listen-port=6800)'
               )}
             </p>
+            <p className="text-xs text-muted-foreground dark:text-muted-foreground">
+              {t(
+                'GitHub/Release 请求出口可在「设置 → 后端同步 → 网络请求路由」调整。RPC 下载仍由 aria2 配置决定，下载流量由 aria2 进程所在机器发出，与本设置无关。',
+                'Adjust GitHub/Release request egress under "Settings → Backend Sync → Network Request Routing". RPC downloads remain controlled by aria2 configuration, and traffic leaves from wherever aria2 runs; this setting does not change it.'
+              )}
+            </p>
 
             {/* Actions */}
             <div className="flex items-center space-x-3 pt-2">
@@ -313,7 +319,7 @@ export const NetworkPanel: React.FC<NetworkPanelProps> = ({ t }) => {
                 {rpcTesting ? (
                   <span className="flex items-center space-x-2">
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>{t('测试中...', 'Testing...')}</span>
+                    <span>{t('测试中…', 'Testing…')}</span>
                   </span>
                 ) : (
                   t('测试连接', 'Test Connection')
@@ -328,7 +334,7 @@ export const NetworkPanel: React.FC<NetworkPanelProps> = ({ t }) => {
                 {rpcSaving ? (
                   <span className="flex items-center space-x-2">
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>{t('保存中...', 'Saving...')}</span>
+                    <span>{t('保存中…', 'Saving…')}</span>
                   </span>
                 ) : (
                   t('保存', 'Save')

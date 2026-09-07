@@ -6,7 +6,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { Modal } from './Modal';
 import type { Gist } from '../types';
-import type { GistCreateInput, GistUpdateInput } from '../services/githubApi';
+import type { GistCreateInput, GistUpdateInput } from '../features/gists/hooks/useGistActions';
 import { useAppStore } from '../store/useAppStore';
 
 interface EditableFile {
@@ -213,7 +213,7 @@ export const GistEditorModal: React.FC<GistEditorModalProps> = ({ gist, isOpen, 
             disabled={!canSubmit || isSaving}
             className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {isSaving ? t('保存中...', 'Saving...') : t('保存', 'Save')}
+            {isSaving ? t('保存中…', 'Saving…') : t('保存', 'Save')}
           </Button>
         </div>
       </div>

@@ -36,7 +36,6 @@ export const GistView: React.FC = () => {
     setGistSearchFilters,
     setGistSearchResults,
     setSelectedGistCategory,
-    deleteGist,
     setStarredGists,
     isRefreshing,
     isSearching,
@@ -170,7 +169,7 @@ export const GistView: React.FC = () => {
                   }}
                   aria-label={t('搜索 gist、文件名或摘要', 'Search gists, filenames, or summaries')}
                   className="ui-field w-full py-2 pl-9 pr-9 text-sm text-foreground dark:text-foreground"
-                  placeholder={t('搜索 gist、文件名、摘要...', 'Search gists, filenames, summaries...')}
+                  placeholder={t('搜索 gist、文件名、摘要…', 'Search gists, filenames, summaries…')}
                 />
                 {query && (
                   <Button
@@ -279,9 +278,6 @@ export const GistView: React.FC = () => {
                 onEdit={(target) => {
                   setEditingGist(target);
                   setIsEditorOpen(true);
-                }}
-                onDeleted={(gistId) => {
-                  deleteGist(gistId);
                 }}
                 onUnstarred={(gistId) => {
                   const latestStarred = useAppStore.getState().starredGists;

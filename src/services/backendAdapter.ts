@@ -1,7 +1,9 @@
 import { translateBackendError } from '../utils/backendErrors';
+import { normalizeBackendUrl } from '../utils/backendUrl';
 import { logger } from './logger';
 
 import { Repository, Release, AIConfig, WebDAVConfig, EmbeddingConfig, VectorSearchConfig } from '../types';
+import { useAppStore } from '../store/useAppStore';
 import type { DiscoveryAnalysisRecord } from './discoveryAnalysisStorage';
 import { isReadmeCandidateItem, type GitHubReadmeCandidateItem } from '../utils/readmeVariants';
 
@@ -27,16 +29,27 @@ export function getBackendProbeUrls(origin: string, hostname: string): string[] 
   if (isLocal || isCanonicalWorker) return [currentUrl];
   return [`${WORKER_CANONICAL_API_ORIGIN}/api`, currentUrl];
 }
+const BACKEND_URL_STORAGE_KEY = 'github-stars-manager-backend-url';
+
+const readStoredBackendUrl = (): string | null => {
+  try {
+    return normalizeBackendUrl(localStorage.getItem(BACKEND_URL_STORAGE_KEY) || '');
+  } catch {
+    return null;
+  }
+};
 
 class BackendAdapter {
   private _backendUrl: string | null = null;
   private _workerEnvMode = false;
 
-  async init(): Promise<void> {
+  async init(preferredUrl?: string): Promise<void> {
     try {
-      const urls = getBackendProbeUrls(window.location.origin, window.location.hostname);
-      // Only probe localhost in development
-      if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+      const configuredUrl = preferredUrl ? normalizeBackendUrl(preferredUrl) : readStoredBackendUrl();
+      const urls = preferredUrl
+        ? (configuredUrl ? [configuredUrl] : [])
+        : (configuredUrl ? [configuredUrl] : getBackendProbeUrls(window.location.origin, window.location.hostname));
+      if (!preferredUrl && !configuredUrl && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
         urls.push('http://localhost:3000/api');
       }
 
@@ -44,13 +57,20 @@ class BackendAdapter {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 3000);
         try {
+          // redirect: 'error' — a 307/308 must never bounce the probe (or any
+          // later authenticated request) to a different, possibly plaintext,
+          // destination.
           const res = await fetch(`${baseUrl}/health`, {
             signal: controller.signal,
+            redirect: 'error',
           });
 
           if (res.ok) {
             const data = await res.json();
             if (data.status === 'ok') {
+              // In-memory commit only. Persistence is an explicit caller
+              // decision (rememberActiveUrl) after its own auth checks, so a
+              // candidate that later fails authentication is never remembered.
               this._backendUrl = baseUrl;
               this._workerEnvMode = data.mode === 'worker-env';
               logger.info('backendAdapter', 'Backend connected', { url: baseUrl });
@@ -85,6 +105,23 @@ class BackendAdapter {
   get isWorkerEnvMode(): boolean {
     return this._workerEnvMode;
   }
+  get configuredUrl(): string | null {
+    return this._backendUrl || readStoredBackendUrl();
+  }
+
+  /**
+   * Persist the active backend URL (the same storage the login screen prefills
+   * from). Call only after caller-side checks — auth, session restore — have
+   * fully succeeded; init() itself never persists candidate URLs.
+   */
+  rememberActiveUrl(): void {
+    if (!this._backendUrl) return;
+    try {
+      localStorage.setItem(BACKEND_URL_STORAGE_KEY, this._backendUrl);
+    } catch {
+      // A restricted browser may block storage; keep this session connected.
+    }
+  }
 
   async fetchManagedSession(): Promise<{ login: string; [key: string]: unknown }> {
     if (!this._backendUrl) throw new Error('Backend not available');
@@ -94,9 +131,13 @@ class BackendAdapter {
   }
 
   private getAuthHeaders(): Record<string, string> {
+    const secret = useAppStore.getState().backendApiSecret || '';
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
+    if (secret) {
+      headers['Authorization'] = `Bearer ${secret}`;
+    }
     return headers;
   }
   private async fetchWithTimeout(url: string, options?: RequestInit, timeoutMs = 30000): Promise<Response> {
@@ -152,7 +193,7 @@ class BackendAdapter {
     }
 
     try {
-      const response = await fetch(url, { ...options, signal: controller.signal });
+      const response = await fetch(url, { ...options, signal: controller.signal, redirect: 'error' });
       if (logger.isDebugMode()) {
         // Capture response headers
         const responseHeaders: Record<string, string> = {};
