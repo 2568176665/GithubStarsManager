@@ -1,4 +1,5 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
@@ -21,6 +22,7 @@ const mocks = vi.hoisted(() => {
     repositories: [],
     githubToken: 'ghp-local-token',
     setSelectedCategory: vi.fn(),
+    setCurrentView: vi.fn(),
   };
 
   return {
@@ -113,6 +115,25 @@ vi.mock('./components/ListsPushIndicator', () => ({ ListsPushIndicator: () => nu
 
 import App from './App';
 
+const RouteProbe = () => {
+  const location = useLocation();
+  return <div data-testid="route-path">{location.pathname}</div>;
+};
+
+let testNavigate: ReturnType<typeof useNavigate> | null = null;
+
+const NavigationProbe = () => {
+  testNavigate = useNavigate();
+  return <RouteProbe />;
+};
+
+const renderApp = (initialEntry = '/', withRouteProbe = false) => render(
+  <MemoryRouter initialEntries={[initialEntry]}>
+    {withRouteProbe && <NavigationProbe />}
+    <App />
+  </MemoryRouter>,
+);
+
 describe('App backend initialization', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -132,7 +153,7 @@ describe('App backend initialization', () => {
   });
 
   it('continues backend loading after a pending local token sync reaches its deadline', async () => {
-    render(<App />);
+    renderApp();
 
     await act(async () => {
       await Promise.resolve();
@@ -150,7 +171,7 @@ describe('App backend initialization', () => {
 
   it('renders repositories before dormant views load, then resolves every lazy primary view after a view switch', async () => {
     vi.useRealTimers();
-    const { rerender } = render(<App />);
+    const { rerender } = renderApp();
 
     expect(screen.getByTestId('repositories-view')).toBeInTheDocument();
     await act(async () => {
@@ -169,11 +190,67 @@ describe('App backend initialization', () => {
     for (const [currentView, testId] of lazyViews) {
       await act(async () => {
         mocks.storeState.currentView = currentView;
-        rerender(<App />);
+        rerender(
+          <MemoryRouter initialEntries={['/']}>
+            <App />
+          </MemoryRouter>,
+        );
         await Promise.resolve();
       });
       expect(screen.getByTestId(testId)).toBeInTheDocument();
       expect(mocks.loadedViews).toContain(currentView);
     }
+  });
+
+  it('renders each primary view from its URL and canonicalizes unknown paths', async () => {
+    vi.useRealTimers();
+    const routes = [
+      ['/', 'repositories-view'],
+      ['/repositories', 'repositories-view'],
+      ['/settings', 'settings-view'],
+      ['/trending', 'subscription-view'],
+      ['/gists', 'gists-view'],
+      ['/releases', 'releases-view'],
+      ['/forks', 'forks-view'],
+    ] as const;
+
+    for (const [path, testId] of routes) {
+      mocks.storeState.currentView = 'repositories';
+      const { unmount } = renderApp(path);
+      expect(await screen.findByTestId(testId)).toBeInTheDocument();
+      unmount();
+    }
+
+    mocks.storeState.currentView = 'repositories';
+    renderApp('/not-a-view', true);
+    expect(await screen.findByTestId('repositories-view')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('route-path')).toHaveTextContent('/'));
+  });
+
+  it('syncs direct URLs and store navigation without replacing browser history', async () => {
+    vi.useRealTimers();
+    mocks.storeState.currentView = 'repositories';
+    mocks.storeState.setCurrentView.mockClear();
+    const directUrlRender = renderApp('/settings');
+
+    await waitFor(() => expect(mocks.storeState.setCurrentView).toHaveBeenCalledWith('settings'));
+    directUrlRender.unmount();
+
+    mocks.storeState.currentView = 'repositories';
+    const routeRender = renderApp('/', true);
+    mocks.storeState.currentView = 'settings';
+    routeRender.rerender(
+      <MemoryRouter initialEntries={['/']}>
+        <NavigationProbe />
+        <App />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByTestId('route-path')).toHaveTextContent('/settings'));
+
+    act(() => testNavigate?.('/gists'));
+    await waitFor(() => expect(screen.getByTestId('route-path')).toHaveTextContent('/gists'));
+    act(() => testNavigate?.(-1));
+    await waitFor(() => expect(screen.getByTestId('route-path')).toHaveTextContent('/settings'));
+    expect(mocks.storeState.setCurrentView).toHaveBeenCalledWith('gists');
   });
 });

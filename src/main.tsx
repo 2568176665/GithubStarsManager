@@ -3,6 +3,7 @@ import './polyfills.ts';
 
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { BrowserRouter, HashRouter } from 'react-router-dom';
 import App from './App.tsx';
 import './index.css';
 import { ErrorBoundary } from './components/ErrorBoundary.tsx';
@@ -25,13 +26,18 @@ try {
 
   logger.info('app', 'Root element found, creating React root');
 
+  const Router = window.location.protocol === 'file:' || navigator.userAgent.includes('Electron')
+    ? HashRouter
+    : BrowserRouter;
   const root = createRoot(rootElement);
   root.render(
     <StrictMode>
       <ErrorBoundary>
         <DialogProvider>
           <TooltipProvider delayDuration={300}>
-            <App />
+            <Router>
+              <App />
+            </Router>
           </TooltipProvider>
         </DialogProvider>
       </ErrorBoundary>

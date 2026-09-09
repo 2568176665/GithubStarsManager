@@ -1,4 +1,5 @@
-import React, { Suspense, useEffect, useMemo, useCallback } from 'react';
+import React, { Suspense, useEffect, useCallback, useRef } from 'react';
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { LoginScreen } from './components/LoginScreen';
 import { Header } from './components/Header';
 import { SearchBar } from './components/SearchBar';
@@ -51,6 +52,80 @@ const LazyViewBoundary: React.FC<{ children: React.ReactNode }> = ({ children })
     <Suspense fallback={<ViewLoadingFallback />}>{children}</Suspense>
   </ErrorBoundary>
 );
+
+type AppView = AppState['currentView'];
+
+const VIEW_PATHS: Record<AppView, string> = {
+  repositories: '/',
+  gists: '/gists',
+  releases: '/releases',
+  forks: '/forks',
+  subscription: '/trending',
+  settings: '/settings',
+};
+
+const PATH_VIEWS: Record<string, AppView> = Object.fromEntries(
+  Object.entries(VIEW_PATHS).map(([view, path]) => [path, view as AppView]),
+);
+
+const resolveAppView = (view: unknown): AppView => (
+  typeof view === 'string' && Object.prototype.hasOwnProperty.call(VIEW_PATHS, view)
+    ? view as AppView
+    : 'repositories'
+);
+
+/**
+ * Keeps legacy store-based navigation working while making the URL canonical.
+ * Route changes update the store; existing setCurrentView callers update the URL.
+ */
+const AppRouteSync: React.FC = () => {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const currentView = useAppStore((state) => state.currentView);
+  const setCurrentView = useAppStore((state) => state.setCurrentView);
+  const hasHydrated = useAppStore((state) => state.hasHydrated);
+  const initializedRef = useRef(false);
+  const lastLocationPathRef = useRef(location.pathname);
+  const lastViewRef = useRef<AppView>(currentView);
+
+  useEffect(() => {
+    if (!hasHydrated) return;
+
+    const routeView = PATH_VIEWS[location.pathname];
+
+    if (!initializedRef.current) {
+      initializedRef.current = true;
+      lastLocationPathRef.current = location.pathname;
+      lastViewRef.current = routeView ?? 'repositories';
+      if (routeView && currentView !== routeView) {
+        setCurrentView(routeView);
+      }
+      return;
+    }
+
+    if (location.pathname !== lastLocationPathRef.current) {
+      lastLocationPathRef.current = location.pathname;
+      if (routeView) {
+        lastViewRef.current = routeView;
+        if (currentView !== routeView) {
+          setCurrentView(routeView);
+        }
+      } else {
+        lastViewRef.current = 'repositories';
+      }
+      return;
+    }
+
+    if (currentView !== lastViewRef.current) {
+      const nextView = resolveAppView(currentView);
+      lastViewRef.current = nextView;
+      const nextPath = VIEW_PATHS[nextView];
+      navigate(nextPath);
+    }
+  }, [currentView, hasHydrated, location.pathname, navigate, setCurrentView]);
+
+  return null;
+};
 
 /**
  * Main repository view combining category sidebar, search bar, and repository list.
@@ -142,7 +217,6 @@ DiscoverySubscriptionView.displayName = 'DiscoverySubscriptionView';
 function App() {
   const {
     isAuthenticated,
-    currentView,
     selectedCategory,
     theme,
     themePreset,
@@ -200,37 +274,6 @@ function App() {
     setSelectedCategory(category);
   }, [setSelectedCategory]);
 
-  const currentViewContent = useMemo(() => {
-    switch (currentView) {
-      case 'repositories':
-        return (
-          <RepositoriesView
-            repositories={repositories}
-            searchResults={searchResults}
-            searchFilters={searchFilters}
-            selectedCategory={selectedCategory}
-            onCategorySelect={handleCategorySelect}
-          />
-        );
-      case 'gists':
-        return <GistsView />;
-      case 'releases':
-        return <ReleasesView />;
-      case 'forks':
-        return <ForksView />;
-      case 'subscription':
-        return (
-          <ErrorBoundary>
-            <DiscoverySubscriptionView />
-          </ErrorBoundary>
-        );
-      case 'settings':
-        return <SettingsView />;
-      default:
-        return null;
-    }
-  }, [currentView, repositories, searchResults, searchFilters, selectedCategory, handleCategorySelect]);
-
   // Show loading state while store is hydrating to ensure correct theme is applied
   if (!hasHydrated) {
     return (
@@ -251,7 +294,35 @@ function App() {
       <UpdateNotificationBanner />
       <Header />
       <main className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-5 sm:py-7">
-        {currentViewContent}
+        <AppRouteSync />
+        <Routes>
+          <Route
+            path={VIEW_PATHS.repositories}
+            element={
+              <RepositoriesView
+                repositories={repositories}
+                searchResults={searchResults}
+                searchFilters={searchFilters}
+                selectedCategory={selectedCategory}
+                onCategorySelect={handleCategorySelect}
+              />
+            }
+          />
+          <Route path="/repositories" element={<Navigate to={VIEW_PATHS.repositories} replace />} />
+          <Route path={VIEW_PATHS.gists} element={<GistsView />} />
+          <Route path={VIEW_PATHS.releases} element={<ReleasesView />} />
+          <Route path={VIEW_PATHS.forks} element={<ForksView />} />
+          <Route
+            path={VIEW_PATHS.subscription}
+            element={
+              <ErrorBoundary>
+                <DiscoverySubscriptionView />
+              </ErrorBoundary>
+            }
+          />
+          <Route path={VIEW_PATHS.settings} element={<SettingsView />} />
+          <Route path="*" element={<Navigate to={VIEW_PATHS.repositories} replace />} />
+        </Routes>
       </main>
       <BackToTop />
       <DebugModeIndicator />
