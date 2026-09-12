@@ -28,12 +28,6 @@ dist-ssr
 .env
 .secrets/
 release
-# electron/ sources are committed (main, preload, MCP). Do not ignore the whole dir.
-
-# Backend server data
-server/data/*.db
-server/data/.encryption-key
-server/dist/
 
  # Orchestrator internal files
 .sisyphus/

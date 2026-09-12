@@ -8,8 +8,6 @@ const mocks = vi.hoisted(() => ({
   setProxyConfig: vi.fn(),
   setRpcDownloadConfig: vi.fn(),
   backendInit: vi.fn(),
-  electronSetProxy: vi.fn(),
-  electronTestProxy: vi.fn(),
   testRpcDownload: vi.fn(),
 }));
 
@@ -20,10 +18,6 @@ vi.mock('../../../services/backendAdapter', () => ({
     backendUrl: undefined,
     init: mocks.backendInit,
   },
-}));
-vi.mock('../../../services/electronProxy', () => ({
-  isElectron: () => false,
-  electronProxy: { setProxy: mocks.electronSetProxy, testProxy: mocks.electronTestProxy },
 }));
 vi.mock('../../../services/rpcDownloadService', () => ({ testRpcDownload: mocks.testRpcDownload }));
 

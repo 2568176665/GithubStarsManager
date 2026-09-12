@@ -21,7 +21,6 @@ vi.mock('../../../store/useAppStore', () => ({
 vi.mock('../../../hooks/useDialog', () => ({
   useDialog: () => ({ toast: vi.fn(), confirm: vi.fn() }),
 }));
-vi.mock('../../../services/electronProxy', () => ({ isElectron: () => false }));
 
 describe('useMcpActions', () => {
   it('does not query unsupported MCP admin APIs in Worker mode', async () => {

@@ -1,8 +1,8 @@
+import { useAppStore } from '../../store/useAppStore';
 import { Input } from '../ui/input';
 import { Button } from '../ui/button';
 import { Switch } from '../ui/switch';
-import { NumberInput } from '../ui/NumberInput';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   Cable,
   CheckCircle,
@@ -13,44 +13,28 @@ import {
   RefreshCw,
   AlertCircle,
 } from 'lucide-react';
-import { useAppStore } from '../../store/useAppStore';
 import { useShallow } from 'zustand/react/shallow';
-import { isElectron } from '../../services/electronProxy';
 import { useDialog } from '../../hooks/useDialog';
 import { useMcpActions } from '../../features/settings/hooks/useMcpActions';
-import { MCP_DEFAULT_PORT, normalizeMcpHost } from '../../utils/mcpHost';
 
 interface McpSettingsPanelProps {
   t: (zh: string, en: string) => string;
 }
 
 export const McpSettingsPanel: React.FC<McpSettingsPanelProps> = ({ t }) => {
-  const { mcpConfig, setMcpConfig, language } = useAppStore(useShallow((state) => ({
+  const { mcpConfig, language } = useAppStore(useShallow((state) => ({
     mcpConfig: state.mcpConfig,
-    setMcpConfig: state.setMcpConfig,
     language: state.language,
   })));
   const { toast } = useDialog();
   const { loading, saving, error, backendMode, vectorAvailable, endpoints, refresh: refreshFromBackend, toggle: handleToggle, resetToken: handleResetToken } = useMcpActions({ t });
   const [showToken, setShowToken] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [portInput, setPortInput] = useState(String(mcpConfig.port || MCP_DEFAULT_PORT));
-
-  const isElectronApp = isElectron();
-
-  useEffect(() => {
-    setPortInput(String(mcpConfig.port || MCP_DEFAULT_PORT));
-  }, [mcpConfig.port]);
 
   const baseUrl = useMemo(() => {
-    // Electron local MCP always listens on loopback (shared host normalizer)
-    if (isElectronApp && !backendMode) {
-      const host = normalizeMcpHost(mcpConfig.host);
-      return `http://${host}:${mcpConfig.port || MCP_DEFAULT_PORT}`;
-    }
-    // Backend / Docker: agents should hit the same origin nginx proxies (/mcp)
+    // Backend / Worker: agents hit the same origin (/mcp)
     return window.location.origin;
-  }, [backendMode, isElectronApp, mcpConfig.host, mcpConfig.port]);
+  }, []);
 
   const mcpHttpUrl = `${baseUrl}${endpoints.streamableHttp}`;
   const mcpSseUrl = `${baseUrl}${endpoints.sse}`;
@@ -137,9 +121,7 @@ export const McpSettingsPanel: React.FC<McpSettingsPanelProps> = ({ t }) => {
             <p className="text-xs text-muted-foreground dark:text-muted-foreground mt-1">
               {backendMode
                 ? t('后端模式：挂载于 /mcp', 'Backend mode: mounted at /mcp')
-                : isElectronApp
-                  ? t('客户端本地模式：127.0.0.1', 'Desktop local mode: 127.0.0.1')
-                  : t('需要后端连接', 'Requires backend connection')}
+                : t('需要后端连接', 'Requires backend connection')}
             </p>
           </div>
           <Switch
@@ -189,50 +171,6 @@ export const McpSettingsPanel: React.FC<McpSettingsPanelProps> = ({ t }) => {
           </p>
         )}
       </div>
-
-      {/* Electron local port */}
-      {isElectronApp && !backendMode && (
-        <div className="p-6 bg-card dark:bg-card rounded-xl border border-border dark:border-border space-y-3">
-          <h4 className="font-medium text-foreground dark:text-foreground">
-            {t('本地监听', 'Local Listen')}
-          </h4>
-          <div className="grid grid-cols-2 gap-3 max-w-md">
-            <label className="text-sm text-muted-foreground dark:text-muted-foreground">
-              {t('主机', 'Host')}
-              <Input
-                type="text"
-                value={mcpConfig.host}
-                onChange={(e) => setMcpConfig({ host: e.target.value })}
-                className="mt-1 w-full px-3 py-2 rounded-lg border border-border dark:border-border bg-muted dark:bg-muted/40 text-foreground dark:text-foreground text-sm"
-              />
-            </label>
-            <label className="text-sm text-muted-foreground dark:text-muted-foreground">
-              {t('端口', 'Port')}
-              <NumberInput
-                min={1}
-                max={65535}
-                draftValue={portInput}
-                onDraftChange={(value) => {
-                  setPortInput(value);
-                  const parsed = Number(value);
-                  if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535) {
-                    setMcpConfig({ port: parsed });
-                  }
-                }}
-                onDraftCommit={(parsed) => {
-                  const port = parsed ?? MCP_DEFAULT_PORT;
-                  setPortInput(String(port));
-                  setMcpConfig({ port });
-                }}
-                className="mt-1 w-full"
-              />
-            </label>
-          </div>
-          <p className="text-xs text-muted-foreground dark:text-muted-foreground">
-            {t('默认仅绑定 127.0.0.1，仅本机 Agent 可访问。', 'Binds to 127.0.0.1 by default; local agents only.')}
-          </p>
-        </div>
-      )}
 
       {/* Token */}
       <div className="p-6 bg-card dark:bg-card rounded-xl border border-border dark:border-border space-y-3">

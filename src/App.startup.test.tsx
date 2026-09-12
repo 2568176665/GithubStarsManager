@@ -39,9 +39,6 @@ const mocks = vi.hoisted(() => {
     startAutoSync: vi.fn(),
     stopAutoSync: vi.fn(),
     tryRestoreAuthFromBackend: vi.fn(),
-    startMcpElectronBridge: vi.fn(),
-    stopMcpElectronBridge: vi.fn(),
-    refreshMcpElectronBridge: vi.fn(),
     useAutoUpdateCheck: vi.fn(),
     loadedViews: new Set<string>(),
   };
@@ -65,11 +62,6 @@ vi.mock('./services/logger', () => ({
   },
 }));
 vi.mock('./hooks/useAutoUpdateCheck', () => ({ useAutoUpdateCheck: mocks.useAutoUpdateCheck }));
-vi.mock('./services/mcpElectronBridge', () => ({
-  startMcpElectronBridge: mocks.startMcpElectronBridge,
-  stopMcpElectronBridge: mocks.stopMcpElectronBridge,
-  refreshMcpElectronBridge: mocks.refreshMcpElectronBridge,
-}));
 vi.mock('./services/autoSync', async () => {
   const actual = await vi.importActual<typeof import('./services/autoSync')>('./services/autoSync');
   return {

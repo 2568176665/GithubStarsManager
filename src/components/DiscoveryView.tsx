@@ -462,10 +462,6 @@ export const DiscoveryView: React.FC = React.memo(() => {
   const appliedTopicRef = useRef<{ topic: string | null; platform: DiscoveryPlatform } | null>(null);
 
   const isAnalyzingThisChannel = isAnalyzing && analysisProgress.total > 0;
-  const isDesktopSafeMode = useMemo(() => {
-    if (typeof window === 'undefined') return false;
-    return window.location.protocol === 'file:' || navigator.userAgent.includes('Electron');
-  }, []);
   const safeDiscoveryChannels = useMemo(
     () => Array.isArray(discoveryChannels) ? discoveryChannels.filter(Boolean) : [],
     [discoveryChannels]
@@ -811,12 +807,10 @@ export const DiscoveryView: React.FC = React.memo(() => {
           {/* 内容区域 */}
           <div 
             ref={scrollContainerRef}
-            className={`flex-1 overflow-y-auto space-y-4 pr-2 ${isDesktopSafeMode ? 'bg-card dark:bg-card' : ''}`}
+            className="flex-1 overflow-y-auto space-y-4 pr-2"
           >
             {selectedDiscoveryChannel === 'search' && (
-              <div className={isDesktopSafeMode
-                ? 'ui-toolbar p-4 space-y-4'
-                : 'ui-toolbar p-5 space-y-4'}>
+              <div className="ui-toolbar p-5 space-y-4">
                 <div className="flex flex-col sm:flex-row gap-3">
                   <div className="flex-1 relative">
                     <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground dark:text-muted-foreground" />
@@ -909,15 +903,9 @@ export const DiscoveryView: React.FC = React.memo(() => {
               <div className="flex flex-col items-center justify-center py-16 gap-5 text-center">
                 {selectedDiscoveryChannel === 'search' ? (
                   <>
-                    {isDesktopSafeMode ? (
-                      <div className="w-16 h-16 rounded-2xl bg-muted dark:bg-card flex items-center justify-center text-muted-foreground dark:text-muted-foreground border border-border dark:border-border">
-                        {currentChannelIconNode}
-                      </div>
-                    ) : (
-                      <div className={`w-20 h-20 rounded-3xl bg-gradient-to-br ${currentChannelStyle.gradient} flex items-center justify-center shadow-md ${currentChannelStyle.shadow}`}>
-                        {currentChannelStyle.largeIcon}
-                      </div>
-                    )}
+                    <div className={`w-20 h-20 rounded-3xl bg-gradient-to-br ${currentChannelStyle.gradient} flex items-center justify-center shadow-md ${currentChannelStyle.shadow}`}>
+                      {currentChannelStyle.largeIcon}
+                    </div>
                     <div className="space-y-2 max-w-xs">
                       <p className="text-muted-foreground dark:text-muted-foreground font-medium text-base">
                         {t('搜索发现', 'Search & Discover')}
@@ -929,15 +917,9 @@ export const DiscoveryView: React.FC = React.memo(() => {
                   </>
                 ) : (
                   <>
-                    {isDesktopSafeMode ? (
-                      <div className="w-16 h-16 rounded-2xl bg-muted dark:bg-card flex items-center justify-center text-muted-foreground dark:text-muted-foreground border border-border dark:border-border">
-                        {currentChannelIconNode}
-                      </div>
-                    ) : (
-                      <div className={`w-20 h-20 rounded-3xl bg-gradient-to-br ${currentChannelStyle.gradient} flex items-center justify-center shadow-md ${currentChannelStyle.shadow}`}>
-                        {currentChannelStyle.largeIcon}
-                      </div>
-                    )}
+                    <div className={`w-20 h-20 rounded-3xl bg-gradient-to-br ${currentChannelStyle.gradient} flex items-center justify-center shadow-md ${currentChannelStyle.shadow}`}>
+                      {currentChannelStyle.largeIcon}
+                    </div>
                     <div className="space-y-2 max-w-xs">
                       <p className="text-muted-foreground dark:text-muted-foreground font-medium text-base">
                         {t('暂无数据', 'No data yet')}
@@ -950,9 +932,7 @@ export const DiscoveryView: React.FC = React.memo(() => {
                       variant="default"
                       onClick={() => refreshChannel(selectedDiscoveryChannel, 1, false)}
                       disabled={currentIsLoading}
-                      className={isDesktopSafeMode
-                        ? 'flex items-center gap-2 rounded-lg bg-primary px-6 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90'
-                        : 'flex items-center gap-2 rounded-xl bg-primary px-6 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90'}
+                      className="flex items-center gap-2 rounded-xl bg-primary px-6 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
                     >
                       <RefreshCw className="w-4 h-4" />
                       {t('立即刷新', 'Refresh Now')}
@@ -963,10 +943,10 @@ export const DiscoveryView: React.FC = React.memo(() => {
             )}
 
             {allRepos.length > 0 && (
-              <div className={isDesktopSafeMode ? 'space-y-3' : 'space-y-4'}>
+              <div className="space-y-4">
                 {allRepos.map((repo, index) => (
                   <div key={repo.id} data-repo-index={index}>
-                    <SubscriptionRepoCard repo={repo} desktopSafeMode={isDesktopSafeMode} />
+                    <SubscriptionRepoCard repo={repo} />
                   </div>
                 ))}
               </div>
@@ -1002,9 +982,7 @@ export const DiscoveryView: React.FC = React.memo(() => {
 
             {/* Page Info */}
             {!currentIsLoading && allRepos.length > 0 && (
-              <div className={isDesktopSafeMode
-                ? 'flex items-center justify-between py-3.5 px-5 bg-background dark:bg-card rounded-lg border border-border dark:border-border text-sm'
-                : 'flex items-center justify-between py-3.5 px-5 bg-gradient-to-r from-muted/60 to-muted/30 rounded-xl border border-border/60 dark:border-border/50 text-sm'}>
+              <div className="flex items-center justify-between py-3.5 px-5 bg-gradient-to-r from-muted/60 to-muted/30 rounded-xl border border-border/60 dark:border-border/50 text-sm">
                 <div className="flex items-center gap-2 text-muted-foreground dark:text-muted-foreground">
                   <div className="w-1.5 h-1.5 rounded-full bg-primary" />
                   <span>

@@ -15,7 +15,6 @@ const mocks = vi.hoisted(() => {
       selector ? selector(storeState) : storeState
     )),
     backend: { isAvailable: true },
-    isElectron: vi.fn(() => false),
     panels: {
       general: panel('general'),
       starSync: panel('star-sync'),
@@ -36,7 +35,6 @@ const mocks = vi.hoisted(() => {
 
 vi.mock('../store/useAppStore', () => ({ useAppStore: mocks.useAppStore }));
 vi.mock('../services/backendAdapter', () => ({ backend: mocks.backend }));
-vi.mock('../services/electronProxy', () => ({ isElectron: mocks.isElectron }));
 vi.mock('./settings', () => ({
   GeneralPanel: mocks.panels.general,
   StarSyncPanel: mocks.panels.starSync,
@@ -101,7 +99,7 @@ describe('SettingsPanel', () => {
     }
   });
 
-  it('hides long-lived backend tabs when neither a backend nor Electron is available', () => {
+  it('hides long-lived backend tabs when no backend is available', () => {
     mocks.backend.isAvailable = false;
 
     render(<SettingsPanel />);

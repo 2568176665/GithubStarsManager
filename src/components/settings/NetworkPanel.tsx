@@ -31,7 +31,7 @@ export const NetworkPanel: React.FC<NetworkPanelProps> = ({ t }) => {
 
   return (
     <div className="space-y-4">
-      {/* Network Proxy Card — only available with backend or Electron */}
+      {/* Network Proxy Card — only available with backend */}
       {canUseProxy && (
       <div className="p-6 bg-card dark:bg-card rounded-xl border border-border dark:border-border">
         <div className="flex items-center justify-between mb-4">

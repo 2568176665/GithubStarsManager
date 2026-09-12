@@ -20,7 +20,6 @@ import { useAppStore } from '../store/useAppStore';
 import { useShallow } from 'zustand/react/shallow';
 import { Button } from './ui/button';
 import { Dialog, DialogContent, DialogTitle } from './ui/dialog';
-import { isElectron } from '../services/electronProxy';
 import { useBackendAvailability } from '../features/settings/hooks/useBackendAvailability';
 import {
   GeneralPanel,
@@ -367,7 +366,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
       label: t('诊断日志', 'Diagnostic Logs'),
       icon: <ScrollText className="w-5 h-5" />,
     },
-    ...((isElectron() || backendAvailable) ? [{
+    ...((backendAvailable) ? [{
       id: 'network' as SettingsTab,
       label: t('网络设置', 'Network'),
       icon: <Wifi className="w-5 h-5" />,
@@ -377,8 +376,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
       label: t('向量搜索', 'Vector Search'),
       icon: <Search className="w-5 h-5" />,
     },
-    // MCP requires a long-lived process: backend or Electron main. Hide for pure SPA.
-    ...((isElectron() || backendAvailable) ? [{
+    // MCP requires a long-lived process: the Worker backend. Hide for pure SPA.
+    ...((backendAvailable) ? [{
       id: 'mcp' as SettingsTab,
       label: t('MCP服务', 'MCP Server'),
       icon: <Cable className="w-5 h-5" />,

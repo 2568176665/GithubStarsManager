@@ -3,7 +3,6 @@ import { useShallow } from 'zustand/react/shallow';
 import type { ProxyConfig, RpcDownloadConfig } from '../../../types';
 import { useAppStore } from '../../../store/useAppStore';
 import { backend } from '../../../services/backendAdapter';
-import { electronProxy, isElectron } from '../../../services/electronProxy';
 import { testRpcDownload } from '../../../services/rpcDownloadService';
 
 interface UseNetworkActionsOptions {
@@ -112,7 +111,6 @@ export const useNetworkActions = ({ t }: UseNetworkActionsOptions): NetworkActio
   }), [backendApiSecret]);
 
   const putProxy = useCallback(async (config: ProxyConfig) => {
-    if (isElectron()) await electronProxy.setProxy(config);
     if (backend.isAvailable) {
       const response = await fetch('/api/settings/proxy', {
         method: 'PUT', headers: backendHeaders(), body: JSON.stringify(config),
@@ -128,28 +126,22 @@ export const useNetworkActions = ({ t }: UseNetworkActionsOptions): NetworkActio
     if (!isFormValid) return;
     setSaving(true);
     setTestResult(null);
-    const previous = proxyConfig;
     try {
       await putProxy(form);
       // Store persists the complete proxy configuration, including authentication credentials.
       setProxyConfig(form);
     } catch (reason) {
-      if (isElectron()) {
-        try { await electronProxy.setProxy(previous); } catch { /* best-effort rollback */ }
-      }
       setTestResult({ success: false, error: reason instanceof Error ? reason.message : t('保存失败', 'Save failed') });
     } finally {
       setSaving(false);
     }
-  }, [form, isFormValid, proxyConfig, putProxy, setProxyConfig, t]);
+  }, [form, isFormValid, putProxy, setProxyConfig, t]);
 
   const testProxy = useCallback(async () => {
     setTesting(true);
     setTestResult(null);
     try {
-      if (isElectron()) {
-        setTestResult(await electronProxy.testProxy(form));
-      } else if (backend.isAvailable) {
+      if (backend.isAvailable) {
         const response = await fetch('/api/settings/proxy/test', {
           method: 'POST', headers: backendHeaders(), body: JSON.stringify(form),
         });
@@ -165,7 +157,6 @@ export const useNetworkActions = ({ t }: UseNetworkActionsOptions): NetworkActio
   const toggleProxy = useCallback(async (enabled: boolean) => {
     if (isProxyToggling) return;
     const previousForm = form;
-    const previousConfig = proxyConfig;
     const nextConfig = { ...proxyConfig, enabled };
     setIsProxyToggling(true);
     setForm((current) => ({ ...current, enabled }));
@@ -174,9 +165,6 @@ export const useNetworkActions = ({ t }: UseNetworkActionsOptions): NetworkActio
       await putProxy(nextConfig);
       setProxyConfig(nextConfig);
     } catch (reason) {
-      if (isElectron()) {
-        try { await electronProxy.setProxy(previousConfig); } catch { /* best-effort rollback */ }
-      }
       setForm(previousForm);
       setTestResult({ success: false, error: reason instanceof Error ? reason.message : t('保存失败', 'Save failed') });
     } finally {
@@ -243,7 +231,7 @@ export const useNetworkActions = ({ t }: UseNetworkActionsOptions): NetworkActio
   }, [isRpcToggling, putRpc, rpcDownloadConfig, rpcForm, setRpcDownloadConfig, t]);
 
   return {
-    canUseProxy: isElectron() || backend.isAvailable,
+    canUseProxy: backend.isAvailable,
     form, rpcForm, testing, saving, isProxyToggling, testResult,
     rpcTesting, rpcSaving, isRpcToggling, rpcTestResult, hasStoredSecret,
     isFormValid, isRpcFormValid,

@@ -6,8 +6,6 @@ const path = require('path');
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const PACKAGE_PATH = path.join(PROJECT_ROOT, 'package.json');
 const LOCKFILE_PATH = path.join(PROJECT_ROOT, 'package-lock.json');
-const SERVER_PACKAGE_PATH = path.join(PROJECT_ROOT, 'server/package.json');
-const SERVER_LOCKFILE_PATH = path.join(PROJECT_ROOT, 'server/package-lock.json');
 const VERSION_XML_PATH = path.join(PROJECT_ROOT, 'versions/version-info.xml');
 const RELEASE_LOCK_PATH = path.join(PROJECT_ROOT, '.release-version.lock');
 const RELEASE_LOCK_TAKENOVER_PATH = path.join(PROJECT_ROOT, '.release-version.lock.takenover');
@@ -16,8 +14,6 @@ const PACKAGE_SYNC_JOURNAL_PATH = path.join(PROJECT_ROOT, '.package-sync.transac
 const PACKAGE_SYNC_BACKUP_DIR = path.join(PROJECT_ROOT, '.package-sync-backups');
 const PACKAGE_SYNC_TARGETS = [
   { name: 'package-lock.json', path: LOCKFILE_PATH },
-  { name: 'server/package.json', path: SERVER_PACKAGE_PATH },
-  { name: 'server/package-lock.json', path: SERVER_LOCKFILE_PATH },
 ];
 
 /**
@@ -60,8 +56,6 @@ function updateVersionInfo() {
 
   let releaseLock;
   let stagedLockfilePath;
-  let stagedServerPackagePath;
-  let stagedServerLockfilePath;
   let stagedXmlPath;
   let packageTransaction;
   let packageSnapshots;
@@ -78,8 +72,6 @@ function updateVersionInfo() {
     validateVersion(version);
     const xmlContext = loadVersionXml(version);
     stagedLockfilePath = stageSyncedPackageLock(LOCKFILE_PATH, version);
-    stagedServerPackagePath = stageSyncedServerPackage(version);
-    stagedServerLockfilePath = stageSyncedPackageLock(SERVER_LOCKFILE_PATH, version);
     stagedXmlPath = stageVersionXml(xmlContext, version, releaseArgs.changelog, releaseArgs.customDownloadUrl);
     packageSnapshots = createFileSnapshots(PACKAGE_SYNC_TARGETS.map(({ path: targetPath }) => targetPath));
     packageTransaction = createPackageSyncTransaction(version);
@@ -87,8 +79,6 @@ function updateVersionInfo() {
     try {
       commitPackageSyncTargets(version, packageTransaction, {
         stagedLockfilePath,
-        stagedServerPackagePath,
-        stagedServerLockfilePath,
       });
       packageFilesCommitted = true;
       packageTransaction = null;
@@ -121,8 +111,6 @@ function updateVersionInfo() {
     process.exitCode = 1;
   } finally {
     cleanupStagedFile(stagedLockfilePath);
-    cleanupStagedFile(stagedServerPackagePath);
-    cleanupStagedFile(stagedServerLockfilePath);
     cleanupStagedFile(stagedXmlPath);
     releaseReleaseLock(releaseLock);
   }
@@ -152,7 +140,7 @@ function syncLockfileFromRootVersion() {
       }
       throw error;
     }
-    console.log(`📦 已将根与 server package-lock.json 同步为根 package.json 的版本 v${version}`);
+    console.log(`📦 已将根 package-lock.json 同步为根 package.json 的版本 v${version}`);
   } catch (error) {
     console.error('❌ 同步 package-lock.json 失败:', error.message);
     process.exitCode = 1;
@@ -217,18 +205,12 @@ function readReleaseLockPid(lockPath) {
 function commitPackageSyncTargets(version, transaction, staged = {}) {
   const stagedPaths = {
     lockfile: staged.stagedLockfilePath || null,
-    serverPackage: staged.stagedServerPackagePath || null,
-    serverLockfile: staged.stagedServerLockfilePath || null,
   };
 
   try {
     stagedPaths.lockfile ||= stageSyncedPackageLock(LOCKFILE_PATH, version);
-    stagedPaths.serverPackage ||= stageSyncedServerPackage(version);
-    stagedPaths.serverLockfile ||= stageSyncedPackageLock(SERVER_LOCKFILE_PATH, version);
 
     fs.renameSync(stagedPaths.lockfile, LOCKFILE_PATH);
-    fs.renameSync(stagedPaths.serverPackage, SERVER_PACKAGE_PATH);
-    fs.renameSync(stagedPaths.serverLockfile, SERVER_LOCKFILE_PATH);
     for (const target of PACKAGE_SYNC_TARGETS) {
       syncDirectory(path.dirname(target.path));
     }
@@ -237,8 +219,6 @@ function commitPackageSyncTargets(version, transaction, staged = {}) {
     cleanupPackageSyncTransaction(transaction);
   } finally {
     cleanupStagedFile(stagedPaths.lockfile);
-    cleanupStagedFile(stagedPaths.serverPackage);
-    cleanupStagedFile(stagedPaths.serverLockfile);
   }
 }
 
@@ -592,12 +572,6 @@ function stageSyncedPackageLock(lockfilePath, version) {
   return stageFile(lockfilePath, `${JSON.stringify(packageLock, null, 2)}\n`);
 }
 
-function stageSyncedServerPackage(version) {
-  const packageJson = JSON.parse(fs.readFileSync(SERVER_PACKAGE_PATH, 'utf8'));
-  packageJson.version = version;
-  return stageFile(SERVER_PACKAGE_PATH, `${JSON.stringify(packageJson, null, 2)}\n`);
-}
-
 function stageVersionXml(xmlContext, version, changelog, customDownloadUrl) {
   const currentDate = new Date().toISOString().split('T')[0];
   const downloadUrl = customDownloadUrl === null
@@ -669,11 +643,8 @@ function restoreFileSnapshot(snapshot) {
 }
 
 function verifyRootVersionSync(version) {
-  const serverPackage = JSON.parse(fs.readFileSync(SERVER_PACKAGE_PATH, 'utf8'));
-  const serverPackageLock = JSON.parse(fs.readFileSync(SERVER_LOCKFILE_PATH, 'utf8'));
   const packageLock = JSON.parse(fs.readFileSync(LOCKFILE_PATH, 'utf8'));
   const lockRootVersion = packageLock.packages?.['']?.version;
-  const serverLockRootVersion = serverPackageLock.packages?.['']?.version;
 
   if (readRootPackageVersion() !== version) {
     throw new Error(`package.json 版本在同步期间变更，预期为 ${version}`);
@@ -681,14 +652,6 @@ function verifyRootVersionSync(version) {
 
   if (packageLock.version !== version || lockRootVersion !== version) {
     throw new Error(`package-lock.json 的根包版本未同步为 ${version}`);
-  }
-
-  if (serverPackage.version !== version) {
-    throw new Error(`server/package.json 版本未同步为 ${version}`);
-  }
-
-  if (serverPackageLock.version !== version || serverLockRootVersion !== version) {
-    throw new Error(`server/package-lock.json 的根包版本未同步为 ${version}`);
   }
 }
 
@@ -751,8 +714,7 @@ function showHelp() {
   console.log('  npm run update-version -- "修复已知问题" "提升用户体验"');
   console.log('  npm run update-version -- "优化性能" --url=https://example.com/download\n');
   console.log('注意:');
-  console.log('  • 根与 server 的 package-lock.json，以及 server/package.json 的版本由根 package.json 自动同步。');
-  console.log('  • electron/package.json 不维护独立应用版本；Electron Builder 使用根 package.json。');
+  console.log('  • 根 package-lock.json 的版本由根 package.json 自动同步。');
   console.log('  • 版本同步期间会持有仓库独占锁，防止并发发布互相覆盖。');
   console.log('  • --url= 会被视为无效参数，避免静默回退到默认下载链接。');
 }

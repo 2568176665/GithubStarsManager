@@ -1,21 +1,21 @@
 # Repository Guidelines
 
+这个fork仓库是专门用来部署 Cloudflare Worker 的，只保留前端（`src/`）和 Worker（`cloudflare-worker/`）代码。
+
 ## Project Structure & Module Organization
 
 - `src/` contains the Vite React/TypeScript frontend: components, feature logic, Zustand state, services, utilities, and types are grouped by directory.
-- `server/` is the optional Express + SQLite backend; implementation and tests are under `server/src/` and `server/tests/`.
-- `cloudflare-worker/` contains the Worker and D1 migrations. `electron/` contains the desktop shell and preload bridge.
+- `cloudflare-worker/` contains the Worker, API routes, and D1 migrations.
 - Put static assets in `public/` or `assets/`, documentation/ADRs in `docs/`, and treat `dist/` as generated output.
 
 ## Build, Test, and Development Commands
 
 Run `npm install` at the repository root first.
 
-- `npm run dev` starts Vite; `npm run dev:all` starts frontend and backend together.
-- `npm run build` creates the frontend bundle and checks size limits; `npm run build:all` also builds the backend.
+- `npm run dev` starts Vite.
+- `npm run build` creates the frontend bundle and checks size limits.
 - `npm run lint`, `npm run typecheck`, and `npm run check:boundaries` run ESLint, TypeScript, and layering checks.
 - `npm run test:run` runs frontend Vitest tests; `npm run test` starts watch mode and `npm run test:coverage` writes reports.
-- `cd server && npm test` runs backend tests; `npm run dev` and `npm run build` develop and compile it.
 - `cd cloudflare-worker && npm run dev` runs the Worker locally; deploy with `npm run deploy` only when needed.
 
 ### Wrangler 部署
@@ -28,7 +28,7 @@ Use TypeScript with two-space indentation, single quotes, semicolons, and the ex
 
 ## Testing Guidelines
 
-Frontend and backend tests use Vitest; frontend UI tests use Testing Library with `jsdom`. Add focused tests for behavior changes, colocated with the implementation or under a feature’s `__tests__/` directory. No coverage threshold is enforced, but run coverage for substantial changes.
+Frontend tests use Vitest; frontend UI tests use Testing Library with `jsdom`. Add focused tests for behavior changes, colocated with the implementation or under a feature’s `__tests__/` directory. No coverage threshold is enforced, but run coverage for substantial changes.
 
 ## Commit & Pull Request Guidelines
 
@@ -36,4 +36,4 @@ Follow the repository’s Conventional Commit style, such as `fix: repair sync f
 
 ## Security & Configuration Tips
 
-Never commit API keys, tokens, encryption keys, database files, or local `.env` files. Use documented environment examples and test proxy/auth changes. Review `README.md`, `DOCKER.md`, and Worker/server docs before changing deployment configuration.
+Never commit API keys, tokens, encryption keys, database files, or local `.env` files. Use documented environment examples and test proxy/auth changes. Review `README.md` and Worker docs before changing deployment configuration.

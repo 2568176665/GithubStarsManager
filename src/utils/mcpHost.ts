@@ -1,11 +1,9 @@
-/** Default loopback bind for desktop MCP. */
+/** Default host kept for snapshot compatibility with previously synced configs. */
 export const MCP_DEFAULT_HOST = '127.0.0.1';
 export const MCP_DEFAULT_PORT = 3927;
 
 /**
- * Normalize MCP listen host for display and bind.
- * Maps unset / wildcard hosts to 127.0.0.1; non-loopback hosts are forced to loopback
- * (desktop MCP must not expose the token surface on 0.0.0.0 / public interfaces).
+ * Normalize MCP host for display; maps unset / wildcard hosts to 127.0.0.1.
  */
 export function normalizeMcpHost(raw: unknown): string {
   if (typeof raw !== 'string' || !raw.trim()) return MCP_DEFAULT_HOST;

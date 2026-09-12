@@ -8,22 +8,12 @@ import {
   syncLocalGitHubTokenToBackend,
   tryRestoreAuthFromBackend,
 } from '../../services/autoSync';
-import {
-  refreshMcpElectronBridge,
-  startMcpElectronBridge,
-  stopMcpElectronBridge,
-} from '../../services/mcpElectronBridge';
-
 /**
- * Owns application-wide backend and Electron MCP startup after Store hydration.
+ * Owns application-wide backend startup after Store hydration.
  * Local state remains usable whenever backend probing or remote synchronization
  * fails, and the auto-sync subscription is released on unmount.
  */
 export const useBackendLifecycle = (hasHydrated: boolean): void => {
-  useEffect(() => {
-    return () => stopMcpElectronBridge();
-  }, []);
-
   useEffect(() => {
     if (!hasHydrated) return;
 
@@ -74,13 +64,6 @@ export const useBackendLifecycle = (hasHydrated: boolean): void => {
       } catch (error) {
         // Backend availability is optional. Preserve local-only application use.
         console.error('Failed to initialize backend:', error);
-      } finally {
-        // Resolve the Electron MCP target after a successful or failed backend
-        // probe so it can choose backend MCP or the local loopback bridge.
-        if (!cancelled) {
-          startMcpElectronBridge();
-          refreshMcpElectronBridge();
-        }
       }
     };
 

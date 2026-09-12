@@ -13,10 +13,9 @@ interface SubscriptionRepoCardProps {
   repo: DiscoveryRepo;
   onStar?: (repo: DiscoveryRepo) => void;
   onAnalyze?: (repo: DiscoveryRepo) => void;
-  desktopSafeMode?: boolean;
 }
 
-export const SubscriptionRepoCard: React.FC<SubscriptionRepoCardProps> = ({ repo, onStar, onAnalyze, desktopSafeMode = false }) => {
+export const SubscriptionRepoCard: React.FC<SubscriptionRepoCardProps> = ({ repo, onStar, onAnalyze }) => {
   const language = useAppStore(state => state.language);
   const githubToken = useAppStore(state => state.githubToken);
 
@@ -119,7 +118,7 @@ export const SubscriptionRepoCard: React.FC<SubscriptionRepoCardProps> = ({ repo
           {/* Header */}
           <div className="flex items-start justify-between gap-3 mb-2">
             <div className="flex items-center gap-2 min-w-0">
-              {!desktopSafeMode && repo.owner?.avatar_url && (
+              {repo.owner?.avatar_url && (
                 <img
                   src={repo.owner.avatar_url}
                   alt={repo.owner.login}

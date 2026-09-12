@@ -14,7 +14,6 @@ function writeJson(filePath, value) {
 function createFixture({ version = '1.2.3', derivedVersion = '0.1.0' } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsm-update-version-'));
   fs.mkdirSync(path.join(root, 'scripts'));
-  fs.mkdirSync(path.join(root, 'server'));
   fs.mkdirSync(path.join(root, 'versions'));
   fs.copyFileSync(SCRIPT_SOURCE, path.join(root, 'scripts', 'update-version.cjs'));
 
@@ -34,23 +33,6 @@ function createFixture({ version = '1.2.3', derivedVersion = '0.1.0' } = {}) {
       },
     },
   });
-  writeJson(path.join(root, 'server', 'package.json'), {
-    name: 'github-stars-manager-server-fixture',
-    version: derivedVersion,
-    private: true,
-  });
-  writeJson(path.join(root, 'server', 'package-lock.json'), {
-    name: 'github-stars-manager-server-fixture',
-    version: derivedVersion,
-    lockfileVersion: 3,
-    requires: true,
-    packages: {
-      '': {
-        name: 'github-stars-manager-server-fixture',
-        version: derivedVersion,
-      },
-    },
-  });
   fs.writeFileSync(
     path.join(root, 'versions', 'version-info.xml'),
     '<?xml version="1.0" encoding="UTF-8"?>\n<versions>\n</versions>\n'
@@ -60,11 +42,7 @@ function createFixture({ version = '1.2.3', derivedVersion = '0.1.0' } = {}) {
 }
 
 function targetPaths(root) {
-  return [
-    path.join(root, 'package-lock.json'),
-    path.join(root, 'server', 'package.json'),
-    path.join(root, 'server', 'package-lock.json'),
-  ];
+  return [path.join(root, 'package-lock.json')];
 }
 
 function transactionPaths(root) {
@@ -76,16 +54,11 @@ function transactionPaths(root) {
 }
 
 function readVersions(root) {
-  const [packageLock, serverPackage, serverPackageLock] = targetPaths(root).map((filePath) =>
-    JSON.parse(fs.readFileSync(filePath, 'utf8'))
-  );
+  const packageLock = JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8'));
   return {
     root: JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version,
     packageLock: packageLock.version,
     packageLockRoot: packageLock.packages[''].version,
-    serverPackage: serverPackage.version,
-    serverPackageLock: serverPackageLock.version,
-    serverPackageLockRoot: serverPackageLock.packages[''].version,
   };
 }
 
@@ -123,15 +96,10 @@ function createRenameFailurePreload(root) {
     `const fs = require('node:fs');
 const originalRenameSync = fs.renameSync;
 const targets = new Set(JSON.parse(process.env.GSM_TEST_RENAME_TARGETS));
-const failAfter = Number(process.env.GSM_TEST_FAIL_AFTER_RENAME);
-let targetRenameCount = 0;
 fs.renameSync = function patchedRenameSync(source, destination) {
   const result = originalRenameSync.call(this, source, destination);
   if (targets.has(destination)) {
-    targetRenameCount += 1;
-    if (targetRenameCount === failAfter) {
-      throw new Error('simulated interruption after target rename');
-    }
+    throw new Error('simulated interruption after target rename');
   }
   return result;
 };
@@ -187,9 +155,6 @@ test('normal release update synchronizes all derived files and removes transacti
       root: '1.2.3',
       packageLock: '1.2.3',
       packageLockRoot: '1.2.3',
-      serverPackage: '1.2.3',
-      serverPackageLock: '1.2.3',
-      serverPackageLockRoot: '1.2.3',
     });
     assert.match(
       fs.readFileSync(path.join(root, 'versions', 'version-info.xml'), 'utf8'),
@@ -202,33 +167,27 @@ test('normal release update synchronizes all derived files and removes transacti
   });
 });
 
-for (const failAfter of [1, 2]) {
-  test(`exception after target rename ${failAfter} restores the pre-transaction state`, async () => {
-    await withFixture(async (root) => {
-      const preloadPath = createRenameFailurePreload(root);
-      const result = await runScript(root, ['--sync-lock'], {
-        NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --require=${preloadPath}`.trim(),
-        GSM_TEST_RENAME_TARGETS: JSON.stringify(targetPaths(root)),
-        GSM_TEST_FAIL_AFTER_RENAME: String(failAfter),
-      });
-
-      assert.equal(result.code, 1);
-      assert.match(result.stderr, /simulated interruption after target rename/);
-      assert.deepEqual(readVersions(root), {
-        root: '1.2.3',
-        packageLock: '0.1.0',
-        packageLockRoot: '0.1.0',
-        serverPackage: '0.1.0',
-        serverPackageLock: '0.1.0',
-        serverPackageLockRoot: '0.1.0',
-      });
-      const paths = transactionPaths(root);
-      assert.equal(fs.existsSync(paths.journal), false);
-      assert.equal(fs.existsSync(paths.backupDir), false);
-      assert.equal(fs.existsSync(paths.lock), false);
+test('exception after target rename restores the pre-transaction state', async () => {
+  await withFixture(async (root) => {
+    const preloadPath = createRenameFailurePreload(root);
+    const result = await runScript(root, ['--sync-lock'], {
+      NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --require=${preloadPath}`.trim(),
+      GSM_TEST_RENAME_TARGETS: JSON.stringify(targetPaths(root)),
     });
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /simulated interruption after target rename/);
+    assert.deepEqual(readVersions(root), {
+      root: '1.2.3',
+      packageLock: '0.1.0',
+      packageLockRoot: '0.1.0',
+    });
+    const paths = transactionPaths(root);
+    assert.equal(fs.existsSync(paths.journal), false);
+    assert.equal(fs.existsSync(paths.backupDir), false);
+    assert.equal(fs.existsSync(paths.lock), false);
   });
-}
+});
 
 test('stale lock and interrupted transaction recover before the next sync', async () => {
   await withFixture(async (root) => {
@@ -240,9 +199,6 @@ test('stale lock and interrupted transaction recover before the next sync', asyn
       root: '1.2.3',
       packageLock: '1.2.3',
       packageLockRoot: '1.2.3',
-      serverPackage: '1.2.3',
-      serverPackageLock: '1.2.3',
-      serverPackageLockRoot: '1.2.3',
     });
     assert.equal(fs.existsSync(paths.journal), false);
     assert.equal(fs.existsSync(paths.backupDir), false);
@@ -254,9 +210,6 @@ test('stale lock and interrupted transaction recover before the next sync', asyn
       root: '1.2.3',
       packageLock: '1.2.3',
       packageLockRoot: '1.2.3',
-      serverPackage: '1.2.3',
-      serverPackageLock: '1.2.3',
-      serverPackageLockRoot: '1.2.3',
     });
     assert.equal(fs.existsSync(paths.journal), false);
     assert.equal(fs.existsSync(paths.backupDir), false);
@@ -277,9 +230,6 @@ test('recovery is idempotent when the same interrupted fixture is encountered ag
       root: '1.2.3',
       packageLock: '1.2.3',
       packageLockRoot: '1.2.3',
-      serverPackage: '1.2.3',
-      serverPackageLock: '1.2.3',
-      serverPackageLockRoot: '1.2.3',
     });
     assert.equal(fs.existsSync(secondPaths.journal), false);
     assert.equal(fs.existsSync(secondPaths.backupDir), false);
@@ -300,9 +250,6 @@ test('orphaned backups from a pre-journal crash are cleared before a new transac
       root: '1.2.3',
       packageLock: '1.2.3',
       packageLockRoot: '1.2.3',
-      serverPackage: '1.2.3',
-      serverPackageLock: '1.2.3',
-      serverPackageLockRoot: '1.2.3',
     });
     assert.equal(fs.existsSync(paths.backupDir), false);
     assert.equal(fs.existsSync(paths.journal), false);
@@ -322,9 +269,6 @@ test('a stale release lock without a transaction journal is taken over', async (
       root: '1.2.3',
       packageLock: '1.2.3',
       packageLockRoot: '1.2.3',
-      serverPackage: '1.2.3',
-      serverPackageLock: '1.2.3',
-      serverPackageLockRoot: '1.2.3',
     });
     assert.equal(fs.existsSync(paths.lock), false);
     assert.equal(fs.existsSync(`${paths.lock}.takenover`), false);
@@ -351,17 +295,12 @@ test('concurrent syncs recover the interrupted transaction in single flight', as
       root: '1.2.3',
       packageLock: '1.2.3',
       packageLockRoot: '1.2.3',
-      serverPackage: '1.2.3',
-      serverPackageLock: '1.2.3',
-      serverPackageLockRoot: '1.2.3',
     });
     assert.equal(fs.existsSync(paths.journal), false);
     assert.equal(fs.existsSync(paths.backupDir), false);
     assert.equal(fs.existsSync(paths.lock), false);
   });
 });
-
-
 
 test('a live lock owner is never taken over during recovery', async () => {
   await withFixture(async (root) => {
@@ -395,9 +334,6 @@ test('--sync-lock success path remains available without release metadata change
       root: '1.2.3',
       packageLock: '1.2.3',
       packageLockRoot: '1.2.3',
-      serverPackage: '1.2.3',
-      serverPackageLock: '1.2.3',
-      serverPackageLockRoot: '1.2.3',
     });
     assert.equal(fs.readFileSync(xmlPath, 'utf8'), beforeXml);
   });
