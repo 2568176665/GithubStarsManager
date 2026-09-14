@@ -31,10 +31,6 @@ vi.mock('../features/repositories/hooks/useRepositoryCardActions', () => ({
   useRepositoryCardActions: () => actionMocks.actions,
 }));
 
-vi.mock('./FloatingTooltip', () => ({
-  FloatingTooltip: () => null,
-}));
-
 vi.mock('./RepositoryEditModal', () => ({
   RepositoryEditModal: ({
     isOpen,

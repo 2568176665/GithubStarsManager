@@ -1,4 +1,3 @@
-import queryString from 'query-string';
 import { createCombinedAbortController } from '../utils/abortUtils';
 import { useAppStore } from '../store/useAppStore';
 import { AIService } from './aiService';
@@ -212,11 +211,12 @@ const translateWithMicrosoft = async (
   textType?: 'html' | 'plain'
 ): Promise<string[]> => {
   const { payload, restore } = protectBatch(texts, textType);
-  const url = `${MS_TRANSLATE_URL}?${queryString.stringify({
+  const searchParams = new URLSearchParams({
     from: from ? MICROSOFT_LANG[from] || from : '',
     to: MICROSOFT_LANG[to] || to,
     isEnterpriseClient: 'false',
-  })}`;
+  });
+  const url = `${MS_TRANSLATE_URL}?${searchParams.toString()}`;
 
   const data = await fetchWithTimeout<MsTranslateItem[]>(
     url,
@@ -254,11 +254,12 @@ const translateWithGoogle = async (
   textType?: 'html' | 'plain'
 ): Promise<string[]> => {
   const { payload, restore } = protectBatch(texts, textType);
-  const url = `${GOOGLE_TRANSLATE_URL}?${queryString.stringify({
+  const searchParams = new URLSearchParams({
     client: 'dict-chrome-ex',
     sl: from ? GOOGLE_LANG[from] || from : 'auto',
     tl: GOOGLE_LANG[to] || to,
-  })}`;
+  });
+  const url = `${GOOGLE_TRANSLATE_URL}?${searchParams.toString()}`;
 
   const results: string[] = [];
   let batch: string[] = [];
