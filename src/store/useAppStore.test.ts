@@ -802,15 +802,12 @@ describe('useAppStore theme preset', () => {
     expect(normalized.themePreset).toBe('default');
   });
 
-  it('restores a known persisted preset and switches it at runtime', () => {
-    const normalized = normalizePersistedState({ themePreset: 'deep-purple' }, useAppStore.getState());
-    expect(normalized.themePreset).toBe('deep-purple');
+  it('falls back to default preset for previous custom presets', () => {
+    const normalized = normalizePersistedState({ themePreset: 'deep-purple' as never }, useAppStore.getState());
+    expect(normalized.themePreset).toBe('default');
 
     useAppStore.setState({ themePreset: 'default' });
-    const themeBeforeSwitch = useAppStore.getState().theme;
-    useAppStore.getState().setThemePreset('deep-purple');
-    expect(useAppStore.getState().themePreset).toBe('deep-purple');
-    expect(useAppStore.getState().theme).toBe(themeBeforeSwitch);
+    expect(useAppStore.getState().themePreset).toBe('default');
   });
 });
 

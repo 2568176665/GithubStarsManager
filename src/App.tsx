@@ -14,9 +14,6 @@ import { SyncModeChoiceModal } from './components/SyncModeChoiceModal';
 import { useAppStore } from './store/useAppStore';
 import { selectAppShellState } from './store/selectors';
 import { useShallow } from 'zustand/react/shallow';
-import { applyThemePreset } from './lib/themePresets';
-import { loadThemeFonts } from './lib/themeFonts';
-import { getThemePreset } from './constants/themePresets';
 import { useAutoUpdateCheck } from './hooks/useAutoUpdateCheck';
 import { logger } from './services/logger';
 import { UpdateNotificationBanner } from './components/UpdateNotificationBanner';
@@ -219,7 +216,6 @@ function App() {
     isAuthenticated,
     selectedCategory,
     theme,
-    themePreset,
     hasHydrated,
     searchResults,
     searchFilters,
@@ -256,15 +252,10 @@ function App() {
     };
   }, [theme]);
 
-  // Theme preset (palette/radius/font/shadow skin) rides on data-theme.
+  // Ensure default theme is active without custom theme preset overrides.
   useEffect(() => {
-    applyThemePreset(themePreset);
-  }, [themePreset]);
-
-  // Font files are fetched only for the active preset and never delay rendering.
-  useEffect(() => {
-    void loadThemeFonts(getThemePreset(themePreset));
-  }, [themePreset]);
+    delete document.documentElement.dataset.theme;
+  }, []);
 
   const handleCategorySelect = useCallback((category: string) => {
     // 相似仓库视图下点击分类 = 离开相似视图并切换到该分类，避免交互歧义

@@ -10,15 +10,10 @@ import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import { DialogProvider } from './hooks/useDialog';
 import { TooltipProvider } from './components/ui/tooltip';
 import { logger } from './services/logger';
-import { ensureThemeStyleTag } from './lib/themePresets';
 
 logger.info('app', 'Main.tsx loading');
 
 try {
-  // Theme preset rules must exist before React renders so a persisted
-  // non-default theme applies on first paint after hydration.
-  ensureThemeStyleTag();
-
   const rootElement = document.getElementById('root');
   if (!rootElement) {
     throw new Error('Root element not found');
