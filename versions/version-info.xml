@@ -591,4 +591,12 @@
     </changelog>
     <downloadUrl>https://github.com/AmintaCCCP/GithubStarsManager/releases/tag/v0.7.9</downloadUrl>
   </version>
+  <version>
+    <number>0.8.1</number>
+    <releaseDate>2026-09-14</releaseDate>
+    <changelog>
+      <item>Worker-only 清理与 v0.8.1 精选修复</item>
+    </changelog>
+    <downloadUrl>https://github.com/AmintaCCCP/GithubStarsManager/releases/download/v0.8.1/github-stars-manager-0.8.1.dmg</downloadUrl>
+  </version>
 </versions>

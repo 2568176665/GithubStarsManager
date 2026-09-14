@@ -8,10 +8,7 @@ import { useBulkRepositoryActions } from '../features/repositories/hooks/useBulk
 import { useRepositoryAnalysisJob } from '../features/repositories/hooks/useRepositoryAnalysisJob';
 import { useRepositoryCardActions } from '../features/repositories/hooks/useRepositoryCardActions';
 import { useAIConfigActions } from '../features/settings/hooks/useAIConfigActions';
-import { useBackendSettingsActions } from '../features/settings/hooks/useBackendSettingsActions';
 import { useBackupActions } from '../features/settings/hooks/useBackupActions';
-import { useDiagnosticBackendActions } from '../features/settings/hooks/useDiagnosticBackendActions';
-import { useMcpActions } from '../features/settings/hooks/useMcpActions';
 import { useNetworkActions } from '../features/settings/hooks/useNetworkActions';
 import { useStarSyncActions } from '../features/settings/hooks/useStarSyncActions';
 import { useVectorSearchActions } from '../features/settings/hooks/useVectorSearchActions';
@@ -62,7 +59,6 @@ const currentPersistedKeys = [
   'activeEmbeddingConfig',
   'vectorSearchConfig',
   'vectorSearchStatus',
-  'mcpConfig',
   'webdavConfigs',
   'activeWebDAVConfig',
   'lastBackup',
@@ -87,7 +83,6 @@ const currentPersistedKeys = [
   'translationEngine',
   'isSidebarCollapsed',
   'headerMenuConfig',
-  'backendApiSecret',
   'syncMode',
   'syncModeConfigured',
   'categoryListIdMap',
@@ -112,7 +107,6 @@ const currentPersistedKeys = [
   'discoverySortBy',
   'discoverySortOrder',
   'discoverySelectedTopic',
-  'proxyConfig',
   'rpcDownloadConfig',
   'routeMode',
 ] as const;
@@ -141,7 +135,6 @@ const historicalSnapshots = (): PersistedSnapshot[] => [
   }),
   buildPersistedSnapshot({
     ...buildTransientDiscoverySnapshot(),
-    mcpConfig: { enabled: true, token: 'historical-token' },
     vectorSearchConfig: {
       enabled: true,
       workerUrl: 'https://vector.example.com',
@@ -163,14 +156,12 @@ describe('PR-07 Store modularization compatibility', () => {
     const options = persistenceOptions();
     const persisted = partialize({
       analyzingGistIds: new Set(['gist-1']),
-      proxyConfig: { enabled: true, type: 'http', host: 'proxy.example.com', port: 7890, password: 'proxy-password' },
       rpcDownloadConfig: { enabled: true, host: 'rpc.example.com', port: 6800, secret: 'rpc-secret' },
     });
 
-    expect(options.version).toBe(13);
+    expect(options.version).toBe(14);
     expect(Object.keys(persisted)).toEqual(currentPersistedKeys);
     expect(persisted.analyzingGistIds).toEqual(['gist-1']);
-    expect(persisted.proxyConfig).toMatchObject({ password: 'proxy-password' });
     expect(persisted.rpcDownloadConfig).toMatchObject({ secret: 'rpc-secret' });
 
     for (const transientKey of [
@@ -262,10 +253,7 @@ describe('PR-07 Store modularization compatibility', () => {
       useRepositoryAnalysisJob,
       useBulkRepositoryActions,
       useAIConfigActions,
-      useBackendSettingsActions,
       useBackupActions,
-      useDiagnosticBackendActions,
-      useMcpActions,
       useNetworkActions,
       useStarSyncActions,
       useVectorSearchActions,

@@ -30,7 +30,6 @@ vi.mock('../services/aiService', () => ({
 
 const createStoreState = () => ({
   language: 'zh' as const,
-  backendApiSecret: 'secret-1' as string | null,
   aiConfigs: [{
     id: 'ai-config',
     name: 'Test AI',
@@ -74,25 +73,24 @@ describe('useReleaseArtifactActions.sendRpcDownload', () => {
     storeState = createStoreState();
   });
 
-  it('passes url, name and the backend secret through and records the sent state', async () => {
+  it('passes url and name and records the sent state', async () => {
     mocks.sendToRpcDownload.mockResolvedValue({ success: true });
     const { result } = renderHook(() => useReleaseArtifactActions());
     await act(async () => {
       await result.current.sendRpcDownload({ url: 'https://x/a.zip', name: 'a.zip', updatedAt: '2026-01-01T00:00:00.000Z' });
     });
-    expect(mocks.sendToRpcDownload).toHaveBeenCalledWith('https://x/a.zip', 'a.zip', 'secret-1');
+    expect(mocks.sendToRpcDownload).toHaveBeenCalledWith('https://x/a.zip', 'a.zip');
     expect(result.current.rpcDownloadStates['https://x/a.zip@2026-01-01T00:00:00.000Z']).toBe('sent');
     expect(mocks.toast).toHaveBeenCalledWith('已发送到远程下载器', 'success');
   });
 
-  it('omits the secret when the store has none', async () => {
-    storeState.backendApiSecret = null;
+  it('sends RPC downloads without a backend credential', async () => {
     mocks.sendToRpcDownload.mockResolvedValue({ success: true });
     const { result } = renderHook(() => useReleaseArtifactActions());
     await act(async () => {
       await result.current.sendRpcDownload({ url: 'https://x/a.zip', name: 'a.zip' });
     });
-    expect(mocks.sendToRpcDownload).toHaveBeenCalledWith('https://x/a.zip', 'a.zip', undefined);
+    expect(mocks.sendToRpcDownload).toHaveBeenCalledWith('https://x/a.zip', 'a.zip');
   });
 
   it('shows the dedicated toast when the RPC service is not running and resets the state', async () => {

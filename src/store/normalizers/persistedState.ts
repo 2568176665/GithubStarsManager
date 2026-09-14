@@ -17,7 +17,6 @@ import {
   defaultPresetFilters,
   initialGistSearchFilters,
   initialSearchFilters,
-  normalizeMcpConfig,
   normalizeNumberSet,
   normalizeRepositoryChatSettings,
   normalizeVectorSearchConfig,
@@ -31,6 +30,11 @@ export const normalizePersistedState = (
   currentState: AppStoreState
 ): Partial<AppStoreState> => {
   const safePersisted = persisted ?? {};
+  // Keep only fields known by the Worker-era store. This also drops unknown
+  // fields left by older clients without reintroducing their types.
+  const workerPersisted = Object.fromEntries(
+    Object.entries(safePersisted).filter(([key]) => key in currentState),
+  ) as Partial<AppStoreState>;
   const defaultDiscoveryChannelIds = new Set(defaultDiscoveryChannels.map((channel) => channel.id));
   const authMirror = readAuthMirror();
 
@@ -41,11 +45,6 @@ export const normalizePersistedState = (
     typeof safePersisted.githubToken === 'string'
       ? safePersisted.githubToken
       : (authMirror?.githubToken ?? null);
-  const resolvedBackendApiSecret =
-    typeof safePersisted.backendApiSecret === 'string'
-      ? (safePersisted.backendApiSecret || null)
-      : (authMirror?.backendApiSecret ?? currentState.backendApiSecret ?? null);
-
   const repositories = Array.isArray(safePersisted.repositories) ? safePersisted.repositories : [];
   const gists = Array.isArray(safePersisted.gists) ? safePersisted.gists : [];
   const starredGists = Array.isArray(safePersisted.starredGists) ? safePersisted.starredGists : [];
@@ -81,13 +80,12 @@ export const normalizePersistedState = (
 
   return {
     ...currentState,
-    ...safePersisted,
+    ...workerPersisted,
     // Auth fallback: if the IndexedDB snapshot is missing the login credentials
     // (e.g. async unload write never completed), restore from the synchronous
     // localStorage mirror. Persisted values always win over the mirror.
     user: resolvedUser,
     githubToken: resolvedGithubToken,
-    backendApiSecret: resolvedBackendApiSecret,
     theme:
       safePersisted.theme === 'light' || safePersisted.theme === 'dark'
         ? safePersisted.theme
@@ -154,9 +152,6 @@ export const normalizePersistedState = (
     vectorSearchStatus: normalizeVectorSearchStatus(
       safePersisted.vectorSearchStatus ?? currentState.vectorSearchStatus
     ),
-// Persist full mcpConfig including token so Agent configs stay stable across restarts
-    // unless the user explicitly resets the token.
-    mcpConfig: normalizeMcpConfig((safePersisted as Record<string, unknown>).mcpConfig),
     repositoryChatSettings: normalizeRepositoryChatSettings((safePersisted as Record<string, unknown>).repositoryChatSettings),
     customCategories: Array.isArray(safePersisted.customCategories) ? safePersisted.customCategories : [],
     hiddenDefaultCategoryIds: (() => {
@@ -265,24 +260,6 @@ export const normalizePersistedState = (
       }).concat(
         defaultSubscriptionChannels.filter(dch => !persisted.some((ch: unknown) => (ch as Record<string, unknown>).id === dch.id))
       );
-    })(),
-    proxyConfig: (() => {
-      const p = (safePersisted as Record<string, unknown>).proxyConfig;
-      if (p && typeof p === 'object') {
-        const obj = p as Record<string, unknown>;
-        const validType = obj.type === 'http' || obj.type === 'socks5' ? obj.type : 'http';
-        const validHost = typeof obj.host === 'string' ? obj.host : '';
-        const validPort = typeof obj.port === 'number' && Number.isFinite(obj.port) ? obj.port : 7890;
-        return {
-          enabled: typeof obj.enabled === 'boolean' ? obj.enabled : false,
-          type: validType as import('../../types').ProxyType,
-          host: validHost,
-          port: validPort,
-          username: typeof obj.username === 'string' ? obj.username : undefined,
-          password: typeof obj.password === 'string' ? obj.password : undefined,
-        };
-      }
-      return { enabled: false, type: 'http' as const, host: '', port: 7890 };
     })(),
     rpcDownloadConfig: (() => {
       const r = (safePersisted as Record<string, unknown>).rpcDownloadConfig;

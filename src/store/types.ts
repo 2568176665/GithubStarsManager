@@ -13,9 +13,7 @@ import type {
   EmbeddingConfig,
   VectorSearchConfig,
   VectorSearchStatus,
-  McpServiceConfig,
   VectorIndexingState,
-  ProxyConfig,
   RpcDownloadConfig,
   SearchFilters,
   GitHubUser,
@@ -104,9 +102,6 @@ export interface AppActions {
   setVectorSearchStatus: (status: VectorSearchStatus | undefined) => void;
   setVectorIndexingState: (state: Partial<VectorIndexingState>) => void;
 
-  // MCP service (local prefs; backend SQLite is source of truth when connected)
-  setMcpConfig: (config: Partial<McpServiceConfig>) => void;
-
   // Similar repositories view actions
   enterSimilarView: (repos: Repository[], anchor: Repository) => void;
   resetSimilarView: () => void;
@@ -186,11 +181,7 @@ export interface AppActions {
   // Update Analysis Progress
   setAnalysisProgress: (newProgress: AnalysisProgress) => void;
 
-  // Backend actions
-  setBackendApiSecret: (secret: string | null) => void;
-
-  // Proxy actions
-  setProxyConfig: (updates: Partial<ProxyConfig>) => void;
+  // Worker routing preferences
   setRouteMode: (mode: import('../types').RouteMode) => void;
 
   // RPC Download actions

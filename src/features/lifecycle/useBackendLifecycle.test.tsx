@@ -20,8 +20,6 @@ const mocks = vi.hoisted(() => {
       setAIConfigs: vi.fn(),
       setActiveAIConfig: vi.fn(),
     },
-    tryRestoreAuthFromBackend: vi.fn(async () => { calls.push('restore-auth'); return false; }),
-    syncLocalGitHubTokenToBackend: vi.fn(async () => { calls.push('sync-local-token'); }),
     syncFromBackend: vi.fn(async () => { calls.push('sync-from-backend'); }),
     startAutoSync: vi.fn(() => { calls.push('start-auto-sync'); return unsubscribe; }),
     stopAutoSync: vi.fn(() => { calls.push('stop-auto-sync'); }),
@@ -31,8 +29,6 @@ const mocks = vi.hoisted(() => {
 vi.mock('../../services/backendAdapter', () => ({ backend: mocks.backend }));
 vi.mock('../../store/useAppStore', () => ({ useAppStore: { getState: () => mocks.store } }));
 vi.mock('../../services/autoSync', () => ({
-  tryRestoreAuthFromBackend: mocks.tryRestoreAuthFromBackend,
-  syncLocalGitHubTokenToBackend: mocks.syncLocalGitHubTokenToBackend,
   syncFromBackend: mocks.syncFromBackend,
   startAutoSync: mocks.startAutoSync,
   stopAutoSync: mocks.stopAutoSync,
@@ -48,7 +44,7 @@ describe('useBackendLifecycle', () => {
     mocks.backend.isWorkerEnvMode = false;
   });
 
-  it('waits for hydration and restores authentication before backend data synchronization', async () => {
+  it('waits for hydration before backend data synchronization', async () => {
     const { rerender } = renderHook(({ hasHydrated }) => useBackendLifecycle(hasHydrated), {
       initialProps: { hasHydrated: false },
     });
@@ -60,8 +56,6 @@ describe('useBackendLifecycle', () => {
 
     expect(mocks.calls).toEqual([
       'backend.init',
-      'restore-auth',
-      'sync-local-token',
       'sync-from-backend',
       'start-auto-sync',
     ]);
@@ -73,7 +67,6 @@ describe('useBackendLifecycle', () => {
 
     renderHook(() => useBackendLifecycle(true));
 
-    expect(mocks.tryRestoreAuthFromBackend).not.toHaveBeenCalled();
     expect(mocks.syncFromBackend).not.toHaveBeenCalled();
     expect(mocks.startAutoSync).not.toHaveBeenCalled();
     consoleError.mockRestore();
@@ -93,7 +86,6 @@ describe('useBackendLifecycle', () => {
     expect(mocks.store.setGitHubToken).toHaveBeenCalledWith('worker-managed');
     expect(mocks.store.setAIConfigs).toHaveBeenCalledWith([{ id: 'ai-1' }]);
     expect(mocks.store.setActiveAIConfig).toHaveBeenCalledWith('ai-1');
-    expect(mocks.tryRestoreAuthFromBackend).not.toHaveBeenCalled();
     expect(mocks.syncFromBackend).toHaveBeenCalledOnce();
   });
 

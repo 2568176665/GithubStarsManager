@@ -19,7 +19,7 @@ export interface BackupActions {
 
 /**
  * Owns WebDAV backup and restore orchestration. The payload deliberately keeps
- * the existing key-masking rules, including proxy password and RPC secret.
+ * the existing key-masking rules, including the RPC secret.
  */
 export const useBackupActions = ({ t }: UseBackupActionsOptions): BackupActions => {
   const state = useAppStore(useShallow((store) => ({
@@ -30,10 +30,8 @@ export const useBackupActions = ({ t }: UseBackupActionsOptions): BackupActions 
     aiConfigs: store.aiConfigs,
     webdavConfigs: store.webdavConfigs,
     activeWebDAVConfig: store.activeWebDAVConfig,
-    proxyConfig: store.proxyConfig,
     rpcDownloadConfig: store.rpcDownloadConfig,
     routeMode: store.routeMode,
-    backendApiSecret: store.backendApiSecret,
     includeKeysInBackup: store.includeKeysInBackup,
     setLastBackup: store.setLastBackup,
     setRepositories: store.setRepositories,
@@ -48,10 +46,8 @@ export const useBackupActions = ({ t }: UseBackupActionsOptions): BackupActions 
     addWebDAVConfig: store.addWebDAVConfig,
     updateWebDAVConfig: store.updateWebDAVConfig,
     deleteWebDAVConfig: store.deleteWebDAVConfig,
-    setProxyConfig: store.setProxyConfig,
     setRpcDownloadConfig: store.setRpcDownloadConfig,
     setRouteMode: store.setRouteMode,
-    setBackendApiSecret: store.setBackendApiSecret,
     setReleaseSourceSettings: store.setReleaseSourceSettings,
   })));
   const { toast, confirm } = useDialog();
@@ -82,16 +78,11 @@ export const useBackupActions = ({ t }: UseBackupActionsOptions): BackupActions 
           ...config,
           password: state.includeKeysInBackup ? config.password : (config.password ? '***' : ''),
         })),
-        proxyConfig: {
-          ...state.proxyConfig,
-          password: state.includeKeysInBackup ? state.proxyConfig.password : (state.proxyConfig.password ? '***' : ''),
-        },
         rpcDownloadConfig: {
           ...state.rpcDownloadConfig,
           secret: state.includeKeysInBackup ? state.rpcDownloadConfig.secret : (state.rpcDownloadConfig.secret ? '***' : ''),
         },
         routeMode: state.routeMode,
-        backendApiSecret: state.includeKeysInBackup ? state.backendApiSecret : (state.backendApiSecret ? '***' : null),
         releaseSubscriptions: Array.from(useAppStore.getState().releaseSubscriptions),
         releaseSourceSettings: useAppStore.getState().releaseSourceSettings,
         readReleases: Array.from(useAppStore.getState().readReleases),
@@ -227,17 +218,6 @@ export const useBackupActions = ({ t }: UseBackupActionsOptions): BackupActions 
       }
 
       try {
-        if (backupData.proxyConfig && typeof backupData.proxyConfig === 'object') {
-          const backupConfig = backupData.proxyConfig as typeof state.proxyConfig;
-          state.setProxyConfig({
-            ...backupConfig,
-            password: backupIncludedKeys && backupConfig.password && backupConfig.password !== '***' ? backupConfig.password : useAppStore.getState().proxyConfig.password,
-          });
-        }
-      } catch (error) {
-        console.warn('恢复代理配置时发生问题：', error);
-      }
-      try {
         if (backupData.rpcDownloadConfig && typeof backupData.rpcDownloadConfig === 'object') {
           const backupConfig = backupData.rpcDownloadConfig as typeof state.rpcDownloadConfig;
           state.setRpcDownloadConfig({
@@ -259,13 +239,6 @@ export const useBackupActions = ({ t }: UseBackupActionsOptions): BackupActions 
         }
       } catch (error) {
         console.warn('恢复网络路由偏好时发生问题：', error);
-      }
-      try {
-        if (backupIncludedKeys && backupData.backendApiSecret !== undefined && backupData.backendApiSecret !== '***') {
-          state.setBackendApiSecret(typeof backupData.backendApiSecret === 'string' ? backupData.backendApiSecret : null);
-        }
-      } catch (error) {
-        console.warn('恢复后端 API 密钥时发生问题：', error);
       }
       toast(t(
         `已从备份恢复数据：仓库 ${(backupData.repositories as unknown[] | undefined)?.length ?? 0}，发布 ${(backupData.releases as unknown[] | undefined)?.length ?? 0}，自定义分类 ${(backupData.customCategories as unknown[] | undefined)?.length ?? 0}。`,

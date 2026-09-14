@@ -1,169 +1,74 @@
-# GitHub Stars Vectorize Worker
+# Cloudflare Worker 部署
 
-极简 Cloudflare Worker，作为 Cloudflare Vectorize 的代理。前端负责 Embedding 生成，Worker 只负责向量的存/查/删。
+本项目只部署到 Cloudflare Worker。根目录 Vite 构建生成 `dist/`，Worker 同时提供 SPA 静态资源、`/api/*` 接口和 D1 数据持久化；不需要单独的服务器、桌面客户端或容器。
 
 ## 前置条件
 
-- [Cloudflare 账号](https://dash.cloudflare.com/)
-- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/install-and-update/) (`npm install -g wrangler`)
-- 已登录 Wrangler (`wrangler login`)
+- Cloudflare 账号和已登录的 Wrangler
+- 根目录与本目录的 Node.js 依赖
+- 已创建名为 `github-stars-manager` 的 D1 数据库，或按 `wrangler.toml` 调整数据库配置
 
 ## 首次部署
 
-### 1. 创建 Vectorize 索引
-
-索引维度必须与你选择的 Embedding 模型一致：
+在仓库根目录执行：
 
 ```bash
-# OpenAI text-embedding-3-small (1536维)
-npx wrangler vectorize create github-stars --dimensions=1536 --metric=cosine
-
-# Ollama nomic-embed-text (768维)
-npx wrangler vectorize create github-stars --dimensions=768 --metric=cosine
-
-# Cohere embed-multilingual-v3.0 (1024维)
-npx wrangler vectorize create github-stars --dimensions=1024 --metric=cosine
-
-# Gemini text-embedding-004 (768维)
-npx wrangler vectorize create github-stars --dimensions=768 --metric=cosine
-
-# 硅基流动 BAAI/bge-large-zh-v1.5 (1024维)
-npx wrangler vectorize create github-stars --dimensions=1024 --metric=cosine
-```
-
-### 2. 安装依赖
-
-```bash
-npm install
-```
-
-### 3. 设置认证令牌
-
-```bash
-wrangler secret put AUTH_TOKEN
-# 输入一个安全的随机字符串，例如：openssl rand -hex 32
-```
-
-### 4. 部署
-
-```bash
+npm ci
+npm run build
+cd cloudflare-worker
+npm ci
+npx wrangler d1 migrations apply github-stars-manager --remote
+npx wrangler secret put GITHUB_TOKEN
 npm run deploy
 ```
 
-部署成功后，Wrangler 会输出 Worker 的 URL，格式类似：
-```text
-https://github-stars-vectorize.<your-subdomain>.workers.dev
+`npm run deploy` 已包含 `--keep-vars`，会保留 Cloudflare 中已有的变量。`GITHUB_TOKEN` 用于 Worker 代管 GitHub 账号和 GitHub API 代理；AI 配置、WebDAV 配置、向量搜索配置及应用状态由前端保存到 D1。
+
+## 日常开发与更新
+
+根目录构建前端：
+
+```bash
+npm run build
 ```
 
-### 5. 在 App 中配置
-
-在 GitHub Stars Manager 的 **设置 → 向量搜索** 中：
-- **Worker 地址**: 填入上一步的 URL
-- **认证 Token**: 填入你设置的 AUTH_TOKEN 值
-
-### 6. 测试连接
-
-在设置页点击 **测试 Worker 连接**，看到 "连接成功" 即可。
-
----
-
-## 更新部署（代码变更后）
-
-当你更新了 Worker 代码（例如从 GitHub 拉取了新版本），需要重新部署：
+本地运行 Worker：
 
 ```bash
 cd cloudflare-worker
-
-# 如果依赖有变更（package.json 更新了）
-npm install
-
-# 重新部署
-npm run deploy
-```
-
-> **注意**：更新部署**不需要**重新创建 Vectorize 索引，已有向量数据不受影响。
-
----
-
-## 更换 Embedding 模型
-
-> ⚠️ **更换模型后必须重建索引！** 不同模型生成的向量维度不同，混用会导致查询失败。
-
-步骤：
-1. 在 App 设置中更换 Embedding 模型
-2. 如果新模型的维度与旧模型不同，需要**删除旧索引并创建新索引**：
-   ```bash
-   # 删除旧索引
-   npx wrangler vectorize delete github-stars
-
-   # 创建新索引（维度与新模型一致）
-   npx wrangler vectorize create github-stars --dimensions=1024 --metric=cosine
-   ```
-3. 在 App 中点击 **重建向量索引**
-
----
-
-## 文件说明
-
-| 文件 | 说明 |
-|------|------|
-| `src/index.ts` | Worker 源码（TypeScript，CLI 部署使用） |
-| `worker.js` | Worker 代码（纯 JS，备用） |
-| `wrangler.toml` | Wrangler 部署配置 |
-| `package.json` | 依赖声明 |
-
-## API 接口
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/upsert` | 批量写入向量 |
-| POST | `/query` | 向量相似度查询 |
-| POST | `/delete` | 删除指定向量 |
-| POST | `/cleanup` | 清理不在 keepIds 列表中的向量 |
-| GET | `/status` | 获取索引状态 |
-
-所有请求需要 `Authorization: Bearer <AUTH_TOKEN>` 头。
-
-## 本地开发
-
-```bash
 npm run dev
 ```
 
-## 常见 Embedding 模型维度参考
+代码或前端资源更新后，从根目录执行 `npm run deploy`。只有 D1 schema 发生变化时才需要新增并执行 migration；当前 schema 位于 `migrations/`，不要修改线上已有 migration。
 
-| 模型 | 维度 | 多语言 | 价格 |
-|------|------|--------|------|
-| OpenAI text-embedding-3-small | **1536** | ✅ | $0.02/M |
-| OpenAI text-embedding-3-large | **3072** | ✅ | $0.13/M |
-| Gemini text-embedding-004 | **768** | ✅ | 免费 |
-| Cohere embed-multilingual-v3.0 | **1024** | ✅ | $0.1/M |
-| Ollama nomic-embed-text | **768** | ✅ | 免费 |
-| Ollama bge-m3 | **1024** | ✅ | 免费 |
-| 硅基流动 BAAI/bge-large-zh-v1.5 | **1024** | ✅ | ¥0.5/M |
-# D1-backed AI configuration
+## Worker API
 
-AI configurations are persisted in the D1 `sync_state` table by the app's
-`/api/configs/ai/bulk` endpoint. The Worker reads the saved configuration for
-`/api/configs/ai` and `/api/proxy/ai`; no AI environment variables are needed.
+Worker 保持现有 `/api/*` 契约，主要包括：
 
-Keep `GITHUB_TOKEN` as a Worker secret for `/api/session` and
-`/api/proxy/github/*`:
+- `/api/health`：健康检查
+- `/api/session`：使用 Worker Secret 获取代管 GitHub 账号
+- `/api/proxy/github/*`：GitHub API 代理
+- `/api/proxy/ai`：AI 请求代理
+- `/api/repositories`、`/api/releases`、`/api/settings` 及配置接口：D1 同步
+- `/api/download/rpc`：通过 aria2 RPC 下载 Release 资产
 
-```powershell
+前端在 Worker 不可达时仍可使用本地缓存和浏览器直连能力；生产入口统一使用部署后的 Worker 地址。
+
+## 文件说明
+
+| 文件 | 用途 |
+| --- | --- |
+| `src/index.ts` | Worker 请求处理、API 和静态资源入口 |
+| `migrations/` | D1 migration |
+| `wrangler.toml` | Worker、Assets 和 D1 绑定配置 |
+| `package.json` | Wrangler 与 Worker 类型检查依赖 |
+
+## Secret 与配置
+
+不要把 Secret 写入仓库或提交 `.env`。使用 Wrangler 管理 Worker Secret：
+
+```bash
 npx wrangler secret put GITHUB_TOKEN
-npx wrangler d1 migrations apply github-stars-manager --remote
-npx wrangler deploy
 ```
 
-Configure the AI provider, endpoint, API key, and model in the application's
-**Settings → AI Service Configuration** panel. The API key is stored as part of
-the D1 state, so treat the Worker URL and its API access as sensitive.
-
-# D1-backed application state
-
-The frontend's complete application snapshot (except the GitHub token) is synchronized to
-the D1 `sync_state` row named `settings`. This includes preferences, gists,
-forks, discovery/subscription state, categories, filters, and network/MCP
-configuration. IndexedDB remains only a local cache when the backend is
-unavailable. `github_token` is ignored by the Worker and is never stored in D1.
+部署 Worker 时始终保留 `--keep-vars`，避免部署配置覆盖线上已有变量。

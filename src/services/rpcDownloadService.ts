@@ -14,18 +14,10 @@ interface RpcDownloadResult {
   gid?: string;
 }
 
-function getAuthHeaders(apiSecret?: string): Record<string, string> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (apiSecret) {
-    headers['Authorization'] = `Bearer ${apiSecret}`;
-  }
-  return headers;
-}
-
 /**
  * Resolve API base URL.
- *  - Backend mode: use backend.backendUrl (proxied through Express)
- *  - Client-only mode: call aria2 directly at http://host:port
+ *  - Worker mode: use the Worker RPC endpoint
+ *  - Local-only mode: call aria2 directly at http://host:port
  */
 async function getBaseUrl(config?: RpcDownloadConfig): Promise<string> {
   // Try backend first
@@ -69,7 +61,6 @@ async function callAria2Direct(
 
 export async function testRpcDownload(
   config: RpcDownloadConfig,
-  apiSecret?: string,
 ): Promise<RpcTestResult> {
   try {
     // Client-only mode: call aria2 directly
@@ -84,11 +75,11 @@ export async function testRpcDownload(
       return { success: true, version: result?.version as string | undefined };
     }
 
-    // Backend mode: proxy through Express
+    // Worker mode: proxy through the Worker
     const base = await getBaseUrl();
     const resp = await fetch(`${base}/settings/rpc-download/test`, {
       method: 'POST',
-      headers: getAuthHeaders(apiSecret),
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         host: config.host,
         port: config.port,
@@ -110,7 +101,6 @@ export async function testRpcDownload(
 export async function sendToRpcDownload(
   url: string,
   filename: string,
-  apiSecret?: string,
 ): Promise<RpcDownloadResult> {
   try {
     // Client-only mode: call aria2 directly
@@ -131,11 +121,11 @@ export async function sendToRpcDownload(
       return { success: true, gid: data.result as string };
     }
 
-    // Backend mode: proxy through Express
+    // Worker mode: proxy through the Worker
     const base = await getBaseUrl();
     const resp = await fetch(`${base}/download/rpc`, {
       method: 'POST',
-      headers: getAuthHeaders(apiSecret),
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url, filename }),
     });
     if (!resp.ok) {

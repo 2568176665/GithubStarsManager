@@ -13,21 +13,15 @@ describe('appStateSnapshot', () => {
     const snapshot = buildAppStateSnapshot({
       ...initial,
       githubToken: 'github-token',
-      backendApiSecret: 'backend-secret',
-      proxyConfig: { ...initial.proxyConfig, password: 'proxy-password' },
       rpcDownloadConfig: { ...initial.rpcDownloadConfig, secret: 'rpc-secret' },
-      mcpConfig: { ...initial.mcpConfig, token: 'mcp-token' },
     });
 
     for (const key of APP_STATE_SNAPSHOT_KEYS) {
       expect(snapshot).toHaveProperty(key);
     }
     expect(snapshot).not.toHaveProperty('githubToken');
-    expect(snapshot).not.toHaveProperty('backendApiSecret');
     expect(snapshot).toMatchObject({
-      proxyConfig: expect.objectContaining({ password: 'proxy-password' }),
       rpcDownloadConfig: expect.objectContaining({ secret: 'rpc-secret' }),
-      mcpConfig: expect.objectContaining({ token: 'mcp-token' }),
     });
   });
 

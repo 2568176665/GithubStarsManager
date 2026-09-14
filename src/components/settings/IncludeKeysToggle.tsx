@@ -22,7 +22,7 @@ export const IncludeKeysToggle: FC<IncludeKeysToggleProps> = ({ t }) => {
           <Key className="h-4 w-4 text-muted-foreground" />
           <div>
             <h4 className="text-sm font-medium text-foreground">{label}</h4>
-            <p className="text-sm text-muted-foreground">{t('包含 AI 配置、WebDAV、代理、远程下载和后端服务器的密钥', 'Includes keys for AI configs, WebDAV, proxy, remote download, and backend server')}</p>
+            <p className="text-sm text-muted-foreground">{t('包含 AI 配置、WebDAV 和远程下载的密钥', 'Includes keys for AI, WebDAV, and remote download settings')}</p>
           </div>
         </div>
         <Switch checked={includeKeysInBackup} onCheckedChange={setIncludeKeysInBackup} aria-label={label} />

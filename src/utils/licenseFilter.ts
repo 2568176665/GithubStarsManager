@@ -6,8 +6,7 @@
  * 我们存 spdx_id 即 `'NOASSERTION'`。为让过滤面板提供一个「无/未声明」聚合项，
  * 统一把这些情形归一化为 {@link NO_LICENSE_SENTINEL}。
  *
- * 本模块同时被前端 UI、过滤求值、MCP 等多处复用；服务端 MCP 因无法 import src/ 树，
- * 在 server/src/mcp/repoSearch.ts 内保留一份相同实现，改这里时请一并同步。
+ * 过滤逻辑只在前端运行，并与 Worker 返回的仓库数据保持一致。
  */
 
 /** 「无 license」聚合哨兵：用于过滤器把 null / NOASSERTION / Other 等归并为一项。 */

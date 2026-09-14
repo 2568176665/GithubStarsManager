@@ -1,7 +1,6 @@
 import { backend } from './backendAdapter';
 import { useAppStore } from '../store/useAppStore';
 import { mergeRepositoriesPreservingLocalMetadata, stripLocalRepositoryFields } from '../utils/repositoryMerge';
-import { GitHubApiService } from './githubApi';
 import { logger } from './logger';
 import { discoveryAnalysisStorage } from './discoveryAnalysisStorage';
 import { analysesMapToRecord, mergeDiscoveryAnalyses } from '../utils/discoveryAnalysisMerge';
@@ -148,93 +147,6 @@ export function shouldPreserveLocalCollection(
 function setRepositorySyncVisualState(isSyncing: boolean): void {
   if (typeof window === 'undefined') return;
   window.dispatchEvent(new CustomEvent('gsm:repository-sync-visual-state', { detail: { isSyncing } }));
-}
-
-let _isRestoringAuth = false;
-
-/**
- * Cross-browser/device session recovery (Issue #259).
- *
- * Only runs on a genuine bootstrap: no local session AND the client already
- * holds the backend API_SECRET (so it can authenticate). It NEVER overwrites an
- * existing local session — existing users' credentials and data are untouched.
- *
- * Bootstrap guard: the caller must have configured backendApiSecret once in
- * this browser (BackendPanel). With that, the backend hands back the GitHub
- * token it stores, and we re-validate it against the GitHub API before logging in.
- */
-export async function tryRestoreAuthFromBackend(): Promise<boolean> {
-  if (!backend.isAvailable || _isRestoringAuth) return false;
-
-  const state = useAppStore.getState();
-
-  // Never clobber an existing session (single-account safety guard).
-  if (state.user && state.githubToken) return false;
-
-  // Without an authenticated backend we have nothing to restore from.
-  if (!state.backendApiSecret) return false;
-
-  _isRestoringAuth = true;
-  try {
-    const restored = await backend.restoreAuth();
-    if (!restored?.github_token) return false;
-
-    // Re-check right before applying: the user may have logged in meanwhile.
-    const latest = useAppStore.getState();
-    if (latest.user || latest.githubToken) return false;
-
-    const githubApi = new GitHubApiService(restored.github_token);
-    const user = await githubApi.getCurrentUser();
-
-    useAppStore.getState().setGitHubToken(restored.github_token);
-    useAppStore.getState().setUser(user);
-    logger.info('sync.restoreAuth', 'Restored session from backend', { login: user.login });
-    return true;
-  } catch (err) {
-    logger.warn('sync.restoreAuth', 'Failed to restore session from backend', { error: err instanceof Error ? err.message : String(err) });
-    return false;
-  } finally {
-    _isRestoringAuth = false;
-  }
-}
-
-/**
- * Repair the backend copy of an already authenticated local GitHub token.
- *
- * Lists GraphQL requests use the backend proxy, which reads the encrypted token
- * from backend settings instead of receiving the frontend token. Existing local
- * sessions can therefore have a working token while the backend copy is absent
- * (for example, when the backend was enabled after login or a previous settings
- * sync failed). Keep this repair separate from session restoration so it never
- * overwrites the local account with backend auth data.
- */
-const LOCAL_TOKEN_SYNC_TIMEOUT_MS = 5000;
-
-export async function syncLocalGitHubTokenToBackend(
-  timeoutMs = LOCAL_TOKEN_SYNC_TIMEOUT_MS,
-): Promise<boolean> {
-  // Worker mode authenticates with its own secret and deliberately does not
-  // persist the browser's GitHub token in D1.
-  if (!backend.isAvailable || backend.isWorkerEnvMode) return false;
-
-  const { githubToken } = useAppStore.getState();
-  if (!githubToken) return false;
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    await backend.syncSettings({ github_token: githubToken }, controller.signal);
-    logger.info('sync.githubToken', 'Synchronized local GitHub token to backend');
-    return true;
-  } catch (err) {
-    logger.warn('sync.githubToken', 'Failed to synchronize local GitHub token to backend', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return false;
-  } finally {
-    clearTimeout(timeoutId);
-  }
 }
 
 /**

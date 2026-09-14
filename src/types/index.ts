@@ -271,15 +271,6 @@ export interface VectorIndexingState {
   result: { indexed: number; skipped: number; errors: number; error?: string } | null;
 }
 
-/** MCP service preferences. The Worker backend is the source of truth. */
-export interface McpServiceConfig {
-  enabled: boolean;
-  host: string;
-  port: number;
-  /** Plaintext MCP bearer token — viewable anytime; regenerate via reset */
-  token: string;
-}
-
 // 相似仓库视图状态：进入"查找相似仓库"后保存当前上下文，重置时恢复
 export interface SimilarViewState {
   active: boolean;
@@ -326,19 +317,8 @@ export interface WebDAVConfig {
   passwordStatus?: SecretStatus;
 }
 
-export type ProxyType = 'http' | 'socks5';
-
 /** GitHub/Release 数据面请求出口偏好；仅影响本设备，不参与后端/autoSync 同步。 */
 export type RouteMode = 'auto' | 'backend' | 'browser';
-
-export interface ProxyConfig {
-  enabled: boolean;
-  type: ProxyType;
-  host: string;
-  port: number;
-  username?: string;
-  password?: string;
-}
 
 export interface RpcDownloadConfig {
   enabled: boolean;
@@ -486,14 +466,7 @@ export interface AppState {
   // Analysis Progress
   analysisProgress: AnalysisProgress
 
-  // Backend
-  backendApiSecret: string | null;
-
-  // MCP (prefs; the Worker backend owns runtime state when available)
-  mcpConfig: McpServiceConfig;
-
-  // Network Proxy
-  proxyConfig: ProxyConfig;
+  // Worker data plane
   rpcDownloadConfig: RpcDownloadConfig;
   /** 本地路由偏好；不参与后端/autoSync 同步 */
   routeMode: RouteMode;

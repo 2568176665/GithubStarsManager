@@ -23,7 +23,6 @@ import {
 } from '../types';
 import { logger } from './logger';
 import { backend } from './backendAdapter';
-import { useAppStore } from '../store/useAppStore';
 import { isReadmeCandidateItem, type GitHubReadmeCandidateItem } from '../utils/readmeVariants';
 
 interface GitHubContentResponse {
@@ -121,10 +120,6 @@ const GITHUB_API_BASE = 'https://api.github.com';
 // Sentinel message for the 401 thrown above; callers match on it to tell a
 // confirmed auth failure apart from network/rate-limit/5xx errors.
 export const GITHUB_TOKEN_INVALID_ERROR = 'GitHub token expired or invalid';
-// Sentinel for 401s produced by the backend proxy's own auth middleware (its
-// body carries code: 'UNAUTHORIZED'). Kept distinct from the GitHub sentinel
-// so callers can tell a stale backend API key from a dead GitHub token.
-export const BACKEND_PROXY_UNAUTHORIZED_ERROR = 'Backend API key was rejected. Please check your backend settings';
 const REPOSITORY_CHAT_MAX_FILE_BYTES = 96 * 1024;
 // Larger Markdown files are common repository documentation. This bounded exception is
 // deliberately narrower than the normal chat-file reader: only non-sensitive Markdown
@@ -203,13 +198,11 @@ export class GitHubApiService {
   private rateLimitRemaining: number | null = null;
   private rateLimitReset: number | null = null;
   private backendUrl: string | null = null;
-  private backendAuthToken: string | null = null;
 
   constructor(token: string) {
     this.token = token;
     if (backend.backendUrl) {
       this.backendUrl = backend.backendUrl;
-      this.backendAuthToken = useAppStore.getState().backendApiSecret || null;
     }
   }
 
@@ -222,16 +215,8 @@ export class GitHubApiService {
     this.backendUrl = url;
   }
 
-  setBackendAuthToken(token: string | null): void {
-    this.backendAuthToken = token;
-  }
-
   private getBackendHeaders(): Record<string, string> {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (this.backendAuthToken) {
-      headers.Authorization = `Bearer ${this.backendAuthToken}`;
-    }
-    return headers;
+    return { 'Content-Type': 'application/json' };
   }
 
   private async makeRequest<T>(endpoint: string, options: RequestInit & { operationTag?: string } = {}, signal?: AbortSignal): Promise<T> {
@@ -245,7 +230,6 @@ export class GitHubApiService {
     // directly to api.github.com.
     if (!this.backendUrl && backend.backendUrl) {
       this.backendUrl = backend.backendUrl;
-      this.backendAuthToken = useAppStore.getState().backendApiSecret || null;
     }
 
     // Check rate limit before making request
@@ -278,7 +262,6 @@ export class GitHubApiService {
     const maxRetries = 3;
     let response: Response | undefined;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      const viaProxy = this.backendUrl != null;
       try {
         if (this.backendUrl) {
           // 通过后端代理路由：POST {backendUrl}/proxy/github/{endpoint}?query
@@ -354,15 +337,6 @@ export class GitHubApiService {
       const durationMs = Date.now() - startTime;
       if (response.status === 401) {
         logger.warn('githubApi', 'API request failed: unauthorized', { method, endpoint, status: response.status, durationMs });
-        if (viaProxy) {
-          // The proxy forwards upstream GitHub bodies verbatim, while the
-          // backend's own auth middleware marks its 401s with code
-          // 'UNAUTHORIZED'. Only the latter is a backend API key problem.
-          const body = await response.json().catch(() => null) as { code?: string } | null;
-          if (body?.code === 'UNAUTHORIZED') {
-            throw new Error(BACKEND_PROXY_UNAUTHORIZED_ERROR);
-          }
-        }
         throw new Error(GITHUB_TOKEN_INVALID_ERROR);
       }
       if (response.status === 403 && this.rateLimitRemaining === 0) {

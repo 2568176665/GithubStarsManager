@@ -17,7 +17,6 @@ const mocks = vi.hoisted(() => ({
     language: 'zh' as const,
     githubToken: 'token' as string | null,
     rpcDownloadConfig: { enabled: false, host: '', port: 6800, secret: '' },
-    backendApiSecret: null as string | null,
     aiConfigs: [] as Array<{ id: string; name: string; baseUrl: string; apiKey: string; model: string }>,
     activeAIConfig: null as string | null,
     routeMode: 'auto' as RouteMode,

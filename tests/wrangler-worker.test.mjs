@@ -279,7 +279,7 @@ test('Worker runs all configured features in the Wrangler local environment', as
       body: jsonBody(settings),
     })).response.status, 200);
     const storedSettings = (await request(baseUrl, '/api/settings')).body;
-    assert.deepEqual(storedSettings, { theme: 'dark', proxyConfig: { enabled: true } });
+    assert.deepEqual(storedSettings, { theme: 'dark' });
     assert.equal('github_token' in storedSettings, false);
 
     const aiConfig = {

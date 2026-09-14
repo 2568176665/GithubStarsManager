@@ -26,8 +26,18 @@ dist-ssr
 *.sln
 *.sw?
 .env
+.env.*
+!.env.example
 .secrets/
-release
+release/
+
+# Worker-only workspace: keep legacy local server data out of Git
+server/
+
+# Local test and coverage output
+coverage/
+playwright-report/
+test-results/
 
  # Orchestrator internal files
 .sisyphus/
@@ -39,8 +49,9 @@ release
 LandingPage/
 .codegraph/
 
-# Wrangler local build artifacts
-cloudflare-worker/.wrangler/tmp/
+# Wrangler local build and deployment artifacts
+.wrangler/
+cloudflare-worker/.wrangler/
 
 # Release version synchronization runtime files
 .release-version.lock

@@ -335,7 +335,7 @@ describe('runRepositoryChatTurn progressive evidence loop', () => {
         intent: 'usage',
         explicit_requirements: ['how to use vector search'],
         necessary_requirements: ['the basic vector-search steps'],
-        optional_enrichment: ['threshold and topK tuning', 'MCP connection details', 'source implementation'],
+        optional_enrichment: ['threshold and topK tuning', 'agent connection details', 'source implementation'],
         target: 'vector-search usage',
       }))
       .mockResolvedValueOnce(plan(target('README.md', ['Vector search'], 'basic vector-search steps')))
@@ -346,7 +346,7 @@ describe('runRepositoryChatTurn progressive evidence loop', () => {
           requirement('the basic vector-search steps', 'verified', [vectorUsageRef]),
           requirement('threshold and topK tuning', 'missing'),
         ],
-        missing: ['threshold and topK tuning', 'MCP connection details'],
+        missing: ['threshold and topK tuning', 'agent connection details'],
         nextAction: 'retrieve_more',
         recommendedTargets: [target('README.md', ['Advanced tuning'], 'threshold and topK tuning')],
       }))

@@ -6,9 +6,7 @@ import type {
   DiscoveryChannel,
   GistSearchFilters,
   HeaderMenuId,
-  ProxyConfig,
   RpcDownloadConfig,
-  McpServiceConfig,
   SearchFilters,
   VectorSearchConfig,
   VectorSearchStatus,
@@ -16,7 +14,6 @@ import type {
 } from '../types';
 import { defaultRepositoryChatAgentBudget, defaultRepositoryChatSettings } from '../types/repositoryChat';
 import { EMBEDDING_FORMAT_VERSION } from '../services/vectorSearchService';
-import { MCP_DEFAULT_HOST, MCP_DEFAULT_PORT, normalizeMcpHost } from '../utils/mcpHost';
 import { PRESET_FILTERS } from '../constants/presetFilters';
 
 export const REQUIRED_HEADER_MENU_IDS: ReadonlySet<HeaderMenuId> = new Set(['repositories', 'settings']);
@@ -49,7 +46,6 @@ export type PersistedAppState = Partial<
     | 'user'
     | 'githubToken'
     | 'isAuthenticated'
-    | 'backendApiSecret'
     | 'repositories'
     | 'gists'
     | 'starredGists'
@@ -109,7 +105,6 @@ export type PersistedAppState = Partial<
     | 'discoverySortBy'
     | 'discoverySortOrder'
     | 'discoverySelectedTopic'
-    | 'proxyConfig'
     | 'rpcDownloadConfig'
     | 'routeMode'
     | 'subscriptionRepos'
@@ -117,14 +112,12 @@ export type PersistedAppState = Partial<
     | 'subscriptionIsLoading'
     | 'subscriptionChannels'
     | 'headerMenuConfig'
-    | 'mcpConfig'
     | 'syncMode'
     | 'syncModeConfigured'
     | 'categoryListIdMap'
   >, 'gistSearchFilters' | 'searchFilters' | 'releaseExpandedRepositories' | 'forkExpandedRepositories'>> & {
   gistSearchFilters?: Pick<GistSearchFilters, 'sortBy' | 'sortOrder'>;
   searchFilters?: Pick<SearchFilters, 'sortBy' | 'sortOrder'>;
-  proxyConfig?: ProxyConfig;
   rpcDownloadConfig?: RpcDownloadConfig;
   releaseSubscriptions?: unknown;
   readReleases?: unknown;
@@ -236,30 +229,6 @@ export const normalizeVectorSearchStatus = (raw: unknown): VectorSearchStatus =>
       ? { lastSyncAt: status.lastSyncAt }
       : {}),
     ...(typeof status.error === 'string' ? { error: status.error } : {}),
-  };
-};
-
-export const defaultMcpConfig: McpServiceConfig = {
-  enabled: false,
-  host: MCP_DEFAULT_HOST,
-  port: MCP_DEFAULT_PORT,
-  token: '',
-};
-
-export const normalizeMcpConfig = (raw: unknown): McpServiceConfig => {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    return { ...defaultMcpConfig };
-  }
-  const config = raw as Record<string, unknown>;
-  const port =
-    typeof config.port === 'number' && Number.isInteger(config.port) && config.port >= 1 && config.port <= 65535
-      ? config.port
-      : defaultMcpConfig.port;
-  return {
-    enabled: config.enabled === true,
-    host: normalizeMcpHost(config.host),
-    port,
-    token: typeof config.token === 'string' ? config.token : '',
   };
 };
 

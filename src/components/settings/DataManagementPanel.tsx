@@ -61,7 +61,6 @@ import type {
   SubscriptionRepo,
   SubscriptionChannel,
   SearchFilters,
-  ProxyConfig,
   RpcDownloadConfig,
   ReleaseSourceSettings
 } from '../../types';
@@ -134,9 +133,7 @@ interface ExportData {
     releaseSelectedFilters?: string[];
     releaseSearchQuery?: string;
     releaseExpandedRepositories?: number[];
-    proxyConfig?: ProxyConfig;
     rpcDownloadConfig?: RpcDownloadConfig;
-    backendApiSecret?: string | null;
     includeKeysInBackup?: boolean;
   };
 }
@@ -163,9 +160,7 @@ const hasMaskedSecrets = (data: ExportData['data']): boolean => {
   return !!(
     data.aiConfigs?.some(config => config.apiKey === MASKED_SECRET) ||
     data.webdavConfigs?.some(config => config.password === MASKED_SECRET) ||
-    data.proxyConfig?.password === MASKED_SECRET ||
-    data.rpcDownloadConfig?.secret === MASKED_SECRET ||
-    data.backendApiSecret === MASKED_SECRET
+    data.rpcDownloadConfig?.secret === MASKED_SECRET
   );
 };
 
@@ -178,9 +173,7 @@ const UI_SETTINGS_DATA_KEYS = [
   'releaseSelectedFilters',
   'releaseSearchQuery',
   'releaseExpandedRepositories',
-  'proxyConfig',
   'rpcDownloadConfig',
-  'backendApiSecret',
 ] as const;
 
 const IMPORT_DATA_KEYS = [
@@ -250,7 +243,6 @@ export const DataManagementPanel: React.FC<DataManagementPanelProps> = ({ t }) =
     language,
     setRepositories,
     setReleases,
-    setBackendApiSecret,
   } = useAppStore(useShallow((state) => ({
     user: state.user,
     repositories: state.repositories,
@@ -269,7 +261,6 @@ export const DataManagementPanel: React.FC<DataManagementPanelProps> = ({ t }) =
     language: state.language,
     setRepositories: state.setRepositories,
     setReleases: state.setReleases,
-    setBackendApiSecret: state.setBackendApiSecret,
   })));
 
   const [confirmation, setConfirmation] = useState<DeleteConfirmation>({
@@ -654,19 +645,11 @@ export const DataManagementPanel: React.FC<DataManagementPanelProps> = ({ t }) =
         exportDataObj.data.releaseExpandedRepositories = Array.from(store.releaseExpandedRepositories);
       }
 
-      // Export special configs (proxy, RPC, backend secret) only when uiSettings is selected
+      // Export the RPC configuration with UI settings.
       if (selectedTypes.includes('uiSettings')) {
-        exportDataObj.data.proxyConfig = includeKeys
-          ? store.proxyConfig
-          : { ...store.proxyConfig, password: store.proxyConfig.password ? MASKED_SECRET : '' };
-
         exportDataObj.data.rpcDownloadConfig = includeKeys
           ? store.rpcDownloadConfig
           : { ...store.rpcDownloadConfig, secret: store.rpcDownloadConfig.secret ? MASKED_SECRET : '' };
-
-        exportDataObj.data.backendApiSecret = includeKeys
-          ? store.backendApiSecret
-          : (store.backendApiSecret ? MASKED_SECRET : null);
       }
 
       const blob = new Blob([JSON.stringify(exportDataObj, null, 2)], { type: 'application/json' });
@@ -834,17 +817,6 @@ export const DataManagementPanel: React.FC<DataManagementPanelProps> = ({ t }) =
           }
         }
 
-        // Import special configs (proxy, RPC, backend secret) only if they exist in backup
-        if (importedData.proxyConfig) {
-          const restoredProxy = {
-            ...importedData.proxyConfig,
-            password: wasIncluded && isRealSecret(importedData.proxyConfig.password)
-              ? importedData.proxyConfig.password
-              : store.proxyConfig.password
-          };
-          useAppStore.setState({ proxyConfig: restoredProxy });
-        }
-
         if (importedData.rpcDownloadConfig) {
           const restoredRpc = {
             ...importedData.rpcDownloadConfig,
@@ -855,9 +827,6 @@ export const DataManagementPanel: React.FC<DataManagementPanelProps> = ({ t }) =
           useAppStore.setState({ rpcDownloadConfig: restoredRpc });
         }
 
-        if (wasIncluded && importedData.backendApiSecret !== undefined && isRealSecret(importedData.backendApiSecret)) {
-          setBackendApiSecret(importedData.backendApiSecret);
-        }
       } else {
         if (selectedTypes.includes('repositories') && importedData.repositories) {
           const existingIds = new Set(store.repositories.map(r => r.id));
@@ -1036,15 +1005,6 @@ export const DataManagementPanel: React.FC<DataManagementPanelProps> = ({ t }) =
               ? { releaseExpandedRepositories: new Set(importedUiSettings.releaseExpandedRepositories) }
               : {}),
           });
-          if (importedUiSettings.proxyConfig) {
-            const restoredProxy = {
-              ...importedUiSettings.proxyConfig,
-              password: wasIncluded && isRealSecret(importedUiSettings.proxyConfig.password)
-                ? importedUiSettings.proxyConfig.password
-                : currentStore.proxyConfig.password,
-            };
-            useAppStore.setState({ proxyConfig: restoredProxy });
-          }
           if (importedUiSettings.rpcDownloadConfig) {
             const restoredRpc = {
               ...importedUiSettings.rpcDownloadConfig,
@@ -1053,9 +1013,6 @@ export const DataManagementPanel: React.FC<DataManagementPanelProps> = ({ t }) =
                 : currentStore.rpcDownloadConfig.secret,
             };
             useAppStore.setState({ rpcDownloadConfig: restoredRpc });
-          }
-          if (wasIncluded && importedUiSettings.backendApiSecret !== undefined && isRealSecret(importedUiSettings.backendApiSecret)) {
-            setBackendApiSecret(importedUiSettings.backendApiSecret);
           }
         }
       }
@@ -1078,7 +1035,7 @@ export const DataManagementPanel: React.FC<DataManagementPanelProps> = ({ t }) =
     } finally {
       setIsImporting(false);
     }
-  }, [importPreview, addLog, showSuccess, showError, t, setBackendApiSecret]);
+  }, [importPreview, addLog, showSuccess, showError, t]);
 
   const cleanupSuggestions = useMemo<DataCleanupSuggestion[]>(() => {
     const suggestions: DataCleanupSuggestion[] = [];

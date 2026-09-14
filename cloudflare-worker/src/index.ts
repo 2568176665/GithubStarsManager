@@ -1,8 +1,6 @@
 interface Env {
   DB: D1Database;
   ASSETS: Fetcher;
-  VECTORIZE?: Vectorize;
-  AUTH_TOKEN?: string;
   GITHUB_TOKEN?: string;
 }
 
@@ -25,20 +23,32 @@ async function writeState(env: Env, key: string, value: unknown): Promise<void> 
     .bind(key, JSON.stringify(value), Date.now()).run();
 }
 
-/** GitHub credentials are browser/session data and must never enter Worker D1. */
-function withoutGitHubToken(value: unknown): Record<string, unknown> {
+/** Credentials and settings owned by removed runtimes must never enter Worker D1. */
+function withoutDeprecatedSettings(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const removedKeys = new Set([
+    'github_token',
+    'github_token_status',
+    'backendApiSecret',
+    'backend_api_secret',
+    'backendUrl',
+    'backend_url',
+    'mcpConfig',
+    'mcp_config',
+    'proxyConfig',
+    'proxy_config',
+  ]);
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>)
-      .filter(([key]) => key !== 'github_token' && key !== 'github_token_status'),
+      .filter(([key]) => !removedKeys.has(key)),
   );
 }
 
 async function readSettings(env: Env): Promise<Record<string, unknown>> {
   const stored = await readState(env, 'settings', {});
-  const sanitized = withoutGitHubToken(stored);
-  // Also clean up settings written by older Worker versions that accepted the
-  // token field, so the credential is removed from D1 at the next read.
+  const sanitized = withoutDeprecatedSettings(stored);
+  // Also clean up settings written by older runtimes so removed credentials
+  // and runtime-specific settings are removed from D1 at the next read.
   if (stored && typeof stored === 'object' && !Array.isArray(stored)) {
     const storedKeys = Object.keys(stored as Record<string, unknown>);
     if (storedKeys.length !== Object.keys(sanitized).length) {
@@ -262,7 +272,7 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
   }
   if (path === 'settings' && request.method === 'GET') return json(await readSettings(env));
   if (path === 'settings' && request.method === 'PUT') {
-    await writeState(env, path, withoutGitHubToken(await request.json()));
+    await writeState(env, path, withoutDeprecatedSettings(await request.json()));
     return json({ success: true });
   }
   return json({ error: 'Not Found' }, 404);

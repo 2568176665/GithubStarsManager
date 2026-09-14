@@ -47,3 +47,14 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Install Worker dependencies
+        run: npm ci
+        working-directory: cloudflare-worker
+
+      - name: Worker typecheck
+        run: npx tsc -p tsconfig.json --noEmit
+        working-directory: cloudflare-worker
+
+      - name: Wrangler integration tests
+        run: npm run test:wrangler

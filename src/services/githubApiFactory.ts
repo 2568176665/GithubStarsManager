@@ -1,4 +1,3 @@
-import { useAppStore } from '../store/useAppStore';
 import { backend } from './backendAdapter';
 import { GitHubApiService } from './githubApi';
 import { GitHubListsApiService } from './githubListsApi';
@@ -19,7 +18,6 @@ export function createGitHubApiService(token: string): GitHubApiService {
 
   if (shouldAttachBackend()) {
     api.setBackendUrl(backend.backendUrl);
-    api.setBackendAuthToken(useAppStore.getState().backendApiSecret || null);
   }
 
   return api;
@@ -30,7 +28,6 @@ export function createGitHubListsApiService(token: string): GitHubListsApiServic
 
   if (shouldAttachBackend()) {
     api.setBackendUrl(backend.backendUrl);
-    api.setBackendAuthToken(useAppStore.getState().backendApiSecret || null);
   }
 
   return api;

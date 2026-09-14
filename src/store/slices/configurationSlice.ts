@@ -1,6 +1,6 @@
 
 import type { AppStoreSlice } from '../types';
-import { mergeVectorSearchConfig, normalizeMcpConfig } from '../schema';
+import { mergeVectorSearchConfig } from '../schema';
 import { resolveActiveAIConfig } from '../../utils/aiConfig';
 
 export const createConfigurationSlice: AppStoreSlice<Pick<import('../types').AppActions,
@@ -24,7 +24,6 @@ export const createConfigurationSlice: AppStoreSlice<Pick<import('../types').App
   | 'setVectorSearchConfig'
   | 'setVectorSearchStatus'
   | 'setVectorIndexingState'
-  | 'setMcpConfig'
 >> = (set) => ({
       // AI actions
       addAIConfig: (config) => set((state) => {
@@ -107,10 +106,6 @@ export const createConfigurationSlice: AppStoreSlice<Pick<import('../types').App
         vectorSearchConfig: mergeVectorSearchConfig(state.vectorSearchConfig, config)
       })),
       setVectorSearchStatus: (status) => set({ vectorSearchStatus: status }),
-      setMcpConfig: (config) =>
-        set((state) => ({
-          mcpConfig: normalizeMcpConfig({ ...state.mcpConfig, ...config }),
-        })),
       setVectorIndexingState: (indexingState) => set((state) => ({
         vectorIndexingState: { ...state.vectorIndexingState, ...indexingState }
       })),

@@ -8,7 +8,7 @@
  * cannot silently let a View component import a business service, or an
  * application command import React/JSX/the Store/a service.
  *
- * Contract source of truth: docs/adr/0001-frontend-layering.md
+ * Contract source of truth: this script and the Worker-only repository rules.
  *
  * Properties:
  *  - No network, no dynamic import, no execution of repo code. It only reads
@@ -101,7 +101,7 @@ function checkComponentFile(full, relPath) {
       // match ../services/name, ../../services/name, services/name, etc.
       if (new RegExp(`(^|/)services/${name}(\\.js)?$`).test(spec)) {
         console.error(
-          `✖ ${relPath}: View component must not import business service '${name}' (imported '${spec}'). See docs/adr/0001-frontend-layering.md.`,
+          `✖ ${relPath}: View component must not import business service '${name}' (imported '${spec}').`,
         );
         violations++;
       }
@@ -113,7 +113,7 @@ function checkComponentFile(full, relPath) {
     for (const name of BANNED_COMPONENT_SERVICES) {
       if (new RegExp(`(^|/)services/${name}(\\.js)?$`).test(spec)) {
         console.error(
-          `✖ ${relPath}: View component must not dynamically import() business service '${name}' (imported '${spec}'). See docs/adr/0001-frontend-layering.md.`,
+          `✖ ${relPath}: View component must not dynamically import() business service '${name}' (imported '${spec}').`,
         );
         violations++;
       }
@@ -133,7 +133,7 @@ function checkApplicationFile(full, relPath) {
   }
   const reportApplication = (spec, kind) => {
     console.error(
-      `✖ ${relPath}: Application command must not ${kind} '${spec}' (pure state transition). See docs/adr/0001-frontend-layering.md.`,
+      `✖ ${relPath}: Application command must not ${kind} '${spec}' (pure state transition).`,
     );
     violations++;
   };
@@ -145,7 +145,7 @@ function checkApplicationFile(full, relPath) {
     if (APPLICATION_BANNED_PATTERNS.some((re) => re.test(spec))) {
       const storeKind = /\/store\//.test(spec) ? 'the Store' : 'a service';
       console.error(
-        `✖ ${relPath}: Application command must not ${kind} ${storeKind} (imported '${spec}'). See docs/adr/0001-frontend-layering.md.`,
+      `✖ ${relPath}: Application command must not ${kind} ${storeKind} (imported '${spec}').`,
       );
       violations++;
       return true;

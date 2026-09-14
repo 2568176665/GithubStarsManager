@@ -6,7 +6,6 @@ import type { Release } from '../types';
 vi.mock('../store/useAppStore', () => ({
   useAppStore: vi.fn(() => ({
     rpcDownloadConfig: { enabled: true, host: '', port: 6800 },
-    backendApiSecret: null,
     aiConfigs: [],
     activeAIConfig: null,
   })),

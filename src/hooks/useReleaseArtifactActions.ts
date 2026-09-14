@@ -37,12 +37,11 @@ export interface ReleaseArtifactActions {
 
 /**
  * Release 资产动作（RPC 发送 + AI 总结），规范语义取自 ReleaseCard 版本；
- * useRepositoryReleaseSheet 委托本 hook（ADR 0001：同一逻辑不允许第三份拷贝）。
+ * useRepositoryReleaseSheet 委托本 hook，避免重复实现。
  */
 export const useReleaseArtifactActions = (): ReleaseArtifactActions => {
-  const { language, backendApiSecret, aiConfigs, activeAIConfig } = useAppStore(useShallow((state) => ({
+  const { language, aiConfigs, activeAIConfig } = useAppStore(useShallow((state) => ({
     language: state.language,
-    backendApiSecret: state.backendApiSecret,
     aiConfigs: state.aiConfigs,
     activeAIConfig: state.activeAIConfig,
   })));
@@ -87,7 +86,7 @@ export const useReleaseArtifactActions = (): ReleaseArtifactActions => {
     // 否则卡片会把失败的重试报告成成功。
     applyRpcDownloadState(key, 'sending');
     try {
-      const result = await sendToRpcDownload(link.url, link.name, backendApiSecret || undefined);
+      const result = await sendToRpcDownload(link.url, link.name);
       if (result.success) {
         applyRpcDownloadState(key, 'sent');
         toast(t('已发送到远程下载器', 'Sent to remote downloader'), 'success');
@@ -104,7 +103,7 @@ export const useReleaseArtifactActions = (): ReleaseArtifactActions => {
       applyRpcDownloadState(key, 'idle');
       toast(t('远程下载服务未运行，请检查配置', 'Remote download service not running, please check config'), 'error');
     }
-  }, [applyRpcDownloadState, backendApiSecret, t, toast]);
+  }, [applyRpcDownloadState, t, toast]);
 
   const generateSummary = useCallback(async (release: Release) => {
     const existing = summaries[release.id];

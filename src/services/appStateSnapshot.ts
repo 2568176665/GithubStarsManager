@@ -4,8 +4,7 @@ type AppStoreState = ReturnType<typeof useAppStore.getState>;
 
 /**
  * Fields stored in the backend settings snapshot. The GitHub token remains
- * client-side; the IndexedDB copy is only a cache. The backend API secret is
- * a connection credential and remains in the browser session.
+ * client-side; the IndexedDB copy is only a cache.
  */
 export const APP_STATE_SNAPSHOT_KEYS = [
   'user',
@@ -74,9 +73,7 @@ export const APP_STATE_SNAPSHOT_KEYS = [
   'repositoryViewMode',
   'searchFilters',
   'vectorSearchStatus',
-  'proxyConfig',
   'rpcDownloadConfig',
-  'mcpConfig',
 ] as const;
 
 export function hasAppStateSnapshotChanged(state: AppStoreState, previousState: AppStoreState): boolean {
@@ -87,7 +84,7 @@ export function hasAppStateSnapshotChanged(state: AppStoreState, previousState: 
 
 /**
  * Data that should follow the account across browser origins. The GitHub token
- * and backend API secret are deliberately excluded from this snapshot.
+ * is deliberately excluded from this snapshot.
  */
 export function buildAppStateSnapshot(state: AppStoreState): Record<string, unknown> {
   return {
@@ -156,25 +153,11 @@ export function buildAppStateSnapshot(state: AppStoreState): Record<string, unkn
     lastBackup: state.lastBackup,
     repositoryViewMode: state.repositoryViewMode,
     searchFilters: state.searchFilters,
-    proxyConfig: {
-      enabled: state.proxyConfig.enabled,
-      type: state.proxyConfig.type,
-      host: state.proxyConfig.host,
-      port: state.proxyConfig.port,
-      username: state.proxyConfig.username,
-      password: state.proxyConfig.password,
-    },
     rpcDownloadConfig: {
       enabled: state.rpcDownloadConfig.enabled,
       host: state.rpcDownloadConfig.host,
       port: state.rpcDownloadConfig.port,
       secret: state.rpcDownloadConfig.secret,
-    },
-    mcpConfig: {
-      enabled: state.mcpConfig.enabled,
-      host: state.mcpConfig.host,
-      port: state.mcpConfig.port,
-      token: state.mcpConfig.token,
     },
     vectorSearchStatus: state.vectorSearchStatus,
   };
@@ -200,7 +183,7 @@ export function applyAppStateSnapshot(snapshot: Record<string, unknown>): void {
     'discoveryPlatform', 'discoveryLanguage', 'discoverySortBy', 'discoverySortOrder',
     'discoverySearchQuery', 'discoverySelectedTopic', 'trendingTimeRange', 'syncMode',
     'syncModeConfigured', 'theme', 'currentView', 'selectedCategory', 'language',
-    'isSidebarCollapsed', 'repositoryViewMode', 'proxyConfig', 'rpcDownloadConfig', 'mcpConfig',
+    'isSidebarCollapsed', 'repositoryViewMode', 'rpcDownloadConfig',
     'activeAIConfig', 'activeWebDAVConfig', 'activeEmbeddingConfig', 'collapsedSidebarCategoryCount',
     'categoryMatchMode', 'includePreRelease', 'includeKeysInBackup', 'lastSync', 'lastBackup',
     'themePreset', 'translationEngine', 'vectorSearchStatus',
@@ -228,9 +211,5 @@ export function applyAppStateSnapshot(snapshot: Record<string, unknown>): void {
   if (Array.isArray(next.readReleases)) next.readReleases = new Set(next.readReleases as number[]);
   if (Array.isArray(next.releaseExpandedRepositories)) next.releaseExpandedRepositories = new Set(next.releaseExpandedRepositories as number[]);
   if (Array.isArray(next.forkExpandedRepositories)) next.forkExpandedRepositories = new Set(next.forkExpandedRepositories as number[]);
-  if (next.mcpConfig && typeof next.mcpConfig === 'object') {
-    next.mcpConfig = { ...useAppStore.getState().mcpConfig, ...(next.mcpConfig as Record<string, unknown>) };
-  }
-
   useAppStore.setState(next as Partial<AppStoreState>);
 }

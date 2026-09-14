@@ -20,11 +20,9 @@ import {
   X,
 } from 'lucide-react';
 import { logger, LogLevel, LogEntry } from '../../services/logger';
-import { maskUrlDomain } from '../../utils/logSanitizer';
 import { inferEventType, EVENT_TYPE_LABELS, LogEventType } from '../../utils/logEventTypes';
 import { version as appVersion } from '../../../package.json';
 import { useAppStore } from '../../store/useAppStore';
-import { useDiagnosticBackendActions } from '../../features/settings/hooks/useDiagnosticBackendActions';
 
 interface DiagnosticLogsPanelProps {
   t: (zh: string, en: string) => string;
@@ -100,7 +98,7 @@ const LogDetailModal: React.FC<LogDetailModalProps> = ({ entry, language, t, onC
             </Row>
             <Row label={t('来源', 'Source')}>
               <Badge variant="secondary">
-                {entry.source === 'frontend' ? t('前端', 'Frontend') : t('后端', 'Backend')}
+                {t('前端', 'Frontend')}
               </Badge>
             </Row>
             <Row label={t('事件类型', 'Event Type')}>
@@ -274,11 +272,6 @@ export const DiagnosticLogsPanel: React.FC<DiagnosticLogsPanelProps> = ({ t }) =
   // Filter state
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedLevels, setSelectedLevels] = useState<Set<LogLevel>>(new Set(['info', 'warn', 'error']));
-  const [selectedScope, setSelectedScope] = useState<'all' | 'frontend' | 'backend'>('all');
-  const {
-    backendAvailable, backendUrl, backendDebug, backendEntries, backendLogCount,
-    clear: clearBackend, refresh: refreshBackend, toggleDebug: toggleBackendDebug, fetchLogs: fetchBackendLogs,
-  } = useDiagnosticBackendActions({ selectedScope });
   const [selectedEventTypes, setSelectedEventTypes] = useState<Set<LogEventType>>(new Set());
   const [showEventTypeDropdown, setShowEventTypeDropdown] = useState(false);
 
@@ -303,12 +296,10 @@ export const DiagnosticLogsPanel: React.FC<DiagnosticLogsPanelProps> = ({ t }) =
   }, []);
 
 
-  // Merge entries — sorted by timestamp DESCENDING (newest first)
+  // Frontend logs are sorted newest first.
   const allEntries = useMemo(() => {
-    if (selectedScope === 'frontend') return [...entries].sort((a, b) => b.timestamp.localeCompare(a.timestamp));
-    if (selectedScope === 'backend') return [...backendEntries].sort((a, b) => b.timestamp.localeCompare(a.timestamp));
-    return [...entries, ...backendEntries].sort((a, b) => b.timestamp.localeCompare(a.timestamp));
-  }, [entries, backendEntries, selectedScope]);
+    return [...entries].sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+  }, [entries]);
 
   // Derived: available event types
   const availableEventTypes = useMemo(() => {
@@ -334,7 +325,7 @@ export const DiagnosticLogsPanel: React.FC<DiagnosticLogsPanelProps> = ({ t }) =
   const visibleEntries = useMemo(() => filteredEntries.slice(0, visibleCount), [filteredEntries, visibleCount]);
 
   // Reset visible count when filters change
-  useEffect(() => { setVisibleCount(PAGE_SIZE); }, [searchQuery, selectedLevels, selectedEventTypes, selectedScope]);
+  useEffect(() => { setVisibleCount(PAGE_SIZE); }, [searchQuery, selectedLevels, selectedEventTypes]);
 
   // Frontend counts
   const frontendCounts = useMemo(() => {
@@ -358,18 +349,17 @@ export const DiagnosticLogsPanel: React.FC<DiagnosticLogsPanelProps> = ({ t }) =
 
 
   // Clear logs
-  const handleClear = useCallback(async () => {
-    if (selectedScope === 'frontend' || selectedScope === 'all') { logger.clear(); setEntries([]); }
-    if ((selectedScope === 'backend' || selectedScope === 'all') && backendAvailable) {
-      await clearBackend();
-    }
-  }, [selectedScope, backendAvailable, clearBackend]);
+  const handleClear = useCallback(() => {
+    logger.clear();
+    setEntries([]);
+  }, []);
 
   // Refresh
-  const handleRefresh = useCallback(async () => {
+  const handleRefresh = useCallback(() => {
     setIsRefreshing(true);
-    try { await refreshBackend(); } finally { setIsRefreshing(false); }
-  }, [refreshBackend]);
+    setEntries(logger.getEntries());
+    setIsRefreshing(false);
+  }, []);
 
   // Export
   const handleExport = useCallback(async () => {
@@ -380,23 +370,15 @@ export const DiagnosticLogsPanel: React.FC<DiagnosticLogsPanelProps> = ({ t }) =
         ? (Object.entries(levelOrder).find(([l]) => selectedLevels.has(l as LogLevel))?.[1] ?? 3)
         : 3;
       const minLevelName = (Object.entries(levelOrder).find(([, v]) => v === minLevel)?.[0] as LogLevel) || 'info';
-      const frontendLogs = selectedScope !== 'backend'
-        ? logger.getEntries({ level: minLevelName }).filter(e => selectedLevels.has(e.level)) : [];
-      let backendLogs: LogEntry[] = [];
-      if (selectedScope !== 'frontend' && backendAvailable) {
-        backendLogs = ((await fetchBackendLogs(minLevelName))?.logs ?? []).filter((entry) => selectedLevels.has(entry.level));
-      }
+      const frontendLogs = logger.getEntries({ level: minLevelName }).filter(e => selectedLevels.has(e.level));
       const state = useAppStore.getState();
       const environment = {
         platform: 'web',
         osPlatform: navigator.platform,
         screenResolution: `${screen.width}x${screen.height}`,
-        backendAvailable,
-        backendUrl: backendAvailable ? maskUrlDomain(backendUrl) : null,
         language: state.language,
         repoCount: state.repositories?.length ?? 0,
         frontendDebugMode: frontendDebug,
-        backendDebugMode: backendDebug,
         appVersion,
       };
       const exportData = {
@@ -404,7 +386,7 @@ export const DiagnosticLogsPanel: React.FC<DiagnosticLogsPanelProps> = ({ t }) =
         exportDate: new Date().toISOString(),
         appVersion, environment,
         sanitizationNote: t('所有 Token、API Key、密码、邮箱已脱敏为 ***格式', 'All tokens, API keys, passwords, and emails have been masked as ***<last4>'),
-        frontendLogs, backendLogs,
+        frontendLogs,
       };
       const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
@@ -412,7 +394,7 @@ export const DiagnosticLogsPanel: React.FC<DiagnosticLogsPanelProps> = ({ t }) =
       a.download = `github-stars-manager-logs-${new Date().toISOString().split('T')[0]}.json`;
       document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
     } catch { /* Export failed */ } finally { setIsExporting(false); }
-  }, [selectedScope, selectedLevels, backendAvailable, backendDebug, backendUrl, fetchBackendLogs, frontendDebug, t]);
+  }, [selectedLevels, frontendDebug, t]);
 
   const toggleLevel = useCallback((level: LogLevel) => {
     setSelectedLevels(prev => { const next = new Set(prev); if (next.has(level)) next.delete(level); else next.add(level); return next; });
@@ -453,23 +435,6 @@ export const DiagnosticLogsPanel: React.FC<DiagnosticLogsPanelProps> = ({ t }) =
                 checked={frontendDebug}
                 onCheckedChange={() => toggleFrontendDebug()}
                 aria-label={t('切换前端调试', 'Toggle frontend debug')}
-              />
-            </div>
-            <div className="flex items-center justify-between">
-              <div className="flex-1">
-                <div className="flex items-center space-x-2">
-                  <span className={`font-medium ${backendAvailable ? 'text-foreground dark:text-foreground' : 'text-muted-foreground dark:text-muted-foreground/70'}`}>{t('后端调试', 'Backend Debug')}</span>
-                  <Badge variant={backendAvailable && backendDebug ? 'default' : 'secondary'}>
-                    {backendAvailable ? (backendDebug ? t('已开启', 'ON') : t('已关闭', 'OFF')) : t('后端未连接', 'Not connected')}
-                  </Badge>
-                </div>
-                <p className="text-sm text-muted-foreground dark:text-muted-foreground mt-1">{t('开启后将记录所有后端 HTTP 请求详情', 'Records all backend HTTP request details')}</p>
-              </div>
-              <Switch
-                checked={backendDebug}
-                onCheckedChange={() => toggleBackendDebug()}
-                disabled={!backendAvailable}
-                aria-label={t('切换后端调试', 'Toggle backend debug')}
               />
             </div>
             <p className="flex items-center gap-2 rounded-md bg-muted/40 p-3 text-sm text-muted-foreground">
@@ -514,19 +479,8 @@ export const DiagnosticLogsPanel: React.FC<DiagnosticLogsPanelProps> = ({ t }) =
             ))}
           </div>
 
-          {/* Scope + Event type + Actions */}
+          {/* Event type + Actions */}
           <div className="flex items-center space-x-3 flex-wrap gap-y-2">
-            <div className="flex items-center rounded-lg border border-border dark:border-border overflow-hidden">
-              {(['all', 'frontend', 'backend'] as const).map(scope => (
-                <Button key={scope} onClick={() => setSelectedScope(scope)} disabled={scope === 'backend' && !backendAvailable}
-                  aria-pressed={selectedScope === scope}
-                  variant={selectedScope === scope ? 'default' : 'outline'}
-                  size="sm"
-                  className={`h-8 rounded-none border-0 px-3 text-sm first:rounded-l-md last:rounded-r-md ${scope === 'backend' && !backendAvailable ? 'opacity-40 cursor-not-allowed' : ''}`}>
-                  {scope === 'all' ? t('全部', 'All') : scope === 'frontend' ? t('前端', 'Frontend') : t('后端', 'Backend')}
-                </Button>
-              ))}
-            </div>
             <DropdownMenu open={showEventTypeDropdown} onOpenChange={setShowEventTypeDropdown}>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" type="button" className="h-8 gap-1 px-3 text-sm">
@@ -550,7 +504,7 @@ export const DiagnosticLogsPanel: React.FC<DiagnosticLogsPanelProps> = ({ t }) =
               </DropdownMenuContent>
             </DropdownMenu>
             <div className="flex items-center space-x-2 ml-auto">
-                <Button variant="ghost" size="icon" onClick={handleRefresh} disabled={isRefreshing || !backendAvailable}
+                <Button variant="ghost" size="icon" onClick={handleRefresh} disabled={isRefreshing}
                 aria-label={t('刷新', 'Refresh')} className="size-9" title={t('刷新', 'Refresh')}>
                 <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
               </Button>
@@ -567,9 +521,8 @@ export const DiagnosticLogsPanel: React.FC<DiagnosticLogsPanelProps> = ({ t }) =
 
           <div className="text-xs text-muted-foreground dark:text-muted-foreground">
             {t(`显示 ${filteredEntries.length} / ${totalCount} 条`, `Showing ${filteredEntries.length} / ${totalCount} entries`)}
-            {(frontendDebug || backendDebug) && <Badge variant="secondary" className="ml-2">{t('调试模式已开启', 'Debug mode ON')}</Badge>}
-            {selectedScope !== 'backend' && <span className="ml-1">· {t(`前端 ${frontendCounts.total}`, `Frontend ${frontendCounts.total}`)}</span>}
-            {selectedScope !== 'frontend' && backendAvailable && <span className="ml-1">· {t(`后端 ${backendLogCount}`, `Backend ${backendLogCount}`)}</span>}
+            {frontendDebug && <Badge variant="secondary" className="ml-2">{t('调试模式已开启', 'Debug mode ON')}</Badge>}
+            <span className="ml-1">· {t(`前端 ${frontendCounts.total}`, `Frontend ${frontendCounts.total}`)}</span>
           </div>
         </section>
 
@@ -617,7 +570,7 @@ export const DiagnosticLogsPanel: React.FC<DiagnosticLogsPanelProps> = ({ t }) =
                       <div className="flex items-center space-x-2 flex-wrap gap-y-1">
                         <Badge variant={LEVEL_BADGE_VARIANTS[entry.level]}>{entry.level}</Badge>
                         <Badge variant="secondary">
-                          {entry.source === 'frontend' ? t('前端', 'FE') : t('后端', 'BE')}
+                          {t('前端', 'FE')}
                         </Badge>
                         <Badge variant="outline">
                           {language === 'zh' ? EVENT_TYPE_LABELS[eventType].zh : EVENT_TYPE_LABELS[eventType].en}

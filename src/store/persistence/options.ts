@@ -8,7 +8,6 @@ import { normalizeReleaseSourceSettings } from '../../utils/releaseSources';
 import type { AppStoreState } from '../types';
 import {
   defaultDiscoveryChannels,
-  normalizeMcpConfig,
   normalizeRepositoryChatSettings,
   normalizeVectorSearchConfig,
   normalizeVectorSearchStatus,
@@ -20,7 +19,7 @@ import { debouncedPersistStorage } from './storage';
 
 export const appPersistenceOptions: PersistOptions<AppStoreState, PersistedAppState> = {
   name: 'github-stars-manager',
-  version: 13,
+  version: 14,
   storage: debouncedPersistStorage as PersistStorage<PersistedAppState>,
 partialize: (state) => ({
   // 持久化用户信息和认证状态
@@ -55,9 +54,6 @@ sortOrder: state.gistSearchFilters.sortOrder,
   vectorSearchConfig: state.vectorSearchConfig,
   // 持久化向量搜索状态（vectorCount 等，跨重启保留）
   vectorSearchStatus: state.vectorSearchStatus,
-
-  // MCP prefs + bearer token (stable across restarts; only changes on user reset)
-  mcpConfig: state.mcpConfig,
 
   // 持久化WebDAV配置
   webdavConfigs: state.webdavConfigs,
@@ -95,10 +91,6 @@ sortOrder: state.gistSearchFilters.sortOrder,
   isSidebarCollapsed: state.isSidebarCollapsed,
   headerMenuConfig: state.headerMenuConfig,
 
-  // 持久化后端 API Secret（跨会话/跨标签保留，配合修复 #259）。同时保留
-  // localStorage 镜像（AUTH_MIRROR_KEY）作为异步 IndexedDB 写入失败时的兜底。
-  backendApiSecret: state.backendApiSecret,
-
   // 持久化同步范围配置（GitHub Lists 同步）
   syncMode: state.syncMode,
   syncModeConfigured: state.syncModeConfigured,
@@ -133,7 +125,7 @@ sortOrder: state.searchFilters.sortOrder,
 discoveryChannels: state.discoveryChannels,
 selectedDiscoveryChannel: state.selectedDiscoveryChannel,
 // discoveryRepos 不持久化，它是极其庞大的 JSON 对象。
-// 在 Electron 41/v8/macOS 上的 IDB partialize 阶段，
+// 在部分浏览器的 IDB partialize 阶段，
 // 由于频繁序列化这个可能达数MB的大对象，会触发底层 JIT CHECK assertion failed (brk 0) 导致崩溃。
 // 这里的会话级运行时数据都取消持久化：
 // discoveryRepos
@@ -146,15 +138,6 @@ discoveryLanguage: state.discoveryLanguage,
 discoverySortBy: state.discoverySortBy,
 discoverySortOrder: state.discoverySortOrder,
 discoverySelectedTopic: state.discoverySelectedTopic,
-// 持久化完整代理配置，包含认证密码，确保重启后无需重新输入。
-proxyConfig: {
-  enabled: state.proxyConfig.enabled,
-  type: state.proxyConfig.type,
-  host: state.proxyConfig.host,
-  port: state.proxyConfig.port,
-  username: state.proxyConfig.username,
-  password: state.proxyConfig.password,
-},
 // 持久化 RPC 下载配置（含密钥，确保重启后不丢失）
 rpcDownloadConfig: {
   enabled: state.rpcDownloadConfig.enabled,
@@ -196,12 +179,6 @@ state.defaultCategoryOverrides = {};
   // 从旧版本升级时，确保 vectorSearchStatus 字段存在（vectorCount 等）
   if (state) {
 state.vectorSearchStatus = normalizeVectorSearchStatus(state.vectorSearchStatus);
-  }
-
-  // Additive: MCP config defaults when missing (upgrade). Old builds ignore this key on downgrade.
-  if (state) {
-const stateRecord = state as Record<string, unknown>;
-stateRecord.mcpConfig = normalizeMcpConfig(stateRecord.mcpConfig);
   }
 
   // 迁移仓库数据中的旧标记
@@ -307,11 +284,6 @@ state.discoverySortOrder = 'Descending';
 };
   }
 
-  // v5→v6: 初始化 proxyConfig
-  if (state && !(state as Record<string, unknown>).proxyConfig) {
-(state as Record<string, unknown>).proxyConfig = { enabled: false, type: 'http', host: '', port: 7890 };
-  }
-
   // 初始化 rpcDownloadConfig
   if (state && !(state as Record<string, unknown>).rpcDownloadConfig) {
 (state as Record<string, unknown>).rpcDownloadConfig = { enabled: false, host: '', port: 6800 };
@@ -328,11 +300,6 @@ state.discoverySortOrder = 'Descending';
   // v8→v9: 初始化 headerMenuConfig
   if (state && !Array.isArray((state as Record<string, unknown>).headerMenuConfig)) {
 (state as Record<string, unknown>).headerMenuConfig = defaultHeaderMenuConfig;
-  }
-
-  // v9→v10: 初始化 backendApiSecret（旧版仅存 sessionStorage；migrate 前置为 null）
-  if (state && typeof (state as Record<string, unknown>).backendApiSecret !== 'string') {
-(state as Record<string, unknown>).backendApiSecret = null;
   }
 
   // v11→v12: 仓库问答设置只存非敏感字段；旧快照使用安全默认值。
@@ -358,7 +325,6 @@ stateRecord.vectorSearchConfig = normalizeVectorSearchConfig(
 stateRecord.vectorSearchConfig,
 stateRecord.embeddingConfigs
 );
-stateRecord.mcpConfig = normalizeMcpConfig(stateRecord.mcpConfig);
   }
 
   return state as PersistedAppState;
@@ -388,7 +354,6 @@ customCategoriesCount: normalized.customCategories?.length || 0,
   writeAuthMirror({
 user: merged.user ?? null,
 githubToken: typeof merged.githubToken === 'string' ? merged.githubToken : null,
-backendApiSecret: typeof merged.backendApiSecret === 'string' ? merged.backendApiSecret : null,
   });
 
   return merged;

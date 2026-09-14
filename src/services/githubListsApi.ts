@@ -158,7 +158,6 @@ function buildProxyDiagnostics(payload: unknown): string {
 export class GitHubListsApiService {
   private token: string;
   private backendUrl: string | null = null;
-  private backendAuthToken: string | null = null;
   /** 后端代理路径失败后置位，本实例剩余请求走直连（幂等切换，不重复尝试代理）。 */
   private proxyFailed = false;
 
@@ -170,16 +169,8 @@ export class GitHubListsApiService {
     this.backendUrl = url;
   }
 
-  setBackendAuthToken(token: string | null): void {
-    this.backendAuthToken = token;
-  }
-
   private getBackendHeaders(): Record<string, string> {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (this.backendAuthToken) {
-      headers.Authorization = `Bearer ${this.backendAuthToken}`;
-    }
-    return headers;
+    return { 'Content-Type': 'application/json' };
   }
 
   /**

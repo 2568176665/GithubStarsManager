@@ -1,196 +1,81 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useShallow } from 'zustand/react/shallow';
-import type { ProxyConfig, RpcDownloadConfig } from '../../../types';
 import { useAppStore } from '../../../store/useAppStore';
 import { backend } from '../../../services/backendAdapter';
 import { testRpcDownload } from '../../../services/rpcDownloadService';
+import type { RpcDownloadConfig } from '../../../types';
 
 interface UseNetworkActionsOptions {
   t: (zh: string, en: string) => string;
 }
 
-type ConnectionResult = { success: boolean; error?: string };
-type RpcConnectionResult = ConnectionResult & { version?: string };
+type RpcConnectionResult = { success: boolean; error?: string; version?: string };
 
 export interface NetworkActions {
-  canUseProxy: boolean;
-  form: ProxyConfig;
   rpcForm: RpcDownloadConfig;
-  testing: boolean;
-  saving: boolean;
-  isProxyToggling: boolean;
-  testResult: ConnectionResult | null;
   rpcTesting: boolean;
   rpcSaving: boolean;
   isRpcToggling: boolean;
   rpcTestResult: RpcConnectionResult | null;
   hasStoredSecret: boolean;
-  isFormValid: boolean;
   isRpcFormValid: boolean;
-  hasProxyChanges: boolean;
   hasRpcChanges: boolean;
-  setForm: (config: ProxyConfig) => void;
   setRpcForm: (config: RpcDownloadConfig) => void;
   clearStoredSecret: () => void;
-  saveProxy: () => Promise<void>;
-  testProxy: () => Promise<void>;
-  toggleProxy: (enabled: boolean) => Promise<void>;
   saveRpc: () => Promise<void>;
   testRpc: () => Promise<void>;
   toggleRpc: (enabled: boolean) => Promise<void>;
 }
 
-/**
- * Owns all service-facing network settings operations. Local persistence remains
- * in the existing store, preserving its intentional proxy-password/RPC-secret
- * asymmetry.
- */
 export const useNetworkActions = ({ t }: UseNetworkActionsOptions): NetworkActions => {
-  const { proxyConfig, setProxyConfig, rpcDownloadConfig, setRpcDownloadConfig, backendApiSecret } = useAppStore(useShallow((state) => ({
-    proxyConfig: state.proxyConfig,
-    setProxyConfig: state.setProxyConfig,
+  const { rpcDownloadConfig, setRpcDownloadConfig } = useAppStore((state) => ({
     rpcDownloadConfig: state.rpcDownloadConfig,
     setRpcDownloadConfig: state.setRpcDownloadConfig,
-    backendApiSecret: state.backendApiSecret,
-  })));
-  const [form, setForm] = useState<ProxyConfig>(proxyConfig);
-  const [rpcForm, setRpcForm] = useState<RpcDownloadConfig>(rpcDownloadConfig);
-  const [testing, setTesting] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [isProxyToggling, setIsProxyToggling] = useState(false);
-  const [testResult, setTestResult] = useState<ConnectionResult | null>(null);
+  }));
+  const [rpcForm, setRpcForm] = useState(rpcDownloadConfig);
   const [rpcTesting, setRpcTesting] = useState(false);
   const [rpcSaving, setRpcSaving] = useState(false);
   const [isRpcToggling, setIsRpcToggling] = useState(false);
   const [rpcTestResult, setRpcTestResult] = useState<RpcConnectionResult | null>(null);
-  const [hasStoredSecret, setHasStoredSecret] = useState(() => !!rpcDownloadConfig.secret);
+  const [hasStoredSecret, setHasStoredSecret] = useState(() => Boolean(rpcDownloadConfig.secret));
 
-  useEffect(() => {
-    setForm((current) => ({ ...current, enabled: proxyConfig.enabled }));
-  }, [proxyConfig]);
   useEffect(() => {
     setRpcForm((current) => ({ ...current, enabled: rpcDownloadConfig.enabled }));
-  }, [rpcDownloadConfig]);
-
-  const getRpcBaseUrl = useCallback(async (): Promise<string> => {
-    if (!backend.isAvailable) await backend.init();
-    if (!backend.backendUrl) throw new Error('Backend not available');
-    return backend.backendUrl;
-  }, []);
+  }, [rpcDownloadConfig.enabled]);
 
   useEffect(() => {
     const loadRpcConfig = async () => {
       try {
-        const base = await getRpcBaseUrl();
-        const headers: Record<string, string> = backendApiSecret ? { Authorization: `Bearer ${backendApiSecret}` } : {};
-        const response = await fetch(`${base}/settings/rpc-download`, { headers });
+        if (!backend.isAvailable) await backend.init();
+        if (!backend.backendUrl) return;
+        const response = await fetch(`${backend.backendUrl}/settings/rpc-download`);
         if (!response.ok) return;
         const data = await response.json() as Partial<RpcDownloadConfig> & { hasSecret?: boolean };
         if (data.hasSecret) setHasStoredSecret(true);
-        if (data.enabled !== undefined || data.host || data.port) {
-          const currentStoreConfig = useAppStore.getState().rpcDownloadConfig;
-          const hydratedConfig = {
-            ...currentStoreConfig,
-            enabled: data.enabled ?? currentStoreConfig.enabled,
-            host: data.host || currentStoreConfig.host,
-            port: data.port || currentStoreConfig.port,
-          };
-          setRpcForm((current) => JSON.stringify(current) === JSON.stringify(currentStoreConfig) ? hydratedConfig : current);
-          setRpcDownloadConfig(hydratedConfig);
-        }
+        if (data.enabled === undefined && !data.host && !data.port) return;
+        const current = useAppStore.getState().rpcDownloadConfig;
+        const hydrated = { ...current, enabled: data.enabled ?? current.enabled, host: data.host || current.host, port: data.port || current.port };
+        setRpcForm((form) => JSON.stringify(form) === JSON.stringify(current) ? hydrated : form);
+        setRpcDownloadConfig(hydrated);
       } catch {
-        // Backend RPC state is optional and should never prevent settings use.
+        // Worker RPC settings are optional and should not block the settings page.
       }
     };
     void loadRpcConfig();
-  }, [backendApiSecret, getRpcBaseUrl, setRpcDownloadConfig]);
+  }, [setRpcDownloadConfig]);
 
-  const backendHeaders = useCallback((): Record<string, string> => ({
-    'Content-Type': 'application/json',
-    ...(backendApiSecret ? { Authorization: `Bearer ${backendApiSecret}` } : {}),
-  }), [backendApiSecret]);
-
-  const putProxy = useCallback(async (config: ProxyConfig) => {
-    if (backend.isAvailable) {
-      const response = await fetch('/api/settings/proxy', {
-        method: 'PUT', headers: backendHeaders(), body: JSON.stringify(config),
-      });
-      if (!response.ok) throw new Error(`Backend returned ${response.status}`);
-    }
-  }, [backendHeaders]);
-
-  const isFormValid = !form.enabled || Boolean(form.host.trim() && form.port >= 1 && form.port <= 65535);
   const isRpcFormValid = !rpcForm.enabled || Boolean(rpcForm.host.trim() && rpcForm.port >= 1 && rpcForm.port <= 65535);
-
-  const saveProxy = useCallback(async () => {
-    if (!isFormValid) return;
-    setSaving(true);
-    setTestResult(null);
-    try {
-      await putProxy(form);
-      // Store persists the complete proxy configuration, including authentication credentials.
-      setProxyConfig(form);
-    } catch (reason) {
-      setTestResult({ success: false, error: reason instanceof Error ? reason.message : t('保存失败', 'Save failed') });
-    } finally {
-      setSaving(false);
-    }
-  }, [form, isFormValid, putProxy, setProxyConfig, t]);
-
-  const testProxy = useCallback(async () => {
-    setTesting(true);
-    setTestResult(null);
-    try {
-      if (backend.isAvailable) {
-        const response = await fetch('/api/settings/proxy/test', {
-          method: 'POST', headers: backendHeaders(), body: JSON.stringify(form),
-        });
-        setTestResult(await response.json() as ConnectionResult);
-      }
-    } catch (reason) {
-      setTestResult({ success: false, error: reason instanceof Error ? reason.message : 'Unknown error' });
-    } finally {
-      setTesting(false);
-    }
-  }, [backendHeaders, form]);
-
-  const toggleProxy = useCallback(async (enabled: boolean) => {
-    if (isProxyToggling) return;
-    const previousForm = form;
-    const nextConfig = { ...proxyConfig, enabled };
-    setIsProxyToggling(true);
-    setForm((current) => ({ ...current, enabled }));
-    setTestResult(null);
-    try {
-      await putProxy(nextConfig);
-      setProxyConfig(nextConfig);
-    } catch (reason) {
-      setForm(previousForm);
-      setTestResult({ success: false, error: reason instanceof Error ? reason.message : t('保存失败', 'Save failed') });
-    } finally {
-      setIsProxyToggling(false);
-    }
-  }, [form, isProxyToggling, proxyConfig, putProxy, setProxyConfig, t]);
-
-  const putRpc = useCallback(async (config: RpcDownloadConfig) => {
-    if (!backend.isAvailable) return;
-    const base = await getRpcBaseUrl();
-    const body: Record<string, unknown> = { enabled: config.enabled, host: config.host, port: config.port };
-    // Empty field means retain existing backend secret; non-empty updates it.
-    if (config.secret) body.secret = config.secret;
-    const response = await fetch(`${base}/settings/rpc-download`, {
-      method: 'PUT', headers: backendHeaders(), body: JSON.stringify(body),
-    });
-    if (!response.ok) throw new Error(`Backend returned ${response.status}`);
-  }, [backendHeaders, getRpcBaseUrl]);
 
   const saveRpc = useCallback(async () => {
     if (!isRpcFormValid) return;
     setRpcSaving(true);
     setRpcTestResult(null);
     try {
-      await putRpc(rpcForm);
-      // Unlike proxy passwords, secret is intentionally retained by store partialize.
+      if (backend.isAvailable && backend.backendUrl) {
+        const body: Record<string, unknown> = { enabled: rpcForm.enabled, host: rpcForm.host, port: rpcForm.port };
+        if (rpcForm.secret) body.secret = rpcForm.secret;
+        const response = await fetch(`${backend.backendUrl}/settings/rpc-download`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        if (!response.ok) throw new Error(`Worker returned ${response.status}`);
+      }
       setRpcDownloadConfig(rpcForm);
       if (rpcForm.secret) setHasStoredSecret(true);
     } catch (reason) {
@@ -198,46 +83,53 @@ export const useNetworkActions = ({ t }: UseNetworkActionsOptions): NetworkActio
     } finally {
       setRpcSaving(false);
     }
-  }, [isRpcFormValid, putRpc, rpcForm, setRpcDownloadConfig, t]);
+  }, [isRpcFormValid, rpcForm, setRpcDownloadConfig, t]);
 
   const testRpc = useCallback(async () => {
     setRpcTesting(true);
     setRpcTestResult(null);
-    try {
-      setRpcTestResult(await testRpcDownload(rpcForm, backendApiSecret || undefined));
-    } catch (reason) {
-      setRpcTestResult({ success: false, error: reason instanceof Error ? reason.message : 'Unknown error' });
-    } finally {
-      setRpcTesting(false);
-    }
-  }, [backendApiSecret, rpcForm]);
+    setRpcTestResult(await testRpcDownload(rpcForm));
+    setRpcTesting(false);
+  }, [rpcForm]);
 
   const toggleRpc = useCallback(async (enabled: boolean) => {
     if (isRpcToggling) return;
     const previous = rpcForm;
-    const nextConfig = { ...rpcDownloadConfig, enabled };
+    const next = { ...rpcDownloadConfig, enabled };
     setIsRpcToggling(true);
     setRpcForm((current) => ({ ...current, enabled }));
-    setRpcTestResult(null);
     try {
-      await putRpc(nextConfig);
-      setRpcDownloadConfig(nextConfig);
+      await saveRpcConfig(next);
+      setRpcDownloadConfig(next);
     } catch (reason) {
       setRpcForm(previous);
       setRpcTestResult({ success: false, error: reason instanceof Error ? reason.message : t('保存失败', 'Save failed') });
     } finally {
       setIsRpcToggling(false);
     }
-  }, [isRpcToggling, putRpc, rpcDownloadConfig, rpcForm, setRpcDownloadConfig, t]);
+  }, [isRpcToggling, rpcDownloadConfig, rpcForm, setRpcDownloadConfig, t]);
+
+  const saveRpcConfig = async (config: RpcDownloadConfig) => {
+    if (!backend.isAvailable || !backend.backendUrl) return;
+    const body: Record<string, unknown> = { enabled: config.enabled, host: config.host, port: config.port };
+    if (config.secret) body.secret = config.secret;
+    const response = await fetch(`${backend.backendUrl}/settings/rpc-download`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!response.ok) throw new Error(`Worker returned ${response.status}`);
+  };
 
   return {
-    canUseProxy: backend.isAvailable,
-    form, rpcForm, testing, saving, isProxyToggling, testResult,
-    rpcTesting, rpcSaving, isRpcToggling, rpcTestResult, hasStoredSecret,
-    isFormValid, isRpcFormValid,
-    hasProxyChanges: JSON.stringify(form) !== JSON.stringify(proxyConfig),
+    rpcForm,
+    rpcTesting,
+    rpcSaving,
+    isRpcToggling,
+    rpcTestResult,
+    hasStoredSecret,
+    isRpcFormValid,
     hasRpcChanges: JSON.stringify(rpcForm) !== JSON.stringify(rpcDownloadConfig),
-    setForm, setRpcForm, clearStoredSecret: () => setHasStoredSecret(false),
-    saveProxy, testProxy, toggleProxy, saveRpc, testRpc, toggleRpc,
+    setRpcForm,
+    clearStoredSecret: () => setHasStoredSecret(false),
+    saveRpc,
+    testRpc,
+    toggleRpc,
   };
 };

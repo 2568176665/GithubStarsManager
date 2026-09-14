@@ -3,10 +3,8 @@ import type { AppState, TrendingTimeRange } from '../types';
 import { defaultHeaderMenuConfig, defaultReleaseSourceSettings, defaultSubscriptionChannels } from '../types';
 import { defaultRepositoryChatSettings } from '../types/repositoryChat';
 import { DEFAULT_THEME_PRESET_ID } from '../constants/themePresets';
-import { readSessionBackendSecret } from './persistence/authStorage';
 import {
   defaultDiscoveryChannels,
-  defaultMcpConfig,
   defaultPresetFilters,
   defaultVectorSearchConfig,
   defaultVectorSearchStatus,
@@ -42,7 +40,6 @@ export const createInitialState = (): AppState => ({
       vectorSearchConfig: { ...defaultVectorSearchConfig },
       vectorSearchStatus: { ...defaultVectorSearchStatus },
       vectorIndexingState: { isIndexing: false, phase: null, phaseDone: 0, phaseTotal: 0, result: null },
-      mcpConfig: { ...defaultMcpConfig },
       similarView: null,
       webdavConfigs: [],
       activeWebDAVConfig: null,
@@ -69,8 +66,6 @@ export const createInitialState = (): AppState => ({
       translationEngine: 'microsoft',
       updateNotification: null,
       analysisProgress: { current: 0, total: 0 },
-      backendApiSecret: readSessionBackendSecret(),
-      proxyConfig: { enabled: false, type: 'http', host: '', port: 7890 },
       rpcDownloadConfig: { enabled: false, host: '', port: 6800 },
       routeMode: 'auto',
       isSidebarCollapsed: false,

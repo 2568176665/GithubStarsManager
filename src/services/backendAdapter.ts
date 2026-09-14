@@ -1,9 +1,7 @@
 import { translateBackendError } from '../utils/backendErrors';
-import { normalizeBackendUrl } from '../utils/backendUrl';
 import { logger } from './logger';
 
 import { Repository, Release, AIConfig, WebDAVConfig, EmbeddingConfig, VectorSearchConfig } from '../types';
-import { useAppStore } from '../store/useAppStore';
 import type { DiscoveryAnalysisRecord } from './discoveryAnalysisStorage';
 import { isReadmeCandidateItem, type GitHubReadmeCandidateItem } from '../utils/readmeVariants';
 
@@ -29,29 +27,13 @@ export function getBackendProbeUrls(origin: string, hostname: string): string[] 
   if (isLocal || isCanonicalWorker) return [currentUrl];
   return [`${WORKER_CANONICAL_API_ORIGIN}/api`, currentUrl];
 }
-const BACKEND_URL_STORAGE_KEY = 'github-stars-manager-backend-url';
-
-const readStoredBackendUrl = (): string | null => {
-  try {
-    return normalizeBackendUrl(localStorage.getItem(BACKEND_URL_STORAGE_KEY) || '');
-  } catch {
-    return null;
-  }
-};
-
 class BackendAdapter {
   private _backendUrl: string | null = null;
   private _workerEnvMode = false;
 
-  async init(preferredUrl?: string): Promise<void> {
+  async init(): Promise<void> {
     try {
-      const configuredUrl = preferredUrl ? normalizeBackendUrl(preferredUrl) : readStoredBackendUrl();
-      const urls = preferredUrl
-        ? (configuredUrl ? [configuredUrl] : [])
-        : (configuredUrl ? [configuredUrl] : getBackendProbeUrls(window.location.origin, window.location.hostname));
-      if (!preferredUrl && !configuredUrl && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
-        urls.push('http://localhost:3000/api');
-      }
+      const urls = getBackendProbeUrls(window.location.origin, window.location.hostname);
 
       for (const baseUrl of urls) {
         const controller = new AbortController();
@@ -68,9 +50,6 @@ class BackendAdapter {
           if (res.ok) {
             const data = await res.json();
             if (data.status === 'ok') {
-              // In-memory commit only. Persistence is an explicit caller
-              // decision (rememberActiveUrl) after its own auth checks, so a
-              // candidate that later fails authentication is never remembered.
               this._backendUrl = baseUrl;
               this._workerEnvMode = data.mode === 'worker-env';
               logger.info('backendAdapter', 'Backend connected', { url: baseUrl });
@@ -105,24 +84,6 @@ class BackendAdapter {
   get isWorkerEnvMode(): boolean {
     return this._workerEnvMode;
   }
-  get configuredUrl(): string | null {
-    return this._backendUrl || readStoredBackendUrl();
-  }
-
-  /**
-   * Persist the active backend URL (the same storage the login screen prefills
-   * from). Call only after caller-side checks — auth, session restore — have
-   * fully succeeded; init() itself never persists candidate URLs.
-   */
-  rememberActiveUrl(): void {
-    if (!this._backendUrl) return;
-    try {
-      localStorage.setItem(BACKEND_URL_STORAGE_KEY, this._backendUrl);
-    } catch {
-      // A restricted browser may block storage; keep this session connected.
-    }
-  }
-
   async fetchManagedSession(): Promise<{ login: string; [key: string]: unknown }> {
     if (!this._backendUrl) throw new Error('Backend not available');
     const res = await this.fetchWithTimeout(`${this._backendUrl}/session`);
@@ -131,14 +92,7 @@ class BackendAdapter {
   }
 
   private getAuthHeaders(): Record<string, string> {
-    const secret = useAppStore.getState().backendApiSecret || '';
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-    if (secret) {
-      headers['Authorization'] = `Bearer ${secret}`;
-    }
-    return headers;
+    return { 'Content-Type': 'application/json' };
   }
   private async fetchWithTimeout(url: string, options?: RequestInit, timeoutMs = 30000): Promise<Response> {
     const startTime = Date.now();
@@ -182,8 +136,7 @@ class BackendAdapter {
           const parsed = JSON.parse(options.body);
           // Mask any apiKey/password fields recursively
           requestBody = JSON.stringify(parsed, (key, val) => {
-            if (/api[_-]?key|password|secret|token|authorization|mcp/i.test(key)) return '***';
-            if (typeof val === 'string' && val.startsWith('gsm_mcp_')) return '***';
+            if (/api[_-]?key|password|secret|token|authorization/i.test(key)) return '***';
             return val;
           }, 2);
         } catch {
@@ -205,18 +158,16 @@ class BackendAdapter {
           const text = await cloned.text();
           if (text.length > 0) {
             const preview = text.length > 4000 ? text.slice(0, 4000) + '...[truncated]' : text;
-            // Redact secrets inside JSON (e.g. /mcp/status returns { token: "gsm_mcp_…" })
+            // Redact secrets inside JSON before exposing the request in logs.
             try {
               const parsed = JSON.parse(preview.endsWith('...[truncated]') ? text.slice(0, 4000) : preview);
               responseBody = JSON.stringify(parsed, (key, val) => {
-                if (/api[_-]?key|password|secret|token|authorization|mcp/i.test(key)) return '***';
-                if (typeof val === 'string' && val.startsWith('gsm_mcp_')) return '***';
+                if (/api[_-]?key|password|secret|token|authorization/i.test(key)) return '***';
                 return val;
               }, 2);
               if (text.length > 4000) responseBody += '\n...[truncated]';
             } catch {
-              // Non-JSON: strip gsm_mcp_ tokens if present
-              responseBody = preview.replace(/gsm_mcp_[A-Za-z0-9_-]+/g, 'gsm_mcp_***');
+              responseBody = preview;
             }
           }
         } catch { /* body not readable */ }
@@ -821,29 +772,6 @@ class BackendAdapter {
     return res.json() as Promise<Record<string, unknown>>;
   }
 
-  async exportData(): Promise<Record<string, unknown>> {
-    if (!this._backendUrl) throw new Error('Backend not available');
-
-    const res = await this.fetchWithTimeout(`${this._backendUrl}/sync/export`, {
-      method: 'POST',
-      headers: this.getAuthHeaders()
-    });
-    if (!res.ok) await this.throwTranslatedError(res, 'Export error');
-    return res.json() as Promise<Record<string, unknown>>;
-  }
-
-  async importData(data: Record<string, unknown>): Promise<Record<string, unknown>> {
-    if (!this._backendUrl) throw new Error('Backend not available');
-
-    const res = await this.fetchWithTimeout(`${this._backendUrl}/sync/import`, {
-      method: 'POST',
-      headers: this.getAuthHeaders(),
-      body: JSON.stringify(data)
-    });
-    if (!res.ok) await this.throwTranslatedError(res, 'Import error');
-    return res.json() as Promise<Record<string, unknown>>;
-  }
-
   // === Health ===
 
   async checkHealth(): Promise<{ status: string; version: string; timestamp: string } | null> {
@@ -853,39 +781,6 @@ class BackendAdapter {
       const res = await this.fetchWithTimeout(`${this._backendUrl}/health`, undefined, 5000);
       if (res.ok) return res.json() as Promise<{ status: string; version: string; timestamp: string }>;
       return null;
-    } catch {
-      return null;
-    }
-  }
-
-  async verifyAuth(): Promise<boolean> {
-    if (!this._backendUrl) return false;
-
-    try {
-      const res = await this.fetchWithTimeout(`${this._backendUrl}/settings`, {
-        headers: this.getAuthHeaders(),
-      }, 5000);
-      return res.ok;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Restore the GitHub token stored on the backend for cross-browser/device
-   * session recovery. Only callable when the backend is reachable AND this
-   * Legacy backend session restore endpoint. Worker mode uses fetchManagedSession.
-   */
-  async restoreAuth(): Promise<{ github_token: string | null } | null> {
-    if (!this._backendUrl) return null;
-
-    try {
-      const res = await this.fetchWithTimeout(`${this._backendUrl}/sync/auth`, {
-        method: 'POST',
-        headers: this.getAuthHeaders(),
-      }, 8000);
-      if (!res.ok) return null;
-      return res.json() as Promise<{ github_token: string | null }>;
     } catch {
       return null;
     }
@@ -933,40 +828,6 @@ class BackendAdapter {
     }> }>;
   }
 
-  // === MCP admin (backend-hosted Streamable HTTP / SSE) ===
-
-  async getMcpStatus(): Promise<{
-    enabled: boolean;
-    token: string;
-    endpoints: { streamableHttp: string; sse: string; messages: string };
-    vectorAvailable: boolean;
-    vectorReason: string | null;
-  }> {
-    if (!this._backendUrl) throw new Error('Backend not available');
-    const res = await this.fetchWithTimeout(`${this._backendUrl}/mcp/status`, {
-      headers: this.getAuthHeaders(),
-    });
-    if (!res.ok) await this.throwTranslatedError(res, 'Fetch MCP status error');
-    return res.json();
-  }
-
-  async updateMcpConfig(body: {
-    enabled?: boolean;
-    resetToken?: boolean;
-  }): Promise<{
-    enabled: boolean;
-    token: string;
-    endpoints: { streamableHttp: string; sse: string; messages: string };
-  }> {
-    if (!this._backendUrl) throw new Error('Backend not available');
-    const res = await this.fetchWithTimeout(`${this._backendUrl}/mcp/config`, {
-      method: 'PUT',
-      headers: this.getAuthHeaders(),
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) await this.throwTranslatedError(res, 'Update MCP config error');
-    return res.json();
-  }
 }
 
 export const backend = new BackendAdapter();

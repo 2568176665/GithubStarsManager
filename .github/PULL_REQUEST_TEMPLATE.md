@@ -1,6 +1,5 @@
 <!--
-Thank you for contributing! Please read docs/adr/0001-frontend-layering.md before
-making changes that touch src/components/**, src/features/**, or src/store/**.
+Thank you for contributing! This fork is deployed only to Cloudflare Worker.
 -->
 
 ## Summary
@@ -21,13 +20,14 @@ git diff --check           # whitespace / merge-marker hygiene
 ```
 
 CI runs the same set (see `.github/workflows/ci.yml`), with `check:boundaries` first so a
-layering violation fails the job before the slower steps.
+layering violation fails the job before the slower steps. Worker changes also require
+the Worker typecheck and Wrangler integration test.
 
 ## Scope checklist
 
 - [ ] **Runtime/persistence/UI changes described.** If this PR changes runtime behavior,
       persisted data (Store keys, `version`, `partialize`, `migrate`, `merge` — see
-      `src/store/persistence/options.ts` and ADR 0001), or user-visible UI, describe the
+      `src/store/persistence/options.ts`), or user-visible UI, describe the
       change and its migration impact below. Architecture-enforcement PRs should have none.
 - [ ] No new `import` of a business service directly into `src/components/**`
       (the ESLint `no-restricted-imports` / `no-restricted-syntax` rules and

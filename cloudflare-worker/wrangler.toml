@@ -11,4 +11,4 @@ binding = "DB"
 database_name = "github-stars-manager"
 database_id = "fd7e943c-2420-4a87-b78e-802bb68be539"
 
-# Configure AUTH_TOKEN with `wrangler secret put AUTH_TOKEN` when needed.
+# Configure the GitHub credential with `npx wrangler secret put GITHUB_TOKEN`.

@@ -28,7 +28,6 @@ const mocks = vi.hoisted(() => {
       logs: panel('logs'),
       network: panel('network'),
       vectorSearch: panel('vector-search'),
-      mcp: panel('mcp'),
     },
   };
 });
@@ -48,7 +47,6 @@ vi.mock('./settings', () => ({
   DiagnosticLogsPanel: mocks.panels.logs,
   NetworkPanel: mocks.panels.network,
   VectorSearchSettings: mocks.panels.vectorSearch,
-  McpSettingsPanel: mocks.panels.mcp,
 }));
 
 Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
@@ -91,7 +89,6 @@ describe('SettingsPanel', () => {
       ['Diagnostic Logs', 'logs'],
       ['Network', 'network'],
       ['Vector Search', 'vector-search'],
-      ['MCP Server', 'mcp'],
     ];
 
     for (const [label, panelName] of tabs) {
@@ -105,7 +102,6 @@ describe('SettingsPanel', () => {
     render(<SettingsPanel />);
 
     expect(screen.queryByRole('tab', { name: 'Network' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('tab', { name: 'MCP Server' })).not.toBeInTheDocument();
     expect(screen.getAllByRole('tab', { name: 'Backend' })).toHaveLength(2);
   });
 

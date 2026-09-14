@@ -5,8 +5,6 @@ import {
   startAutoSync,
   stopAutoSync,
   syncFromBackend,
-  syncLocalGitHubTokenToBackend,
-  tryRestoreAuthFromBackend,
 } from '../../services/autoSync';
 /**
  * Owns application-wide backend startup after Store hydration.
@@ -47,12 +45,6 @@ export const useBackendLifecycle = (hasHydrated: boolean): void => {
               unsubscribe = startAutoSync();
             }
             return;
-          }
-          // Session restoration must precede the data pull so a fresh browser
-          // receives authentication state before it consumes backend records.
-          await tryRestoreAuthFromBackend();
-          if (!cancelled) {
-            await syncLocalGitHubTokenToBackend();
           }
           if (!cancelled) {
             await syncFromBackend();

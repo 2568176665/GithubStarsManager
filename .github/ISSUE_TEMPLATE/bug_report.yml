@@ -12,25 +12,10 @@ body:
     id: platform
     attributes:
       label: 平台
-      description: 你在哪个平台遇到了这个问题？
+      description: 你在哪个浏览器和 Worker 部署环境遇到了这个问题？
       options:
-        - "Desktop: MacOS"
-        - "Desktop: Windows"
-        - "Desktop: Linux"
-        - "Web"
-    validations:
-      required: true
-
-  - type: dropdown
-    id: backend
-    attributes:
-      label: 后端
-      description: 你遇到问题时使用的后端模式是什么？
-      options:
-        - "未使用后端 / 纯前端 localStorage"
-        - "本地后端 / npm run dev:server"
-        - "Docker / GHCR 后端"
-        - "远程后端"
+        - "Web / Cloudflare Worker"
+        - "本地 Vite + Worker 开发环境"
         - "不确定"
     validations:
       required: true
@@ -61,7 +46,7 @@ body:
     attributes:
       label: 附加信息
       description: 补充任何可能帮助定位问题的信息，例如配置方式、相关 Issue、最近变更、浏览器版本、系统架构等。
-      placeholder: "例如：使用 Docker 后端，浏览器为 Chrome 版本 xxx，最近更新到 v0.6.2 后出现。"
+      placeholder: "例如：Worker 部署在自定义域名，浏览器为 Chrome 版本 xxx，最近更新后出现。"
     validations:
       required: false
 
@@ -69,7 +54,7 @@ body:
     id: logs
     attributes:
       label: 日志
-      description: 粘贴相关日志，或将日志文件拖拽上传到这里。请先删除 GitHub Token、AI API Key、WebDAV 凭据、API Secret、Encryption Key、代理密码等敏感信息。
+      description: 粘贴相关日志，或将日志文件拖拽上传到这里。请先删除 GitHub Token、AI API Key、WebDAV 凭据、Worker Secret 等敏感信息。
       placeholder: "粘贴日志，或拖拽 .log / .txt / .zip 等文件到这里。"
     validations:
       required: false

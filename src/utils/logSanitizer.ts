@@ -7,8 +7,7 @@
 const SENSITIVE_FIELD_NAMES = new Set([
   'apiKey', 'api_key', 'api_key_encrypted', 'password', 'password_encrypted',
   'secret', 'token', 'githubToken', 'accessToken', 'authorization',
-  'x-api-key', 'credentials', 'passwd', 'pwd', 'backendApiSecret',
-  'mcp_token', 'mcpToken', 'authToken', 'auth_token',
+  'x-api-key', 'credentials', 'passwd', 'pwd', 'authToken', 'auth_token',
 ]);
 
 // URL query param keys to redact
@@ -122,9 +121,6 @@ export function sanitizeForLog(input: unknown, seen: WeakSet<object> = new WeakS
 function sanitizeString(value: string): string {
   // GitHub token pattern
   if (isGitHubToken(value)) return maskSecret(value);
-
-  // MCP bearer tokens (gsm_mcp_…)
-  if (value.startsWith('gsm_mcp_')) return maskSecret(value);
 
   // Plain-string secrets (e.g., sk-..., long base64-like strings)
   if (looksLikeSecret(value)) return maskSecret(value);

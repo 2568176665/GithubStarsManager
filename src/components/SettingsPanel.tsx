@@ -13,7 +13,6 @@ import {
   ScrollText,
   Layout,
   Search,
-  Cable,
   Star,
 } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
@@ -34,10 +33,9 @@ import {
   MenuManagementPanel,
   StarSyncPanel,
   VectorSearchSettings,
-  McpSettingsPanel,
 } from './settings';
 
-type SettingsTab = 'general' | 'starSync' | 'ai' | 'webdav' | 'backup' | 'backend' | 'category' | 'menu' | 'data' | 'logs' | 'network' | 'vectorSearch' | 'mcp';
+type SettingsTab = 'general' | 'starSync' | 'ai' | 'webdav' | 'backup' | 'backend' | 'category' | 'menu' | 'data' | 'logs' | 'network' | 'vectorSearch';
 
 interface SettingsTabItem {
   id: SettingsTab;
@@ -265,7 +263,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
 
   // Valid SettingsTab values for runtime validation
   const VALID_TABS: ReadonlySet<string> = useMemo(
-    () => new Set(['general', 'starSync', 'ai', 'webdav', 'backup', 'backend', 'category', 'menu', 'data', 'logs', 'network', 'vectorSearch', 'mcp']),
+    () => new Set(['general', 'starSync', 'ai', 'webdav', 'backup', 'backend', 'category', 'menu', 'data', 'logs', 'network', 'vectorSearch']),
     []
   );
 
@@ -376,12 +374,6 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
       label: t('向量搜索', 'Vector Search'),
       icon: <Search className="w-5 h-5" />,
     },
-    // MCP requires a long-lived process: the Worker backend. Hide for pure SPA.
-    ...((backendAvailable) ? [{
-      id: 'mcp' as SettingsTab,
-      label: t('MCP服务', 'MCP Server'),
-      icon: <Cable className="w-5 h-5" />,
-    }] : []),
   ];
 
   const renderTabContent = () => {
@@ -411,8 +403,6 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
           return <NetworkPanel t={t} />;
         case 'vectorSearch':
           return <VectorSearchSettings t={t} />;
-        case 'mcp':
-          return <McpSettingsPanel t={t} />;
         default:
           return null;
       }
