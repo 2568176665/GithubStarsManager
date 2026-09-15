@@ -57,6 +57,14 @@ const repo: DiscoveryRepo = {
 describe('SubscriptionRepoCard', () => {
   const renderCard = () => render(<SubscriptionRepoCard repo={repo} />);
 
+  it('keeps the repository description limited to two lines', () => {
+    renderCard();
+
+    const description = screen.getByText('Example repository');
+    expect(description).toHaveClass('line-clamp-2');
+    expect(description).not.toHaveClass('block');
+  });
+
   it('opens GitHub without opening the README modal', () => {
     renderCard();
 
