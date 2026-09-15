@@ -50,6 +50,9 @@ Worker 保持现有 `/api/*` 契约，主要包括：
 - `/api/proxy/github/*`：GitHub API 代理
 - `/api/proxy/ai`：AI 请求代理
 - `/api/repositories`、`/api/releases`、`/api/settings` 及配置接口：D1 同步
+- `/api/search/repositories`：D1 FTS5 优先的仓库搜索，结果不足时由前端按设置选择增强路径
+- `/api/search/readme`：缓存清理后的默认 README 到搜索投影
+- `/api/search/vector/*`：主 Worker 的可选 Vectorize 原生绑定接口
 - `/api/download/rpc`：通过 aria2 RPC 下载 Release 资产
 
 前端在 Worker 不可达时仍可使用本地缓存和浏览器直连能力；生产入口统一使用部署后的 Worker 地址。

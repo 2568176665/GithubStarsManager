@@ -18,6 +18,7 @@ const abortOperation = (): Error => new DOMException('Aborted', 'AbortError');
 export interface UseReadmeFetchOptions {
   owner: string;
   name: string;
+  repositoryId?: number;
 }
 
 export interface ReadmeFetchActions {
@@ -27,7 +28,7 @@ export interface ReadmeFetchActions {
   cancel: () => void;
 }
 
-export const useReadmeFetch = ({ owner, name }: UseReadmeFetchOptions): ReadmeFetchActions => {
+export const useReadmeFetch = ({ owner, name, repositoryId }: UseReadmeFetchOptions): ReadmeFetchActions => {
   const { githubToken, language } = useAppStore(useShallow((state) => ({
     githubToken: state.githubToken,
     language: state.language,
@@ -57,6 +58,13 @@ export const useReadmeFetch = ({ owner, name }: UseReadmeFetchOptions): ReadmeFe
     contentAbortRef.current = controller;
     const signal = controller.signal;
 
+    const cacheDefaultReadme = (content: string) => {
+      if (!variant.isDefault || repositoryId === undefined || shouldBypassBackend() || !backend.isAvailable || typeof backend.cacheRepositoryReadme !== 'function') return;
+      void backend.cacheRepositoryReadme(repositoryId, content).catch((error) => {
+        console.warn('Failed to cache README in search projection:', error);
+      });
+    };
+
     const fetchFromGitHubApi = async (): Promise<string> => {
       if (!githubToken) {
         throw new Error(language === 'zh' ? '未登录且后端不可用，无法加载 README' : 'Not logged in and backend unavailable, cannot load README');
@@ -70,6 +78,7 @@ export const useReadmeFetch = ({ owner, name }: UseReadmeFetchOptions): ReadmeFe
     if (shouldBypassBackend() || !backend.isAvailable) {
       const directContent = await fetchFromGitHubApi();
       if (signal.aborted) throw abortOperation();
+      cacheDefaultReadme(directContent);
       return directContent;
     }
 
@@ -78,6 +87,7 @@ export const useReadmeFetch = ({ owner, name }: UseReadmeFetchOptions): ReadmeFe
         ? await backend.getRepositoryReadme(owner, name, signal)
         : await backend.getRepositoryReadmeByPath(owner, name, variant.path, signal);
       if (signal.aborted) throw abortOperation();
+      cacheDefaultReadme(content);
       return content;
     } catch (backendError) {
       if (signal.aborted) throw abortOperation();
@@ -88,9 +98,10 @@ export const useReadmeFetch = ({ owner, name }: UseReadmeFetchOptions): ReadmeFe
       console.warn('Falling back to direct GitHub README fetch after backend failure:', backendError);
       const content = await fetchFromGitHubApi();
       if (signal.aborted) throw abortOperation();
+      cacheDefaultReadme(content);
       return content;
     }
-  }, [owner, name, githubToken, language]);
+  }, [owner, name, repositoryId, githubToken, language]);
 
   const fetchReadmeCandidates = useCallback(async (defaultBranch: string | undefined): Promise<GitHubReadmeCandidateItem[]> => {
     if (candidatesAbortRef.current) {

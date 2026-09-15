@@ -11,6 +11,7 @@ This project is deployed only as a Cloudflare Worker:
 - Cloudflare D1 stores synchronized application state.
 - `GITHUB_TOKEN` is a Worker Secret used for the managed GitHub session and GitHub API proxy.
 - AI, WebDAV, vector search, and RPC settings are configured in the application and synchronized to D1 where supported.
+- Repository search is FTS5-first; Vectorize is an optional enhancement and is disabled by default.
 
 There is no separate server, desktop shell, container image, or reverse proxy in the supported deployment.
 
@@ -68,6 +69,7 @@ The Worker keeps the existing `/api/*` contract, including:
 - `/api/health` and `/api/session`
 - GitHub and AI proxy routes
 - D1 synchronization for repositories, releases, settings, and service configurations
+- FTS5 repository search, README projection caching, and optional native Vectorize routes
 - aria2 RPC testing and Release download forwarding
 - SPA static asset fallback
 

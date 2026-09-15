@@ -7,6 +7,7 @@
 
 import type { EmbeddingConfig, VectorSearchConfig, Repository, VectorIndexMode } from '../types';
 import { NO_LICENSE_SENTINEL, normalizeLicense } from '../utils/licenseFilter';
+import { backend } from './backendAdapter';
 
 // ============================================================
 // EmbeddingClient
@@ -230,6 +231,14 @@ export class VectorSearchService {
   }
 
   private async request<T>(path: string, options: RequestInit = {}, signal?: AbortSignal): Promise<T> {
+    if (backend.isAvailable) {
+      const body = typeof options.body === 'string' ? JSON.parse(options.body) as Record<string, unknown> : {};
+      if (path === '/query') return await backend.queryNativeVectorIndex(body, signal) as T;
+      if (path === '/upsert') return await backend.upsertNativeVectorIndex(Array.isArray(body.vectors) ? body.vectors : [], signal) as T;
+      if (path === '/delete') return await backend.deleteNativeVectorIndex(Array.isArray(body.ids) ? body.ids as string[] : [], signal) as T;
+      if (path === '/cleanup') return await backend.cleanupNativeVectorIndex(Array.isArray(body.keepIds) ? body.keepIds as string[] : [], signal) as T;
+      if (path === '/status') return await backend.getNativeVectorIndexStatus() as T;
+    }
     const url = `${this.workerUrl}${path}`;
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -531,6 +540,7 @@ export async function indexAllRepos(
     onProgress?: (progress: IndexProgress) => void;
     signal?: AbortSignal;
     readmeFetcher?: (owner: string, repo: string, signal?: AbortSignal) => Promise<string>;
+    onReadmeCached?: (repositoryId: number, readme: string) => void;
     indexMode?: 'description' | 'readme';
     readmeMaxChars?: number;
     incremental?: boolean;
@@ -541,7 +551,7 @@ export async function indexAllRepos(
     currentFormatVersion?: number;
   } = {}
 ): Promise<{ indexed: number; skipped: number; errors: number; error?: string; indexedRepoIds: number[] }> {
-  const { batchSize = 32, onProgress, signal, readmeFetcher, indexMode = 'readme', readmeMaxChars = 6000, incremental, onRepoIndexed } = options;
+  const { batchSize = 32, onProgress, signal, readmeFetcher, onReadmeCached, indexMode = 'readme', readmeMaxChars = 6000, incremental, onRepoIndexed } = options;
 
   if (!Number.isInteger(batchSize) || batchSize <= 0) {
     throw new Error('batchSize must be a positive integer');
@@ -576,13 +586,14 @@ export async function indexAllRepos(
         batch.map(async (repo) => {
           const [owner, name] = repo.full_name.split('/');
           const readme = await readmeFetcher(owner, name, signal);
-          return { fullName: repo.full_name, readme };
+          return { repositoryId: repo.id, fullName: repo.full_name, readme };
         })
       );
 
       for (const result of results) {
         if (result.status === 'fulfilled' && result.value.readme) {
           readmeCache.set(result.value.fullName, result.value.readme);
+          onReadmeCached?.(result.value.repositoryId, result.value.readme);
         }
       }
 

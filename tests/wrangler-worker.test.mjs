@@ -191,6 +191,10 @@ test('Worker runs all configured features in the Wrangler local environment', as
     assert.equal(cors.response.status, 200);
     assert.equal(cors.response.headers.get('Access-Control-Allow-Methods'), 'GET, POST, PUT, OPTIONS');
 
+    const unavailableVectorize = await request(baseUrl, '/api/search/vector/status');
+    assert.equal(unavailableVectorize.response.status, 503);
+    assert.equal(unavailableVectorize.body.code, 'VECTORIZE_UNAVAILABLE');
+
     const initialRepositories = await request(baseUrl, '/api/repositories');
     assert.deepEqual(initialRepositories.body, { repositories: [], total: 0 });
     assert.equal((await request(baseUrl, '/api/repositories', {
@@ -201,6 +205,54 @@ test('Worker runs all configured features in the Wrangler local environment', as
       repositories: [{ id: 1, full_name: 'test/repository' }],
       total: 1,
     });
+
+    const lexicalSearch = await request(baseUrl, '/api/search/repositories', {
+      method: 'POST',
+      body: jsonBody({ query: 'test/repository' }),
+    });
+    assert.equal(lexicalSearch.response.status, 200);
+    assert.equal(lexicalSearch.body.quality, 'identity');
+    assert.equal(lexicalSearch.body.total, 1);
+    assert.deepEqual(lexicalSearch.body.items.map((item) => item.id), [1]);
+    assert.ok(lexicalSearch.body.items[0].matchedFields.includes('full_name'));
+
+    const cachedReadme = await request(baseUrl, '/api/search/readme', {
+      method: 'PUT',
+      body: jsonBody({ repositoryId: 1, readme: '# Cached README\n\nVector fallback phrase' }),
+    });
+    assert.deepEqual(cachedReadme.body, { success: true, repositoryId: 1, chars: 36 });
+    const readmeSearch = await request(baseUrl, '/api/search/repositories', {
+      method: 'POST',
+      body: jsonBody({ query: 'fallback phrase' }),
+    });
+    assert.equal(readmeSearch.response.status, 200);
+    assert.equal(readmeSearch.body.quality, 'weak-text');
+    assert.equal(readmeSearch.body.total, 1);
+    assert.ok(readmeSearch.body.items[0].matchedFields.includes('readme'));
+
+    assert.equal((await request(baseUrl, '/api/repositories', {
+      method: 'PUT',
+      body: jsonBody({ repositories: [
+        { id: 1, full_name: 'test/repository' },
+        { id: 2, full_name: 'test/go-tool', name: 'go-tool', description: 'A Go command line utility' },
+        { id: 3, full_name: 'test/中文仓库', name: '中文仓库', description: '中文工具' },
+      ] }),
+    })).response.status, 200);
+    const shortWordSearch = await request(baseUrl, '/api/search/repositories', {
+      method: 'POST',
+      body: jsonBody({ query: 'go' }),
+    });
+    assert.equal(shortWordSearch.response.status, 200);
+    assert.equal(shortWordSearch.body.quality, 'identity');
+    assert.deepEqual(shortWordSearch.body.items.map((item) => item.id), [2]);
+    assert.equal(shortWordSearch.body.total, 1);
+    const cjkSearch = await request(baseUrl, '/api/search/repositories', {
+      method: 'POST',
+      body: jsonBody({ query: '中文' }),
+    });
+    assert.equal(cjkSearch.response.status, 200);
+    assert.deepEqual(cjkSearch.body.items.map((item) => item.id), [3]);
+    assert.equal(cjkSearch.body.total, 1);
 
     for (const collection of ['releases', 'configs/webdav', 'configs/embedding']) {
       const value = collection === 'releases' ? [{ id: 2 }] : { enabled: true, collection };

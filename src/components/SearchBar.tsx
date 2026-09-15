@@ -8,7 +8,7 @@ import { useSearchShortcuts } from '../hooks/useSearchShortcuts';
 import { useSearchActions } from '../features/repositories/hooks/useSearchActions';
 import { useDialog } from '../hooks/useDialog';
 import { isRepoCustomized } from '../utils/repoUtils';
-import { applyRepoFilters, performBasicTextSearch as basicTextSearch, sortRepositories } from '../utils/repoSearch';
+import { applyRepoFilters, getRepositorySearchFields, performBasicTextSearch as basicTextSearch, scoreRepositoryText, sortRepositories } from '../utils/repoSearch';
 import { NO_LICENSE_SENTINEL, normalizeLicense } from '../utils/licenseFilter';
 import { NumberInput } from './ui/NumberInput';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip';
@@ -115,6 +115,11 @@ export const SearchBar: React.FC = () => {
     getAllCategories(customCategories, language, hiddenDefaultCategoryIds, defaultCategoryOverrides),
     [customCategories, language, hiddenDefaultCategoryIds, defaultCategoryOverrides]
   );
+
+  const realTimeSearchIndex = useMemo(() => repositories.map((repo) => ({
+    repo,
+    text: Object.values(getRepositorySearchFields(repo)).join(' ').toLocaleLowerCase(),
+  })), [repositories]);
   
   const statusStats = useMemo(() => {
     const stats = {
@@ -257,7 +262,7 @@ export const SearchBar: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchFilters.languages, searchFilters.tags, searchFilters.platforms, searchFilters.licenses, searchFilters.isAnalyzed, searchFilters.isSubscribed, searchFilters.isEdited, searchFilters.isCategoryLocked, searchFilters.analysisFailed, searchFilters.minStars, searchFilters.maxStars, searchFilters.sortBy, searchFilters.sortOrder, searchFilters.query, repositories, releaseSubscriptions, allCategories]);
 
-  // Real-time search effect for repository name matching
+  // Real-time search stays local and covers the lightweight search projection.
   useEffect(() => {
     if (searchQuery.trim() && isRealTimeSearch && !isComposing) {
       const timeoutId = setTimeout(() => {
@@ -272,7 +277,7 @@ export const SearchBar: React.FC = () => {
     // Search helpers are intentionally kept as local closures; the explicit deps below
     // cover the state they read without causing a search loop on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchQuery, isRealTimeSearch, isComposing, repositories, allCategories]);
+  }, [searchQuery, isRealTimeSearch, isComposing, repositories, realTimeSearchIndex, allCategories]);
 
   const updateRealTimeSearchState = (value: string) => {
     setIsRealTimeSearch(Boolean(value.trim()));
@@ -298,12 +303,11 @@ export const SearchBar: React.FC = () => {
       return;
     }
 
-    // Real-time search only matches repository names for fast response
-    const normalizedQuery = query.toLowerCase();
-    const filtered = repositories.filter(repo => {
-      return repo.name.toLowerCase().includes(normalizedQuery) ||
-             repo.full_name.toLowerCase().includes(normalizedQuery);
-    });
+    const terms = query.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
+    const filtered = realTimeSearchIndex
+      .filter(({ text }) => terms.every((term) => text.includes(term)))
+      .sort((a, b) => scoreRepositoryText(b.repo, query) - scoreRepositoryText(a.repo, query))
+      .map(({ repo }) => repo);
 
     // Apply other filters
     const finalFiltered = applyFilters(filtered);
@@ -349,11 +353,11 @@ export const SearchBar: React.FC = () => {
   };
 
   // View-UI 部分（实时搜索开关/历史/建议下拉与搜索历史 localStorage）留在 View，
-  // 搜索编排（向量 → 关键词，含 HyDE/rerank 与降级路径）在 useSearchActions.aiSearch。
-  const handleAISearch = async () => {
+  // 搜索编排（FTS 优先，按需进入向量/AI 改写与降级路径）在 useSearchActions.aiSearch。
+  const handleDeepSearch = async () => {
     if (!searchQuery.trim()) return;
 
-    // Switch to AI search mode and trigger advanced search
+    // Switch to committed search mode and trigger the FTS-first deep search.
     setIsRealTimeSearch(false);
     setShowSearchHistory(false);
     setShowSuggestions(false);
@@ -432,12 +436,8 @@ export const SearchBar: React.FC = () => {
   const handleHistoryItemClick = (historyQuery: string) => {
     setSearchQuery(historyQuery);
     setIsRealTimeSearch(false);
-    setSearchFilters({ query: historyQuery });
     setShowSearchHistory(false);
-
-    const textResults = performBasicTextSearch(repositories, historyQuery);
-    const finalFiltered = applyFilters(textResults);
-    setSearchResults(finalFiltered);
+    void aiSearch(historyQuery, applyFilters);
   };
 
   const handleSuggestionClick = (suggestion: string) => {
@@ -474,7 +474,7 @@ export const SearchBar: React.FC = () => {
     }
 
     if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
-      handleAISearch();
+      handleDeepSearch();
     }
   };
 
@@ -639,8 +639,8 @@ export const SearchBar: React.FC = () => {
           aria-expanded={showSearchHistory || showSuggestions}
           aria-controls={showSearchHistory ? 'search-history-dropdown' : showSuggestions ? 'search-suggestions-dropdown' : undefined}
           placeholder={t(
-            "输入关键词实时搜索，或使用AI搜索进行语义理解",
-            "Type keywords for real-time search, or use AI search for semantic understanding"
+            "输入关键词实时搜索，或按回车进行深度搜索",
+            "Type keywords for real-time search, or press Enter for deep search"
           )}
           value={searchQuery}
           onChange={handleInputChange}
@@ -741,17 +741,15 @@ export const SearchBar: React.FC = () => {
             </Button>
           )}
           <Button
-            onClick={handleAISearch}
+            onClick={handleDeepSearch}
             variant="default"
-            aria-label={isSearching ? t('AI搜索中…', 'AI Searching…') : t('AI搜索', 'AI Search')}
+            aria-label={isSearching ? t('搜索中…', 'Searching…') : t('搜索', 'Search')}
             disabled={isSearching || !searchQuery.trim()}
             className="flex shrink-0 items-center sm:px-4"
-            title={activeAIConfig
-              ? t('使用配置的AI服务进行语义搜索和重排序', 'Use configured AI service for semantic search and reranking')
-              : t('使用本地智能排序算法进行搜索', 'Use local intelligent ranking algorithm for search')}
+            title={t('执行全文搜索；仅在结果不足时使用增强能力', 'Run full-text search; enhancement is used only when results are insufficient')}
           >
             <Bot className="w-4 h-4" />
-            <span className="hidden sm:inline">{isSearching ? t('AI搜索中…', 'AI Searching…') : t('AI搜索', 'AI Search')}</span>
+            <span className="hidden sm:inline">{isSearching ? t('搜索中…', 'Searching…') : t('搜索', 'Search')}</span>
           </Button>
           {isSearching && searchPhase && (
             <span className="max-w-[12rem] truncate text-xs text-muted-foreground dark:text-muted-foreground animate-pulse whitespace-nowrap">
@@ -764,21 +762,21 @@ export const SearchBar: React.FC = () => {
                 type="button"
                 variant="ghost"
                 size="icon"
-                aria-label={t('关于 AI 搜索', 'About AI Search')}
+                aria-label={t('关于深度搜索', 'About deep search')}
                 className="h-8 w-8 shrink-0 text-muted-foreground"
               >
                 <AlertCircle className="h-4 w-4" aria-hidden="true" />
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom" align="end" className="w-80 max-w-xs whitespace-normal break-words text-left">
-              <p className="mb-1 font-medium">{t('关于AI搜索', 'About AI Search')}</p>
+              <p className="mb-1 font-medium">{t('关于深度搜索', 'About deep search')}</p>
               <p className="leading-relaxed text-primary-foreground/80">
                 {activeAIConfig ? t(
-                  'AI语义搜索模式：使用配置的AI服务进行智能语义理解和重排序。AI将分析查询意图，理解上下文关系，并提供语义相关的搜索结果。支持自然语言查询和概念匹配。',
-                  'AI semantic search mode: Uses configured AI service for intelligent semantic understanding and reranking. AI analyzes query intent, understands context, and provides semantically relevant search results. Supports natural language queries and concept matching.'
+                  '深度搜索模式：优先使用全文检索；仅当结果不足时，才按设置启用向量搜索或 AI 查询改写。',
+                  'Deep search mode: Full-text search runs first; vector search or AI query rewriting is used only when enabled and results are insufficient.'
                 ) : t(
-                  '回退模式：基础文本搜索与默认排序。当未配置AI服务时，系统将使用基础文本匹配进行搜索（支持名称、描述、标签、语言等字段），并应用标准的排序和过滤控制。此为轻量级搜索方案，无语义理解能力。',
-                  'Fallback mode: Basic text search with default sorting. When no AI service is configured, the system uses basic text matching for search (supports name, description, tags, language, etc.) and applies standard sort and filter controls. This is a lightweight search solution without semantic understanding capabilities.'
+                  '全文搜索模式：使用名称、描述、标签、主题、AI 摘要等字段，并应用标准排序和过滤；结果不足时仍可按设置启用增强能力。',
+                  'Full-text mode: Searches names, descriptions, tags, topics, AI summaries, and more with standard sorting and filters; optional enhancement can run when results are insufficient.'
                 )}
               </p>
             </TooltipContent>
@@ -794,18 +792,18 @@ export const SearchBar: React.FC = () => {
             {isRealTimeSearch ? (
               <div className="flex items-center space-x-2 text-primary dark:text-primary">
                 <div className="w-2 h-2 bg-primary rounded-full animate-pulse"></div>
-                <span>{t('实时搜索模式 - 匹配仓库名称', 'Real-time search mode - matching repository names')}</span>
+                <span>{t('实时搜索模式 - 匹配仓库字段', 'Real-time search mode - matching repository fields')}</span>
               </div>
             ) : searchFilters.query ? (
               <div className="flex items-center space-x-2 text-muted-foreground dark:text-muted-foreground ">
                 <Bot className="w-4 h-4" />
-                <span>{t('AI语义搜索模式 - 智能匹配和排序', 'AI semantic search mode - intelligent matching and ranking')}</span>
+                <span>{t('深度搜索模式 - 全文检索优先', 'Deep search mode - full-text first')}</span>
               </div>
             ) : null}
           </div>
           {isRealTimeSearch && (
             <div className="text-muted-foreground dark:text-muted-foreground">
-              {t('按回车键或点击AI搜索进行深度搜索', 'Press Enter or click AI Search for deep search')}
+              {t('按回车键或点击搜索进行深度搜索', 'Press Enter or click Search for deep search')}
             </div>
           )}
         </div>

@@ -9,32 +9,104 @@ export type RepoSearchFilterInput = Partial<SearchFilters> & {
   offset?: number;
 };
 
-export function performBasicTextSearch<T extends Repository>(repos: T[], query: string): T[] {
-  const normalizedQuery = query.toLowerCase().trim();
+export type SearchQuality = 'identity' | 'strong-field' | 'weak-text' | 'no-results';
+
+export const getRepositorySearchFields = (repo: Repository): Record<string, string> => ({
+  full_name: repo.full_name,
+  name: repo.name,
+  description: repo.description || '',
+  custom_description: repo.custom_description || '',
+  language: repo.language || '',
+  topics: (repo.topics || []).join(' '),
+  ai_summary: repo.ai_summary || '',
+  tags: [...(repo.ai_tags || []), ...(repo.custom_tags || [])].join(' '),
+  ai_platforms: (repo.ai_platforms || []).join(' '),
+  custom_category: repo.custom_category || '',
+  license: normalizeLicense(repo.license),
+});
+
+const LOCAL_SEARCH_WEIGHTS: Record<string, number> = {
+  full_name: 12,
+  name: 10,
+  topics: 7,
+  tags: 7,
+  description: 5,
+  ai_summary: 5,
+  custom_description: 4,
+  language: 3,
+  ai_platforms: 3,
+  custom_category: 2,
+  license: 2,
+};
+
+export function scoreRepositoryText(repo: Repository, query: string): number {
+  const terms = query.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
+  if (!terms.length) return 0;
+  const fields = getRepositorySearchFields(repo);
+  let score = 0;
+  for (const [field, rawValue] of Object.entries(fields)) {
+    const value = rawValue.toLocaleLowerCase();
+    for (const term of terms) {
+      if (!value.includes(term)) continue;
+      score += LOCAL_SEARCH_WEIGHTS[field] || 1;
+      if (field === 'name' || field === 'full_name') {
+        if (value === term) score += 40;
+        else if (value.startsWith(term)) score += 20;
+      }
+    }
+  }
+  return score;
+}
+
+export function performWeightedTextSearch<T extends Repository>(repos: T[], query: string): T[] {
+  const normalizedQuery = query.toLocaleLowerCase().trim();
   if (!normalizedQuery) return repos;
+  const terms = normalizedQuery.split(/\s+/).filter(Boolean);
+  return repos
+    .filter((repo) => {
+      const fields = getRepositorySearchFields(repo);
+      const searchableText = Object.values(fields).join(' ').toLocaleLowerCase();
+      return terms.every((term) => searchableText.includes(term));
+    })
+    .sort((a, b) => scoreRepositoryText(b, normalizedQuery) - scoreRepositoryText(a, normalizedQuery));
+}
 
-  const queryWords = normalizedQuery.split(/\s+/).filter(Boolean);
+export function performBasicTextSearch<T extends Repository>(repos: T[], query: string): T[] {
+  return performWeightedTextSearch(repos, query);
+}
 
-  return repos.filter((repo) => {
-    const searchableText = [
-      repo.name,
-      repo.full_name,
-      repo.description || '',
-      repo.custom_description || '',
-      repo.language || '',
-      ...(repo.topics || []),
-      repo.ai_summary || '',
-      ...(repo.ai_tags || []),
-      ...(repo.ai_platforms || []),
-      ...(repo.custom_tags || []),
-      repo.custom_category || '',
-      normalizeLicense(repo.license),
-    ]
-      .join(' ')
-      .toLowerCase();
+export function classifyLocalSearchQuality(repos: Repository[], query: string): SearchQuality {
+  if (!repos.length) return 'no-results';
+  const normalizedQuery = query.toLocaleLowerCase().trim();
+  const top = repos[0];
+  const fullName = top.full_name.toLocaleLowerCase();
+  const name = top.name.toLocaleLowerCase();
+  if (normalizedQuery && (
+    fullName === normalizedQuery
+    || name === normalizedQuery
+    || name.startsWith(normalizedQuery)
+    || fullName.startsWith(`${normalizedQuery}/`)
+  )) return 'identity';
+  const fields = getRepositorySearchFields(top);
+  const strongText = [fields.full_name, fields.name, fields.topics, fields.tags].join(' ').toLocaleLowerCase();
+  const terms = normalizedQuery.split(/\s+/).filter(Boolean);
+  return terms.length > 0 && terms.every((term) => strongText.includes(term)) ? 'strong-field' : 'weak-text';
+}
 
-    return queryWords.every((word) => searchableText.includes(word));
-  });
+export function mergeHybridSearchResults<T extends Repository>(
+  repositories: T[],
+  lexicalResults: T[],
+  vectorResults: Array<{ id: string; score: number }>,
+): T[] {
+  const byId = new Map(repositories.map((repo) => [String(repo.id), repo]));
+  const vectorOrder = [...vectorResults].sort((a, b) => b.score - a.score);
+  const scores = new Map<string, number>();
+  lexicalResults.forEach((repo, index) => scores.set(String(repo.id), 0.55 / (60 + index + 1)));
+  vectorOrder.forEach((result, index) => scores.set(String(result.id), (scores.get(String(result.id)) || 0) + 0.45 / (60 + index + 1)));
+  return [...scores.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([id]) => byId.get(id))
+    .filter((repo): repo is T => repo !== undefined);
 }
 
 const toSortableTimestamp = (value?: string): number => {

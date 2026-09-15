@@ -2073,6 +2073,30 @@ ${repoInfo}
   }
 
   /**
+   * 将低质量全文检索查询压缩为少量可检索关键词。
+   * 这是 FTS fallback，调用方只应在 FTS 已经返回 weak-text/no-results 时使用。
+   */
+  async rewriteSearchQuery(query: string, signal?: AbortSignal): Promise<string> {
+    const system = this.language === 'zh'
+      ? '你是 GitHub 仓库搜索查询改写器。只输出 3-8 个最有用的检索关键词，保留技术名词、编程语言和产品名称；不要解释，不要输出 Markdown 或引号。'
+      : 'You rewrite GitHub repository searches. Output only 3-8 useful search keywords, preserving technical terms, programming languages, and product names. No explanation, Markdown, or quotation marks.';
+    const content = await this.generateChatText({
+      system,
+      user: `User query: ${query.slice(0, 300)}`,
+      temperature: 0,
+      maxTokens: 80,
+      signal,
+    });
+    const rewritten = content
+      .replace(/[\r\n,;|]+/g, ' ')
+      .replace(/["'`]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 180);
+    return rewritten || query.trim();
+  }
+
+  /**
    * 无向量路径的 AI 语义搜索（向量搜索不可用时的降级链）。
    * 三段式：
    * ① 查询扩展 + 意图复述（一次 chat 调用）；

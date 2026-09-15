@@ -4,11 +4,16 @@ compatibility_date = "2026-08-20"
 
 [assets]
 directory = "../dist"
+binding = "ASSETS"
 not_found_handling = "single-page-application"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "github-stars-manager"
 database_id = "fd7e943c-2420-4a87-b78e-802bb68be539"
+
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "github-stars-manager-repositories"
 
 # Configure the GitHub credential with `npx wrangler secret put GITHUB_TOKEN`.

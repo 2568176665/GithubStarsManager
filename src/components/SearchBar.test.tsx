@@ -215,7 +215,40 @@ describe('SearchBar', () => {
       expect(setSearchResults).toHaveBeenLastCalledWith([
         expect.objectContaining({ name: 'nested-rain' }),
       ]);
-      expect(screen.getByText('实时搜索模式 - 匹配仓库名称')).toBeInTheDocument();
+      expect(screen.getByText('实时搜索模式 - 匹配仓库字段')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('searches the lightweight projection fields during real-time input', () => {
+    vi.useFakeTimers();
+    const repository = createRepository({
+      id: 7,
+      name: 'sync-tool',
+      full_name: 'owner/sync-tool',
+      description: 'offline utility',
+      topics: ['synchronization'],
+      ai_tags: ['crdt'],
+      custom_tags: ['local-first'],
+      ai_summary: 'database replication helper',
+      custom_description: 'private note',
+    });
+    const setSearchResults = vi.fn();
+    currentState = createStoreState({ repositories: [repository], setSearchResults });
+    mockUseAppStore.mockReturnValue(currentState as ReturnType<typeof useAppStore>);
+
+    try {
+      render(<SearchBar />);
+      fireEvent.change(screen.getByRole('textbox'), {
+        target: { value: 'offline synchronization crdt local-first database private' },
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(300);
+      });
+
+      expect(setSearchResults).toHaveBeenLastCalledWith([repository]);
     } finally {
       vi.useRealTimers();
     }
@@ -254,7 +287,7 @@ describe('SearchBar', () => {
     }
   });
 
-  it('selects a search history item before the blur delay hides the dropdown', () => {
+  it('selects a search history item before the blur delay hides the dropdown', async () => {
     vi.useFakeTimers();
     const setSearchFilters = vi.fn();
     const setSearchResults = vi.fn();
@@ -272,6 +305,7 @@ describe('SearchBar', () => {
 
       fireEvent.blur(input);
       fireEvent.click(historyItem);
+      await act(async () => {});
 
       expect(input).toHaveValue('react');
       expect(setSearchFilters).toHaveBeenCalledWith({ query: 'react' });
@@ -297,7 +331,7 @@ describe('SearchBar', () => {
       fireEvent.click(suggestionItem);
 
       expect(input).toHaveValue('TypeScript');
-      expect(screen.getByText('实时搜索模式 - 匹配仓库名称')).toBeInTheDocument();
+      expect(screen.getByText('实时搜索模式 - 匹配仓库字段')).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }

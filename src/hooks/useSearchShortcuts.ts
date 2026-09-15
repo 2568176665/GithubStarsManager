@@ -106,7 +106,7 @@ export const searchShortcuts = [
   },
   {
     key: 'Enter',
-    description: 'AI搜索',
-    descriptionEn: 'AI search'
+    description: '深度搜索',
+    descriptionEn: 'Deep search'
   }
 ];

@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import type { Repository } from '../types';
 import {
   performBasicTextSearch,
+  classifyLocalSearchQuality,
+  mergeHybridSearchResults,
+  performWeightedTextSearch,
   applyRepoFilters,
   searchRepositories,
   projectRepoForAgent,
@@ -76,6 +79,30 @@ describe('performBasicTextSearch', () => {
 
   it('returns all for empty query', () => {
     expect(performBasicTextSearch(sample, '  ').length).toBe(3);
+  });
+});
+
+describe('weighted repository search', () => {
+  it('ranks names above descriptions and searches AI fields', () => {
+    const repos = [
+      makeRepo({ id: 10, name: 'plain', full_name: 'acme/plain', description: 'vector database' }),
+      makeRepo({ id: 11, name: 'vector-database', full_name: 'acme/vector-database', description: '' }),
+      makeRepo({ id: 12, name: 'summary', full_name: 'acme/summary', ai_summary: 'A vector database toolkit' }),
+    ];
+    expect(performWeightedTextSearch(repos, 'vector database').map((repo) => repo.id)).toEqual([11, 10, 12]);
+  });
+
+  it('classifies strong repository identity separately from weak text', () => {
+    expect(classifyLocalSearchQuality(sample, 'acme/alpha')).toBe('identity');
+    expect(classifyLocalSearchQuality(sample, 'alp')).toBe('identity');
+    expect(classifyLocalSearchQuality(sample, 'CRDT library')).toBe('weak-text');
+    expect(classifyLocalSearchQuality([], 'missing')).toBe('no-results');
+  });
+
+  it('merges lexical and vector ranks with reciprocal rank fusion', () => {
+    const lexical = [sample[0], sample[1]];
+    const vector = [{ id: '2', score: 0.99 }, { id: '3', score: 0.98 }];
+    expect(mergeHybridSearchResults(sample, lexical, vector).map((repo) => repo.id)).toEqual([2, 1, 3]);
   });
 });
 

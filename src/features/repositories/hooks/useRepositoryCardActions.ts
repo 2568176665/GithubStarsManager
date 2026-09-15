@@ -8,7 +8,7 @@ import { analyzeRepository, createFailedAnalysisResult } from '../../../services
 import { forceSyncToBackend } from '../../../services/autoSync';
 import { GitHubApiService } from '../../../services/githubApi';
 import { logger } from '../../../services/logger';
-import { applyAnalysisFailure, applyAnalysisSuccess } from '../application/repositoryPatches';
+import { applyAnalysisFailure, applyAnalysisSuccess, setReleaseSubscriptionMarker } from '../application/repositoryPatches';
 import { resolveActiveAIConfig } from '../../../utils/aiConfig';
 
 interface UseRepositoryCardActionsOptions {
@@ -45,8 +45,6 @@ const isVectorSearchAvailable = (state: Pick<
     && !!state.vectorSearchStatus?.connected
     && (state.vectorSearchStatus?.vectorCount ?? 0) > 0
     && configComplete
-    && !!state.vectorSearchConfig.workerUrl
-    && !!state.vectorSearchConfig.authToken
   );
 };
 
@@ -321,7 +319,13 @@ export const useRepositoryCardActions = ({
   }, [isFindingSimilar, repository, toast]);
 
   const toggleReleaseSubscription = useCallback(() => {
-    useAppStore.getState().toggleReleaseSubscription(repoId);
+    const state = useAppStore.getState();
+    const subscribed = state.releaseSubscriptions.has(repoId);
+    state.toggleReleaseSubscription(repoId);
+    const currentRepository = state.repositories.find((item) => item.id === repoId);
+    if (currentRepository) {
+      state.updateRepository(setReleaseSubscriptionMarker(currentRepository, !subscribed));
+    }
   }, [repoId]);
 
   const unstar = useCallback(async () => {

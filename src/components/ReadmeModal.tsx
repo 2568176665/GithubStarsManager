@@ -84,7 +84,7 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
     fetchReadmeContent: fetchReadmeContentFromAvailableSource,
     fetchReadmeCandidates: fetchReadmeCandidatesFromAvailableSource,
     cancel: cancelFetches,
-  } = useReadmeFetch({ owner: repoOwner, name: repoName });
+  } = useReadmeFetch({ owner: repoOwner, name: repoName, repositoryId: repository?.id });
 
   const bilingualRef = useRef<BilingualMarkdownRendererHandle>(null);
   const [translateStatus, setTranslateStatus] = useState<TranslationStatus>('idle');

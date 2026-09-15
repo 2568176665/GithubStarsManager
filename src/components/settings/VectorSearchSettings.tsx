@@ -67,7 +67,7 @@ export const VectorSearchSettings: React.FC<VectorSearchSettingsProps> = ({ t })
   const {
     testingEmbedding, embeddingTestResult, testingWorker, workerTestResult,
     incrementalTargetCount, testEmbedding, testWorker, rebuildIndex,
-    incrementalIndex, abortIndexing,
+    incrementalIndex, abortIndexing, refreshVectorStatus,
   } = useVectorSearchActions();
 
   const activeConfig = embeddingConfigs.find((config) => config.id === activeEmbeddingConfig);
@@ -81,7 +81,6 @@ export const VectorSearchSettings: React.FC<VectorSearchSettingsProps> = ({ t })
   const [showApiKey, setShowApiKey] = useState(false);
   const [formWorkerUrl, setFormWorkerUrl] = useState(vectorSearchConfig.workerUrl || '');
   const [formAuthToken, setFormAuthToken] = useState(vectorSearchConfig.authToken || '');
-  const [showAuthToken, setShowAuthToken] = useState(false);
   const [formIndexMode, setFormIndexMode] = useState<'description' | 'readme'>(vectorSearchConfig.indexMode || 'readme');
   const [formReadmeMaxChars, setFormReadmeMaxChars] = useState(vectorSearchConfig.readmeMaxChars || 6000);
   const [formReadmeMaxCharsInput, setFormReadmeMaxCharsInput] = useState(String(vectorSearchConfig.readmeMaxChars || 6000));
@@ -108,6 +107,9 @@ export const VectorSearchSettings: React.FC<VectorSearchSettingsProps> = ({ t })
     setFormWorkerUrl(vectorSearchConfig.workerUrl);
     setFormAuthToken(vectorSearchConfig.authToken);
   }, [vectorSearchConfig.workerUrl, vectorSearchConfig.authToken]);
+  React.useEffect(() => {
+    if (vectorSearchConfig.enabled) void refreshVectorStatus();
+  }, [refreshVectorStatus, vectorSearchConfig.enabled]);
 
   const handleSaveEmbeddingConfig = () => {
     const configData = { name: `${formApiType} Embedding`, apiType: formApiType, baseUrl: formBaseUrl, apiKey: formApiKey, model: formModel, dimensions: formDimensions };
@@ -136,7 +138,7 @@ export const VectorSearchSettings: React.FC<VectorSearchSettingsProps> = ({ t })
   const handleIncrementalIndex = () => incrementalIndex(draft());
   const handleAbortIndexing = () => abortIndexing();
   const { isIndexing, phase, phaseDone, phaseTotal, result: indexResult } = vectorIndexingState;
-  const isConfigComplete = !!(activeConfig && formBaseUrl && formModel && (formApiType === 'ollama' || formApiKey) && formWorkerUrl && formAuthToken);
+  const isConfigComplete = !!(activeConfig && formBaseUrl && formModel && (formApiType === 'ollama' || formApiKey));
 
   return (
     <div className="space-y-6">
@@ -165,7 +167,7 @@ export const VectorSearchSettings: React.FC<VectorSearchSettingsProps> = ({ t })
             {t('启用向量搜索', 'Enable Vector Search')}
           </div>
           <div className="text-sm text-muted-foreground dark:text-muted-foreground">
-            {t('启用后，AI 搜索将优先走向量检索，失败时自动回退', 'When enabled, AI search will use vector retrieval first, with automatic fallback on failure')}
+            {t('启用后，深度搜索在全文结果不足时才使用向量检索，失败时自动回退', 'When enabled, deep search uses vector retrieval only when full-text results are insufficient, with automatic fallback on failure')}
           </div>
         </div>
         <Switch
@@ -361,73 +363,31 @@ export const VectorSearchSettings: React.FC<VectorSearchSettingsProps> = ({ t })
         )}
       </div>
 
-      {/* Section 2: Cloudflare Vectorize Connection */}
+      {/* Section 2: Native Cloudflare Vectorize binding */}
       <div className="border border-border rounded-lg p-4 space-y-4">
         <h3 className="font-medium text-foreground dark:text-foreground flex items-center gap-2">
           <span className="text-xs bg-accent dark:bg-muted px-2 py-0.5 rounded">②</span>
-          {t('Cloudflare Vectorize 连接', 'Cloudflare Vectorize Connection')}
+          {t('Cloudflare Vectorize 原生绑定', 'Native Cloudflare Vectorize binding')}
         </h3>
-
-        {/* Worker URL */}
-        <div>
-          <label htmlFor="vectorize-worker-url" className="block text-sm font-medium text-muted-foreground dark:text-muted-foreground mb-1.5">
-            {t('Worker 地址', 'Worker URL')}
-          </label>
-          <Input
-            id="vectorize-worker-url"
-            type="text"
-            value={formWorkerUrl}
-            onChange={(e) => setFormWorkerUrl(e.target.value)}
-            placeholder="https://github-stars-vectorize.your-name.workers.dev"
-            className="w-full px-3 py-2 text-sm border border-input rounded-md bg-card dark:bg-card text-foreground dark:text-foreground focus:ring-2 focus:ring-ring focus:border-transparent"
-          />
+        <p className="text-sm text-muted-foreground dark:text-muted-foreground">
+          {t('搜索直接使用主 Worker 的 Vectorize 绑定。旧的 Worker 地址和 Token 仅为兼容历史配置保留，不再参与新搜索。', 'Search uses the main Worker Vectorize binding. Legacy Worker URL and token fields are retained only for persisted compatibility.')}
+        </p>
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          {vectorSearchStatus?.connected ? <CheckCircle className="h-4 w-4 text-foreground" aria-hidden="true" /> : <XCircle className="h-4 w-4" aria-hidden="true" />}
+          <span>{vectorSearchStatus?.connected ? t('主 Worker Vectorize 已连接', 'Main Worker Vectorize is connected') : t('尚未读取主 Worker Vectorize 状态', 'Main Worker Vectorize status is unavailable')}</span>
         </div>
-
-        {/* Auth Token */}
-        <div>
-          <label htmlFor="vectorize-auth-token" className="block text-sm font-medium text-muted-foreground dark:text-muted-foreground mb-1.5">
-            {t('认证 Token', 'Auth Token')}
-          </label>
-          <div className="relative">
-            <Input
-              id="vectorize-auth-token"
-              type={showAuthToken ? 'text' : 'password'}
-              value={formAuthToken}
-              onChange={(e) => setFormAuthToken(e.target.value)}
-              placeholder={t('Worker 认证令牌', 'Worker authentication token')}
-              className="w-full px-3 py-2 pr-10 text-sm border border-input rounded-md bg-card dark:bg-card text-foreground dark:text-foreground focus:ring-2 focus:ring-ring focus:border-transparent"
-            />
-            <Button
-              type="button"
-              variant="ghost"
-              aria-label={showAuthToken ? t('隐藏认证 Token', 'Hide auth token') : t('显示认证 Token', 'Show auth token')}
-              onClick={() => setShowAuthToken(!showAuthToken)}
-              className="absolute right-2 top-1/2 h-8 w-8 -translate-y-1/2 p-0 text-muted-foreground hover:text-muted-foreground dark:hover:text-muted-foreground"
-            >
-              {showAuthToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-            </Button>
-          </div>
-        </div>
-
-        {/* Test */}
         <div className="flex gap-2">
-          <Button
-            onClick={handleTestWorker}
-            disabled={testingWorker || !formWorkerUrl}
-            className="flex items-center gap-2 px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
+          <Button onClick={handleTestWorker} disabled={testingWorker} className="flex items-center gap-2 px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
             {testingWorker ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-            {t('测试 Worker 连接', 'Test Worker Connection')}
+            {t('检查 Vectorize 连接', 'Check Vectorize connection')}
           </Button>
         </div>
-
-        {/* Test Result */}
         {workerTestResult && (
           <Alert variant={workerTestResult.success ? 'default' : 'destructive'}>
             {workerTestResult.success ? <CheckCircle className="h-4 w-4" aria-hidden="true" /> : <XCircle className="h-4 w-4" aria-hidden="true" />}
             <AlertDescription>
               {workerTestResult.success
-                ? `${t('连接成功', 'Connection successful')} — ${t('向量数', 'Vectors')}: ${workerTestResult.vectorCount}, ${t('维度', 'Dimensions')}: ${workerTestResult.dimensions}`
+                ? `${t('连接成功', 'Connection successful')} · ${t('向量数', 'Vectors')}: ${workerTestResult.vectorCount}, ${t('维度', 'Dimensions')}: ${workerTestResult.dimensions}`
                 : `${t('连接失败', 'Connection failed')}: ${workerTestResult.error}`}
             </AlertDescription>
           </Alert>
@@ -450,8 +410,8 @@ export const VectorSearchSettings: React.FC<VectorSearchSettingsProps> = ({ t })
             )}
             <span className="text-muted-foreground dark:text-muted-foreground">
               {vectorSearchStatus?.connected
-                ? t('Worker 已连接', 'Worker connected')
-                : t('Worker 未连接', 'Worker not connected')}
+                ? t('主 Worker Vectorize 已连接', 'Main Worker Vectorize connected')
+                : t('主 Worker Vectorize 未连接', 'Main Worker Vectorize unavailable')}
             </span>
           </div>
 
@@ -820,14 +780,14 @@ export const VectorSearchSettings: React.FC<VectorSearchSettingsProps> = ({ t })
                 </li>
                 <li>
                   <code className="bg-accent dark:bg-muted px-1.5 py-0.5 rounded text-xs">
-                    npx wrangler vectorize create github-stars --dimensions={formDimensions} --metric=cosine
+                    npx wrangler vectorize create github-stars-manager-repositories --dimensions={formDimensions} --metric=cosine
                   </code>
                 </li>
                 <li>
                   <code className="bg-accent dark:bg-muted px-1.5 py-0.5 rounded text-xs">cd cloudflare-worker && npm install</code>
                 </li>
                 <li>
-                  <code className="bg-accent dark:bg-muted px-1.5 py-0.5 rounded text-xs">wrangler secret put AUTH_TOKEN</code>
+                  <code className="bg-accent dark:bg-muted px-1.5 py-0.5 rounded text-xs">npx wrangler d1 migrations apply github-stars-manager --remote</code>
                 </li>
                 <li>
                   <code className="bg-accent dark:bg-muted px-1.5 py-0.5 rounded text-xs">npm run deploy</code>

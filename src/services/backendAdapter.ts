@@ -27,6 +27,20 @@ export function getBackendProbeUrls(origin: string, hostname: string): string[] 
   if (isLocal || isCanonicalWorker) return [currentUrl];
   return [`${WORKER_CANONICAL_API_ORIGIN}/api`, currentUrl];
 }
+
+export interface SearchIndexResponse {
+  items: Array<{ id: number; score: number; matchedFields: string[] }>;
+  total: number;
+  quality: 'identity' | 'strong-field' | 'weak-text' | 'no-results';
+  source: 'fts' | 'field-fallback';
+  projectionVersion: number;
+}
+
+export interface NativeVectorMatch {
+  id: string;
+  score: number;
+  metadata?: Record<string, unknown>;
+}
 class BackendAdapter {
   private _backendUrl: string | null = null;
   private _workerEnvMode = false;
@@ -739,6 +753,86 @@ class BackendAdapter {
     });
     if (!res.ok) await this.throwTranslatedError(res, 'Fetch vector search config error');
     return res.json() as Promise<VectorSearchConfig>;
+  }
+
+  // === Search Index ===
+
+  async searchRepositoryIndex(payload: Record<string, unknown>, signal?: AbortSignal): Promise<SearchIndexResponse> {
+    if (!this._backendUrl) throw new Error('Backend not available');
+    const res = await this.fetchWithTimeout(`${this._backendUrl}/search/repositories`, {
+      method: 'POST',
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify(payload),
+      signal,
+    }, 30000);
+    if (!res.ok) await this.throwTranslatedError(res, 'Search repositories error');
+    return res.json() as Promise<SearchIndexResponse>;
+  }
+
+  async cacheRepositoryReadme(repositoryId: number, readme: string, signal?: AbortSignal): Promise<void> {
+    if (!this._backendUrl) return;
+    const res = await this.fetchWithTimeout(`${this._backendUrl}/search/readme`, {
+      method: 'PUT',
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify({ repositoryId, readme }),
+      signal,
+    }, 30000);
+    if (!res.ok) await this.throwTranslatedError(res, 'Cache README error');
+  }
+
+  async queryNativeVectorIndex(payload: Record<string, unknown>, signal?: AbortSignal): Promise<{ matches: NativeVectorMatch[] }> {
+    if (!this._backendUrl) throw new Error('Backend not available');
+    const res = await this.fetchWithTimeout(`${this._backendUrl}/search/vector/query`, {
+      method: 'POST',
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify(payload),
+      signal,
+    }, 30000);
+    if (!res.ok) await this.throwTranslatedError(res, 'Query vector index error');
+    return res.json() as Promise<{ matches: NativeVectorMatch[] }>;
+  }
+
+  async upsertNativeVectorIndex(vectors: unknown[], signal?: AbortSignal): Promise<{ upserted: number }> {
+    if (!this._backendUrl) throw new Error('Backend not available');
+    const res = await this.fetchWithTimeout(`${this._backendUrl}/search/vector/upsert`, {
+      method: 'POST',
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify({ vectors }),
+      signal,
+    }, 120000);
+    if (!res.ok) await this.throwTranslatedError(res, 'Upsert vector index error');
+    return res.json() as Promise<{ upserted: number }>;
+  }
+
+  async deleteNativeVectorIndex(ids: string[], signal?: AbortSignal): Promise<{ deleted: number }> {
+    if (!this._backendUrl) throw new Error('Backend not available');
+    const res = await this.fetchWithTimeout(`${this._backendUrl}/search/vector/delete`, {
+      method: 'POST',
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify({ ids }),
+      signal,
+    }, 30000);
+    if (!res.ok) await this.throwTranslatedError(res, 'Delete vector index error');
+    return res.json() as Promise<{ deleted: number }>;
+  }
+
+  async cleanupNativeVectorIndex(keepIds: string[], signal?: AbortSignal): Promise<{ deleted: number }> {
+    if (!this._backendUrl) throw new Error('Backend not available');
+    const res = await this.fetchWithTimeout(`${this._backendUrl}/search/vector/cleanup`, {
+      method: 'POST',
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify({ keepIds }),
+      signal,
+    }, 120000);
+    if (!res.ok) await this.throwTranslatedError(res, 'Cleanup vector index error');
+    return res.json() as Promise<{ deleted: number }>;
+  }
+
+  async getNativeVectorIndexStatus(): Promise<{ connected: boolean; vectorCount: number; dimensions: number }> {
+    if (!this._backendUrl) throw new Error('Backend not available');
+    const res = await this.fetchWithTimeout(`${this._backendUrl}/search/vector/status`, undefined, 10000);
+    if (!res.ok) await this.throwTranslatedError(res, 'Fetch vector index status error');
+    return res.json() as Promise<{ connected: boolean; vectorCount: number; dimensions: number }>;
   }
 
 

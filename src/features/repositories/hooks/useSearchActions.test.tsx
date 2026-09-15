@@ -9,18 +9,24 @@ import {
   useSearchActions,
 } from './useSearchActions';
 
-const mocks = vi.hoisted(() => ({
-  useAppStore: vi.fn(),
-  toast: vi.fn(),
-  embed: vi.fn(),
-  vectorQuery: vi.fn(),
-  generateHyDEQuery: vi.fn(),
-  searchRepositoriesWithSemanticReranking: vi.fn(),
-  searchRepositoriesWithSelection: vi.fn(),
-  getAllStarredRepositories: vi.fn(),
-  getUserLists: vi.fn(),
-  forceSyncToBackend: vi.fn(),
-}));
+const mocks = vi.hoisted(() => {
+  const backendSearch = vi.fn();
+  return {
+    useAppStore: vi.fn(),
+    toast: vi.fn(),
+    embed: vi.fn(),
+    vectorQuery: vi.fn(),
+    generateHyDEQuery: vi.fn(),
+    searchRepositoriesWithSemanticReranking: vi.fn(),
+    searchRepositoriesWithSelection: vi.fn(),
+    rewriteSearchQuery: vi.fn(),
+    getAllStarredRepositories: vi.fn(),
+    getUserLists: vi.fn(),
+    forceSyncToBackend: vi.fn(),
+    backend: { isAvailable: true, searchRepositoryIndex: backendSearch },
+    backendSearch,
+  };
+});
 
 vi.mock('../../../store/useAppStore', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../store/useAppStore')>();
@@ -49,6 +55,7 @@ vi.mock('../../../services/aiService', () => ({
     generateHyDEQuery = mocks.generateHyDEQuery;
     searchRepositoriesWithSemanticReranking = mocks.searchRepositoriesWithSemanticReranking;
     searchRepositoriesWithSelection = mocks.searchRepositoriesWithSelection;
+    rewriteSearchQuery = mocks.rewriteSearchQuery;
   },
   isAbortError: (error: unknown) => error instanceof Error && error.name === 'AbortError',
 }));
@@ -67,6 +74,10 @@ vi.mock('../../../services/githubApiFactory', () => ({
 
 vi.mock('../../../services/autoSync', () => ({
   forceSyncToBackend: mocks.forceSyncToBackend,
+}));
+
+vi.mock('../../../services/backendAdapter', () => ({
+  backend: mocks.backend,
 }));
 
 const baseRepo = (overrides: Partial<Repository> & { id: number; full_name: string }): Repository => ({
@@ -136,18 +147,40 @@ const identity = <T,>(repos: T[]): T[] => repos;
 // 泄漏进后续用例，形成用例顺序依赖。
 const setupStoreMocks = () => {
   storeState = createStoreState();
+  mocks.backend.isAvailable = true;
+  mocks.backendSearch.mockImplementation(async ({ query }: { query?: unknown }) => {
+    const normalized = typeof query === 'string' ? query.toLocaleLowerCase().trim() : '';
+    const terms = normalized.split(/\s+/).filter(Boolean);
+    const items = storeState.repositories
+      .filter((repository) => {
+        const searchable = JSON.stringify(repository).toLocaleLowerCase();
+        return terms.every((term) => searchable.includes(term));
+      })
+      .map((repository) => ({
+        id: repository.id,
+        score: 1,
+        matchedFields: ['full_name'],
+      }));
+    return {
+      items,
+      total: items.length,
+      quality: items.length > 0 ? 'strong-field' : 'no-results',
+      source: 'fts',
+      projectionVersion: 1,
+    };
+  });
   mockUseAppStore.mockImplementation((selector?: (state: typeof storeState) => unknown) =>
     selector ? selector(storeState) : storeState);
   (mockUseAppStore as unknown as { getState: () => typeof storeState }).getState = () => storeState;
 };
 
-describe('useSearchActions.aiSearch (vector hit)', () => {
+describe('useSearchActions.aiSearch', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     setupStoreMocks();
   });
 
-  it('queries with default topK 30 / threshold 0.35, boosts scores and sets the skip ref', async () => {
+  it('returns strong lexical matches without calling embedding or vector search', async () => {
     storeState.vectorSearchConfig = {
       enabled: true,
       workerUrl: 'https://worker.example',
@@ -175,24 +208,21 @@ describe('useSearchActions.aiSearch (vector hit)', () => {
     const { result } = renderHook(() => useSearchActions());
     await act(async () => { await result.current.aiSearch('foo', identity); });
 
-    expect(mocks.vectorQuery).toHaveBeenCalledWith([0.1, 0.2], { topK: 30, threshold: 0.35 });
-    expect(result.current.vectorScoreMapRef.current).toEqual({
-      query: 'foo',
-      scores: new Map([['1', 0.9 + 0.05], ['2', 0.8 + 0.03], ['3', 0.7 + 0.02]]),
-    });
+    expect(mocks.embed).not.toHaveBeenCalled();
+    expect(mocks.vectorQuery).not.toHaveBeenCalled();
+    expect(mocks.searchRepositoriesWithSelection).not.toHaveBeenCalled();
+    expect(result.current.vectorScoreMapRef.current).toBeNull();
     expect(result.current.skipNextTextSearchRef.current).toBe(true);
-    // 加分后按分数降序：3(0.72+0.02=0.74)? —— 见下：tag 加分 0.02 → 0.72
     expect(storeState.setSearchResults).toHaveBeenCalledWith([
       storeState.repositories[0],
       storeState.repositories[1],
-      storeState.repositories[2],
     ]);
     expect(storeState.setSearchFilters).toHaveBeenCalledWith({ query: 'foo' });
     expect(mocks.toast).not.toHaveBeenCalled();
     expect(result.current.isSearching).toBe(false);
   });
 
-  it('falls back to vector order without a toast when AI reranking fails', async () => {
+  it('uses vector results as an enhancement without LLM reranking', async () => {
     storeState.vectorSearchConfig = {
       enabled: true,
       workerUrl: 'https://worker.example',
@@ -211,14 +241,10 @@ describe('useSearchActions.aiSearch (vector hit)', () => {
       { id: '1', score: 0.9, metadata: { full_name: '', description: '', tags: [] } },
       { id: '2', score: 0.8, metadata: { full_name: '', description: '', tags: [] } },
     ]);
-    mocks.searchRepositoriesWithSemanticReranking.mockRejectedValue(new Error('rerank down'));
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
     const { result } = renderHook(() => useSearchActions());
     await act(async () => { await result.current.aiSearch('anything', identity); });
-    warnSpy.mockRestore();
 
-    expect(mocks.searchRepositoriesWithSemanticReranking).toHaveBeenCalledTimes(1);
+    expect(mocks.searchRepositoriesWithSemanticReranking).not.toHaveBeenCalled();
     expect(mocks.toast).not.toHaveBeenCalled();
     expect(storeState.setSearchResults).toHaveBeenCalledWith([
       storeState.repositories[0],
@@ -226,7 +252,7 @@ describe('useSearchActions.aiSearch (vector hit)', () => {
     ]);
   });
 
-  it('falls back to the raw query when HyDE misses the 5s budget and aborts the HyDE request', async () => {
+  it('uses the raw query for vector search without a HyDE LLM call', async () => {
     vi.useFakeTimers();
     try {
       storeState.vectorSearchConfig = {
@@ -254,9 +280,9 @@ describe('useSearchActions.aiSearch (vector hit)', () => {
       await act(async () => { await vi.advanceTimersByTimeAsync(5100); });
       await act(async () => { await promise; });
 
-      expect(mocks.embed).toHaveBeenCalledWith(['foo'], 'query');
-      // 5s 预算耗尽后 HyDE 局部 controller 必须真正 abort 掉挂起的请求
-      expect(hydeSignals[0]?.aborted).toBe(true);
+      expect(mocks.generateHyDEQuery).not.toHaveBeenCalled();
+      expect(mocks.embed).toHaveBeenCalledWith(['foo'], 'query', expect.any(AbortSignal));
+      expect(hydeSignals).toHaveLength(0);
     } finally {
       vi.useRealTimers();
     }
@@ -294,9 +320,12 @@ describe('useSearchActions.aiSearch (vector hit)', () => {
     const { result } = renderHook(() => useSearchActions());
     await act(async () => { await result.current.aiSearch('foo', identity); });
 
+    expect(mocks.embed).not.toHaveBeenCalled();
     expect(mocks.vectorQuery).not.toHaveBeenCalled();
+    expect(mocks.searchRepositoriesWithSelection).not.toHaveBeenCalled();
     expect(storeState.setSearchResults).toHaveBeenCalledWith([storeState.repositories[0]]);
     expect(storeState.setSearchFilters).toHaveBeenCalledWith({ query: 'foo' });
+    expect(result.current.skipNextTextSearchRef.current).toBe(true);
   });
 
   it('falls through to keyword search when vector hits match no local repository', async () => {
@@ -357,7 +386,7 @@ describe('useSearchActions.aiSearch (vector hit)', () => {
     expect(result.current.isSearching).toBe(false);
   });
 
-  it('uses the HyDE output when it resolves within the budget', async () => {
+  it('does not use HyDE on the vector enhancement path', async () => {
     storeState.vectorSearchConfig = {
       enabled: true,
       workerUrl: 'https://worker.example',
@@ -375,7 +404,8 @@ describe('useSearchActions.aiSearch (vector hit)', () => {
 
     const { result } = renderHook(() => useSearchActions());
     await act(async () => { await result.current.aiSearch('foo', identity); });
-    expect(mocks.embed).toHaveBeenCalledWith(['an ideal description of foo'], 'query');
+    expect(mocks.generateHyDEQuery).not.toHaveBeenCalled();
+    expect(mocks.embed).toHaveBeenCalledWith(['foo'], 'query', expect.any(AbortSignal));
   });
 });
 
@@ -385,7 +415,7 @@ describe('useSearchActions.keywordSearch', () => {
     setupStoreMocks();
   });
 
-  it('falls back to basic text search when AI selection fails and vector search found nothing', async () => {
+  it('uses lexical results when the vector enhancement is not needed', async () => {
     storeState.vectorSearchConfig = {
       enabled: true,
       workerUrl: 'https://worker.example',
@@ -408,11 +438,33 @@ describe('useSearchActions.keywordSearch', () => {
     await act(async () => { await result.current.aiSearch('foo', identity); });
     warnSpy.mockRestore();
 
-    expect(mocks.searchRepositoriesWithSelection).toHaveBeenCalledTimes(1);
+    expect(mocks.searchRepositoriesWithSelection).not.toHaveBeenCalled();
     expect(storeState.setSearchResults).toHaveBeenCalledWith([storeState.repositories[0]]);
     expect(storeState.setSearchFilters).toHaveBeenCalledWith({ query: 'foo' });
-    // AI 失败走基础文本搜索兜底：顺序非 AI 产物，无需挡 SearchBar 的过滤 effect
-    expect(result.current.skipNextTextSearchRef.current).toBe(false);
+    expect(result.current.skipNextTextSearchRef.current).toBe(true);
+  });
+
+  it('uses local lexical results without embedding when the Worker is unavailable', async () => {
+    mocks.backend.isAvailable = false;
+    storeState.vectorSearchConfig = {
+      enabled: true,
+      workerUrl: 'https://legacy-vector.example',
+      authToken: 'legacy-token',
+      embeddingConfigId: 'emb',
+      indexMode: 'description',
+      readmeMaxChars: 6000,
+    };
+    storeState.repositories = [
+      baseRepo({ id: 1, full_name: 'owner/offline-tool', description: 'semantic local fallback' }),
+      baseRepo({ id: 2, full_name: 'owner/other' }),
+    ];
+
+    const { result } = renderHook(() => useSearchActions());
+    await act(async () => { await result.current.aiSearch('semantic', identity); });
+
+    expect(mocks.embed).not.toHaveBeenCalled();
+    expect(mocks.vectorQuery).not.toHaveBeenCalled();
+    expect(storeState.setSearchResults).toHaveBeenCalledWith([storeState.repositories[0]]);
   });
 
   it('presents an empty result when AI selection explicitly returns no relevant repositories', async () => {
@@ -443,7 +495,7 @@ describe('useSearchActions.keywordSearch', () => {
     expect(result.current.skipNextTextSearchRef.current).toBe(true);
   });
 
-  it('keeps the AI-provided ordering instead of the default star ordering', async () => {
+  it('keeps hybrid relevance ordering instead of the default star ordering', async () => {
     storeState.vectorSearchConfig = {
       enabled: true,
       workerUrl: 'https://worker.example',
@@ -458,8 +510,11 @@ describe('useSearchActions.keywordSearch', () => {
       baseRepo({ id: 2, full_name: 'owner/low-star', stargazers_count: 3 }),
     ];
     mocks.embed.mockResolvedValue([[0.1]]);
-    mocks.vectorQuery.mockResolvedValue([]);
-    // LLM 精选把低 star 的排在前面：applyFilters 的 star 降序不能覆盖该顺序
+    mocks.vectorQuery.mockResolvedValue([
+      { id: '2', score: 0.9, metadata: { full_name: '', description: '', tags: [] } },
+      { id: '1', score: 0.8, metadata: { full_name: '', description: '', tags: [] } },
+    ]);
+    // Vector relevance puts the low-star repository first; the UI star sort must not overwrite it.
     mocks.searchRepositoriesWithSelection.mockResolvedValue([
       storeState.repositories[1],
       storeState.repositories[0],
@@ -469,7 +524,7 @@ describe('useSearchActions.keywordSearch', () => {
       [...repos].sort((a, b) => (b.stargazers_count || 0) - (a.stargazers_count || 0));
 
     const { result } = renderHook(() => useSearchActions());
-    await act(async () => { await result.current.aiSearch('foo', starSort); });
+    await act(async () => { await result.current.aiSearch('semantic', starSort); });
 
     expect(storeState.setSearchResults).toHaveBeenCalledWith([
       storeState.repositories[1],
@@ -480,7 +535,7 @@ describe('useSearchActions.keywordSearch', () => {
     expect(result.current.skipNextTextSearchRef.current).toBe(true);
   });
 
-  it('toasts the fallback reason when AI selection reports a failure', async () => {
+  it('silently returns lexical results when no enhancement is required', async () => {
     storeState.vectorSearchConfig = {
       enabled: true,
       workerUrl: 'https://worker.example',
@@ -496,7 +551,7 @@ describe('useSearchActions.keywordSearch', () => {
     ];
     mocks.embed.mockResolvedValue([[0.1]]);
     mocks.vectorQuery.mockResolvedValue([]);
-    // 端点抖动/配置问题：service 回调 ai_failed，词法命中照常返回
+    // Legacy selection mocks must not be consulted by the FTS-first path.
     mocks.searchRepositoriesWithSelection.mockImplementation(
       (_repos: Repository[], _query: string, opts?: { onFallback?: (reason: string) => void }) => {
         opts?.onFallback?.('ai_failed');
@@ -507,7 +562,8 @@ describe('useSearchActions.keywordSearch', () => {
     const { result } = renderHook(() => useSearchActions());
     await act(async () => { await result.current.aiSearch('foo', identity); });
 
-    expect(mocks.toast).toHaveBeenCalledWith('AI 请求失败，已回退本地词法搜索', 'warning');
+    expect(mocks.toast).not.toHaveBeenCalled();
+    expect(mocks.searchRepositoriesWithSelection).not.toHaveBeenCalled();
     expect(storeState.setSearchResults).toHaveBeenCalledWith([storeState.repositories[0]]);
     // 兜底结果（加权词法 + CJK bigram 召回）优于过滤 effect 的 AND 整串匹配，
     // 必须置位 skipNextTextSearchRef 防止被其重设（CJK 查询会被重设为空）
@@ -528,15 +584,10 @@ describe('useSearchActions.keywordSearch', () => {
       baseRepo({ id: 1, full_name: 'owner/foo-repo' }),
       baseRepo({ id: 2, full_name: 'owner/bar-repo' }),
     ];
-    mocks.embed.mockResolvedValue([[0.1]]);
-    mocks.vectorQuery.mockResolvedValue([]);
-    // service 按契约把 AbortError 向上重抛：取消不是失败，hook 不做基础文本兜底
-    mocks.searchRepositoriesWithSelection.mockRejectedValue(
-      Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' }),
-    );
+    mocks.embed.mockRejectedValue(Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' }));
 
     const { result } = renderHook(() => useSearchActions());
-    await act(async () => { await result.current.aiSearch('foo', identity); });
+    await act(async () => { await result.current.aiSearch('semantic', identity); });
 
     expect(mocks.toast).not.toHaveBeenCalled();
     expect(storeState.setSearchResults).not.toHaveBeenCalled();
@@ -545,28 +596,33 @@ describe('useSearchActions.keywordSearch', () => {
   });
 
   it('supersedes an in-flight AI search: the previous signal aborts and writes nothing', async () => {
+    storeState.vectorSearchConfig = {
+      enabled: true,
+      workerUrl: 'https://worker.example',
+      authToken: 'worker-token',
+      embeddingConfigId: 'emb',
+      indexMode: 'description',
+      readmeMaxChars: 6000,
+    };
     storeState.repositories = [
       baseRepo({ id: 1, full_name: 'owner/foo-repo' }),
       baseRepo({ id: 2, full_name: 'owner/bar-repo' }),
     ];
     const signals: Array<AbortSignal | undefined> = [];
-    mocks.searchRepositoriesWithSelection.mockImplementation(
-      (_repos: Repository[], _query: string, opts?: { signal?: AbortSignal }) => {
-        signals.push(opts?.signal);
-        // 模拟真实在途请求：signal abort 时以 AbortError 拒绝
-        return new Promise<Repository[]>((_resolve, reject) => {
-          opts?.signal?.addEventListener('abort', () => {
-            reject(Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' }));
-          });
+    mocks.embed.mockImplementation((_texts: string[], _purpose: string, signal?: AbortSignal) => {
+      signals.push(signal);
+      return new Promise<number[][]>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => {
+          reject(Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' }));
         });
-      },
-    );
+      });
+    });
 
     const { result } = renderHook(() => useSearchActions());
     let first!: Promise<void>;
     await act(async () => { first = result.current.aiSearch('first', identity); });
     // 第二次搜索（不 await：模拟仍在途）启动时中止第一次
-    await act(async () => { result.current.aiSearch('second', identity); });
+    await act(async () => { void result.current.aiSearch('second', identity); });
     // 第二次搜索的启动即中止第一次的在途 controller
     expect(signals[0]?.aborted).toBe(true);
     expect(signals[1]?.aborted).toBe(false);
@@ -587,6 +643,21 @@ describe('useSearchActions.keywordSearch', () => {
     await act(async () => { await result.current.keywordSearch('foo', identity); });
 
     expect(mocks.searchRepositoriesWithSelection).not.toHaveBeenCalled();
+    expect(storeState.setSearchResults).toHaveBeenCalledWith([storeState.repositories[0]]);
+  });
+
+  it('rewrites only a weak query when vector search is disabled', async () => {
+    storeState.repositories = [
+      baseRepo({ id: 1, full_name: 'owner/sync-tool', description: 'offline first synchronization utility' }),
+      baseRepo({ id: 2, full_name: 'owner/other', description: 'unrelated repository' }),
+    ];
+    mocks.rewriteSearchQuery.mockResolvedValue('offline synchronization');
+
+    const { result } = renderHook(() => useSearchActions());
+    await act(async () => { await result.current.keywordSearch('natural language intent', identity); });
+
+    expect(mocks.rewriteSearchQuery).toHaveBeenCalledTimes(1);
+    expect(mocks.embed).not.toHaveBeenCalled();
     expect(storeState.setSearchResults).toHaveBeenCalledWith([storeState.repositories[0]]);
   });
 });

@@ -42,7 +42,7 @@ const BANNED_COMPONENT_SERVICE_DYNAMIC_SELECTORS = BANNED_COMPONENT_SERVICES.map
 );
 
 export default tseslint.config(
-  { ignores: ['dist', '**/.wrangler/**'] },
+  { ignores: ['dist', '**/.wrangler/**', 'cloudflare-worker/worker-configuration.d.ts'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],

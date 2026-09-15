@@ -11,6 +11,7 @@ import {
 import { GitHubApiService } from '../../../services/githubApi';
 import { LEGACY_EMBEDDING_FORMAT_VERSION, isKnownEmbeddingFormatVersion, useAppStore } from '../../../store/useAppStore';
 import { normalizeLicense } from '../../../utils/licenseFilter';
+import { backend } from '../../../services/backendAdapter';
 
 export interface EmbeddingDraft {
   apiType: EmbeddingApiType;
@@ -41,6 +42,7 @@ export interface VectorSearchActions {
   rebuildIndex: (draft: VectorIndexDraft) => Promise<void>;
   incrementalIndex: (draft: VectorIndexDraft) => Promise<void>;
   abortIndexing: () => void;
+  refreshVectorStatus: () => Promise<void>;
 }
 
 /**
@@ -152,6 +154,11 @@ export const useVectorSearchActions = (): VectorSearchActions => {
         onProgress: (progress) => state.setVectorIndexingState({ phase: progress.phase, phaseDone: progress.done, phaseTotal: progress.total }),
         signal: controller.signal,
         readmeFetcher: clients.readmeFetcher,
+        onReadmeCached: (repositoryId, readme) => {
+          void backend.cacheRepositoryReadme(repositoryId, readme).catch((error) => {
+            console.warn('Failed to cache indexed README in search projection:', error);
+          });
+        },
         indexMode: draft.indexMode,
         readmeMaxChars: draft.readmeMaxChars,
         incremental,
@@ -204,9 +211,18 @@ export const useVectorSearchActions = (): VectorSearchActions => {
   const rebuildIndex = useCallback((draft: VectorIndexDraft) => runIndex(draft, false), [runIndex]);
   const incrementalIndex = useCallback((draft: VectorIndexDraft) => runIndex(draft, true), [runIndex]);
   const abortIndexing = useCallback(() => abortController?.abort(), [abortController]);
+  const refreshVectorStatus = useCallback(async () => {
+    if (!backend.isAvailable || typeof backend.getNativeVectorIndexStatus !== 'function') return;
+    try {
+      state.setVectorSearchStatus(await backend.getNativeVectorIndexStatus());
+    } catch {
+      // The FTS search path remains available when Vectorize is not configured.
+    }
+  }, [state]);
 
   return {
     testingEmbedding, embeddingTestResult, testingWorker, workerTestResult,
     incrementalTargetCount, testEmbedding, testWorker, rebuildIndex, incrementalIndex, abortIndexing,
+    refreshVectorStatus,
   };
 };

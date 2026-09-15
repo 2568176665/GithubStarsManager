@@ -87,12 +87,14 @@ const storeState = {
 describe('RepositoryCard README lazy boundary', () => {
   afterEach(() => {
     cleanup();
+    vi.doUnmock('./ReadmeModal');
     vi.restoreAllMocks();
   });
 
   beforeEach(() => {
     cleanup();
     vi.resetModules();
+    vi.doUnmock('./ReadmeModal');
     vi.clearAllMocks();
     vi.spyOn(console, 'error').mockImplementation(mocks.consoleError);
     mocks.useAppStore.mockImplementation((selector?: (state: typeof storeState) => unknown) => (

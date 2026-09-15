@@ -10,8 +10,13 @@ import { forceSyncToBackend } from '../../../services/autoSync';
 import { useDialog } from '../../../hooks/useDialog';
 import type { GitHubList } from '../../../services/githubListsApi';
 import type { VectorQueryResult } from '../../../services/vectorSearchService';
+import { backend } from '../../../services/backendAdapter';
 import { isReservedCategoryName } from '../../../utils/categoryUtils';
-import { performBasicTextSearch } from '../../../utils/repoSearch';
+import {
+  classifyLocalSearchQuality,
+  mergeHybridSearchResults,
+  performWeightedTextSearch,
+} from '../../../utils/repoSearch';
 
 // ===== 提纯纯函数（来源逐字对应 SearchBar 基线行号） =====
 
@@ -246,220 +251,158 @@ export const useSearchActions = (): SearchActions => {
   const aiSearchAbortRef = useRef<AbortController | null>(null);
   const t = useCallback((zh: string, en: string) => language === 'zh' ? zh : en, [language]);
 
+  type LexicalSearchResult = {
+    repositories: Repository[];
+    quality: 'identity' | 'strong-field' | 'weak-text' | 'no-results';
+  };
+
+  const executeLexicalSearch = useCallback(async (
+    query: string,
+    signal?: AbortSignal,
+  ): Promise<LexicalSearchResult> => {
+    if (backend.isAvailable) {
+      try {
+        const response = await backend.searchRepositoryIndex({
+          query,
+          filters: useAppStore.getState().searchFilters,
+          limit: 50,
+        }, signal);
+        const order = new Map(response.items.map((item, index) => [String(item.id), index]));
+        const indexed = repositories.filter((repository) => order.has(String(repository.id)));
+        indexed.sort((a, b) => (order.get(String(a.id)) ?? Number.MAX_SAFE_INTEGER) - (order.get(String(b.id)) ?? Number.MAX_SAFE_INTEGER));
+        return { repositories: indexed, quality: response.quality };
+      } catch (error) {
+        if (isAbortError(error)) throw error;
+        console.warn('D1 search failed, falling back to local weighted search:', error);
+      }
+    }
+
+    const localResults = performWeightedTextSearch(repositories, query);
+    return { repositories: localResults, quality: classifyLocalSearchQuality(localResults, query) };
+  }, [repositories]);
+
   const keywordSearch = useCallback(async (
     query: string,
     applyFilters: (repos: Repository[]) => Repository[],
     options?: { signal?: AbortSignal },
   ): Promise<void> => {
-    const activeConfig = aiConfigs.find(config => config.id === activeAIConfig);
+    if (!query.trim()) return;
+    const controllerSignal = options?.signal;
+    const throwIfAborted = () => {
+      if (controllerSignal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    };
+    const raw = await executeLexicalSearch(query, controllerSignal);
+    throwIfAborted();
+    let selected = raw.repositories;
 
-    let filtered = repositories;
-    let aiOrdered = false;
-    if (activeConfig) {
-      try {
-        // 无向量降级链：查询扩展+意图复述 → 词法候选召回 → LLM 精选排序
-        setSearchPhase(t('AI 语义分析…', 'AI semantic analysis…'));
-        const aiService = new AIService(activeConfig, language);
-        const aiResults = await aiService.searchRepositoriesWithSelection(repositories, query, {
-          signal: options?.signal,
-          onPhase: (phase) => {
-            setSearchPhase(phase === 'selecting'
-              ? t('AI 精选相关仓库…', 'AI selecting relevant repositories…')
-              : t('AI 语义分析…', 'AI semantic analysis…'));
-          },
-          onFallback: (reason) => {
-            // 端点抖动/配置问题时用户看到的不能只是"空结果"：明确告知已降级
-            if (reason === 'ai_failed') {
-              toast(t('AI 请求失败，已回退本地词法搜索', 'AI request failed, fell back to local lexical search'), 'warning');
+    const vsConfig = useAppStore.getState().vectorSearchConfig;
+    const activeEmbeddingConfig = useAppStore.getState().embeddingConfigs.find(
+      (config) => config.id === vsConfig?.embeddingConfigId,
+    );
+    const qualityRank = (quality: LexicalSearchResult['quality']): number => ({
+      'no-results': 0,
+      'weak-text': 1,
+      'strong-field': 2,
+      identity: 3,
+    }[quality]);
+
+    if (raw.quality === 'weak-text' || raw.quality === 'no-results') {
+      // Native Vectorize is a Worker capability. If the Worker is unavailable,
+      // keep the search local and do not use legacy external vector settings.
+      if (vsConfig?.enabled && backend.isAvailable) {
+        if (activeEmbeddingConfig) {
+          try {
+            setSearchPhase(t('生成查询向量…', 'Generating query vector…'));
+            const embeddingClient = new EmbeddingClient(activeEmbeddingConfig);
+            const vectorService = new VectorSearchService(vsConfig);
+            const vectors = await embeddingClient.embed([query], 'query', controllerSignal);
+            throwIfAborted();
+            if (vectors[0]) {
+              setSearchPhase(t('搜索向量索引…', 'Searching vector index…'));
+              const vectorResults = await vectorService.query(vectors[0], {
+                topK: vsConfig.searchTopK ?? 30,
+                threshold: vsConfig.searchThreshold ?? 0.35,
+              }, controllerSignal);
+              throwIfAborted();
+              if (vectorResults.length > 0) {
+                selected = mergeHybridSearchResults(repositories, raw.repositories, vectorResults);
+                const hybridScores = buildSearchPatch(query, vectorResults);
+                selected.forEach((repository, index) => {
+                  if (!hybridScores.has(String(repository.id))) {
+                    hybridScores.set(String(repository.id), 1 / (100 + index));
+                  }
+                });
+                vectorScoreMapRef.current = {
+                  query,
+                  scores: hybridScores,
+                };
+              }
             }
-          },
-        });
-        console.log('✅ AI selection search completed, results:', aiResults.length);
-        filtered = aiResults;
-        aiOrdered = true;
-      } catch (error) {
-        // 取消不是失败：向上传播交给 aiSearch 静默结束，不产出兜底结果
-        if (isAbortError(error)) throw error;
-        console.warn('❌ AI search failed, falling back to basic search:', error);
-        toast(t('AI 请求失败，已回退本地词法搜索', 'AI request failed, fell back to local lexical search'), 'warning');
-        filtered = performBasicTextSearch(repositories, query);
+          } catch (error) {
+            if (isAbortError(error)) throw error;
+            console.warn('Vector search failed, returning FTS results:', error);
+          }
+        }
+      } else if (activeAIConfig) {
+        try {
+          setSearchPhase(t('改写搜索查询…', 'Rewriting search query…'));
+          const config = aiConfigs.find((item) => item.id === activeAIConfig);
+          if (config) {
+            const rewritten = await new AIService(config, language).rewriteSearchQuery(query, controllerSignal);
+            throwIfAborted();
+            if (rewritten && rewritten.trim().toLocaleLowerCase() !== query.trim().toLocaleLowerCase()) {
+              const rewrittenResult = await executeLexicalSearch(rewritten, controllerSignal);
+              throwIfAborted();
+              if (rewrittenResult.repositories.length > 0
+                && (qualityRank(rewrittenResult.quality) > qualityRank(raw.quality)
+                  || (qualityRank(rewrittenResult.quality) === qualityRank(raw.quality)
+                    && rewrittenResult.repositories.length > raw.repositories.length))) {
+                selected = rewrittenResult.repositories;
+              }
+            }
+          }
+        } catch (error) {
+          if (isAbortError(error)) throw error;
+          console.warn('AI query rewrite failed, returning FTS results:', error);
+        }
       }
-    } else {
-      console.log('⚠️ No AI config found, using basic text search');
-      // Basic text search if no AI config
-      filtered = performBasicTextSearch(repositories, query);
     }
 
-    // Apply other filters and update results
-    const finalFiltered = applyFilters(filtered);
-    if (aiOrdered) {
-      // AI 返回的顺序（LLM 精选序或词法兜底序）就是相关性顺序；applyFilters 会按
-      // 排序控件重排（默认 star 降序），这里恢复 AI 顺序——与向量路径的
-      // rerankOrder 恢复逻辑同构。
-      const aiOrder = new Map(filtered.map((repo, index) => [String(repo.id), index]));
-      finalFiltered.sort((a, b) =>
-        (aiOrder.get(String(a.id)) ?? Number.MAX_SAFE_INTEGER)
-        - (aiOrder.get(String(b.id)) ?? Number.MAX_SAFE_INTEGER));
-      // 下面 setSearchFilters({ query }) 会触发 SearchBar 的过滤 effect，用基础
-      // 文本搜索+star 排序重设结果——LLM 精选的顺序、子集与显式空态都会被覆盖。
-      // 与向量路径同用 skipNextTextSearchRef 挡掉这次 effect（含空结果场景）。
-      skipNextTextSearchRef.current = true;
-    }
-    setSearchResults(finalFiltered);
-
-    // Update search filters to mark that AI search was performed
+    throwIfAborted();
+    const selectedOrder = new Map(selected.map((repository, index) => [String(repository.id), index]));
+    const finalResults = applyFilters(selected).sort(
+      (a, b) => (selectedOrder.get(String(a.id)) ?? Number.MAX_SAFE_INTEGER)
+        - (selectedOrder.get(String(b.id)) ?? Number.MAX_SAFE_INTEGER),
+    );
+    skipNextTextSearchRef.current = true;
+    setSearchResults(finalResults);
     setSearchFilters({ query });
-  }, [repositories, aiConfigs, activeAIConfig, language, setSearchResults, setSearchFilters, toast, t]);
+  }, [activeAIConfig, aiConfigs, executeLexicalSearch, language, repositories, setSearchFilters, setSearchResults, t]);
 
   const aiSearch = useCallback(async (
     query: string,
     applyFilters: (repos: Repository[]) => Repository[],
   ): Promise<void> => {
     if (!query.trim()) return;
-
-    // 新搜索接管：中止上一次仍在途的 AI 请求（搜索进行中按 Enter 可再次触发），
-    // 防止过期结果落盘覆盖新结果。被取代的搜索在 finally 里不复位搜索状态。
     aiSearchAbortRef.current?.abort();
     const controller = new AbortController();
     aiSearchAbortRef.current = controller;
-
     setIsSearching(true);
     setSearchPhase(null);
     vectorScoreMapRef.current = null;
-    console.log('🔍 Starting AI search for query:', query);
 
     try {
-      // ====== 向量搜索分支 ======
-      // 保持原时机：非响应式 getState() 读取（原文件如此，不改成响应式 selector）
-      const vsConfig = useAppStore.getState().vectorSearchConfig;
-      const embConfigs = useAppStore.getState().embeddingConfigs;
-      const activeEmbConfig = embConfigs.find(c => c.id === vsConfig?.embeddingConfigId);
-
-      if (vsConfig?.enabled && vsConfig?.workerUrl && activeEmbConfig) {
-        try {
-          const embeddingClient = new EmbeddingClient(activeEmbConfig);
-          const vectorService = new VectorSearchService(vsConfig);
-
-          // 1. HyDE 查询预处理：用 LLM 生成理想仓库描述再嵌入（可选，5 秒超时降级）
-          let embeddingQuery = query;
-          const hydeConfig = aiConfigs.find(config => config.id === activeAIConfig);
-          if (vsConfig.enableHyDE !== false && hydeConfig) {
-            const hydeAbort = new AbortController();
-            let hydeTimer: ReturnType<typeof setTimeout> | null = null;
-            try {
-              setSearchPhase(t('AI 分析查询…', 'AI analyzing query…'));
-              const hydeService = new AIService(hydeConfig, language);
-              embeddingQuery = await Promise.race([
-                hydeService.generateHyDEQuery(query, hydeAbort.signal).catch(() => query),
-                new Promise<string>((resolve) => {
-                  hydeTimer = setTimeout(() => {
-                    hydeAbort.abort();
-                    resolve(query);
-                  }, 5000);
-                }),
-              ]);
-              if (embeddingQuery !== query) {
-                console.log('🔮 HyDE generated:', embeddingQuery.slice(0, 100));
-              }
-            } catch (hydeError) {
-              console.warn('HyDE failed, using raw query:', hydeError);
-              embeddingQuery = query;
-            } finally {
-              if (hydeTimer) clearTimeout(hydeTimer);
-            }
-          }
-
-          // 2. 前端调用 Embedding API 生成查询向量
-          setSearchPhase(t('生成查询向量…', 'Generating query vector…'));
-          const queryVectors = await embeddingClient.embed([embeddingQuery], 'query');
-          if (queryVectors && queryVectors.length > 0) {
-            // 2. 前端将查询向量发送到 Worker
-            setSearchPhase(t('检索向量库…', 'Searching vector index…'));
-            const vectorResults = await vectorService.query(queryVectors[0], {
-              topK: vsConfig.searchTopK ?? 30,
-              threshold: vsConfig.searchThreshold ?? 0.35,
-            });
-
-            if (vectorResults.length > 0) {
-              // 3. 轻量关键词加分：精确匹配的字段给予分数微调
-              const scoreMap = buildSearchPatch(query, vectorResults);
-
-              // 4. 从本地仓库数据中取出匹配结果，按相似度排序
-              const scoredRepos = repositories
-                .filter(repo => scoreMap.has(String(repo.id)))
-                .map(repo => ({
-                  repo,
-                  score: scoreMap.get(String(repo.id)) || 0,
-                }))
-                .sort((a, b) => b.score - a.score)
-                .map(item => item.repo);
-
-              if (scoredRepos.length > 0) {
-                // 4. AI 语义重排序：用 LLM 对向量搜索结果做真正的语义排序
-                let reranked = scoredRepos;
-                let rerankSucceeded = false;
-                const rerankConfig = aiConfigs.find(config => config.id === activeAIConfig);
-                if (rerankConfig && vsConfig.enableReranking !== false) {
-                  try {
-                    setSearchPhase(t('AI 语义重排序…', 'AI semantic reranking…'));
-                    const rerankService = new AIService(rerankConfig, language);
-                    reranked = await rerankService.searchRepositoriesWithSemanticReranking(scoredRepos, query);
-                    rerankSucceeded = true;
-                    console.log('🤖 AI semantically reranked results:', reranked.length);
-                  } catch (rerankError) {
-                    console.warn('AI semantic reranking failed, using vector order:', rerankError);
-                  }
-                }
-
-                // 保存 LLM 重排序顺序，applyFilters 可能按 UI 排序覆盖它
-                const rerankOrder = rerankSucceeded
-                  ? new Map(reranked.map((repo, index) => [String(repo.id), index]))
-                  : null;
-                const finalFiltered = applyFilters([...reranked]);
-                if (rerankOrder) {
-                  // 恢复 LLM 语义排序顺序
-                  finalFiltered.sort((a, b) =>
-                    (rerankOrder.get(String(a.id)) ?? Number.MAX_SAFE_INTEGER)
-                    - (rerankOrder.get(String(b.id)) ?? Number.MAX_SAFE_INTEGER)
-                  );
-                } else {
-                  finalFiltered.sort((a, b) => (scoreMap.get(String(b.id)) ?? 0) - (scoreMap.get(String(a.id)) ?? 0));
-                }
-                console.log('🎯 Vector search results:', finalFiltered.length);
-                vectorScoreMapRef.current = { query, scores: scoreMap };
-                skipNextTextSearchRef.current = true;
-                setSearchResults(finalFiltered);
-                setSearchFilters({ query });
-                return;
-              }
-            }
-          }
-          // 向量搜索无结果 → 继续走关键词搜索
-          console.log('⚠️ Vector search returned no results, falling back to keyword search');
-        } catch (vectorError) {
-          console.warn('❌ Vector search failed, falling back to keyword search:', vectorError);
-        }
-      }
-      // ====== 向量搜索分支结束 ======
-
       await keywordSearch(query, applyFilters, { signal: controller.signal });
     } catch (error) {
-      // 取消不是失败：静默结束当前搜索（不产出结果），不当作可恢复的 AI 失败
-      if (isAbortError(error)) {
-        console.log('🚫 AI search cancelled');
-        return;
-      }
-      console.error('💥 Search failed:', error);
+      if (!isAbortError(error)) console.error('Search failed:', error);
     } finally {
-      // 仅当本次搜索仍是"当前搜索"时才复位状态：被新搜索取代的旧搜索
-      // 不把新搜索的 isSearching/searchPhase 状态清掉
       if (aiSearchAbortRef.current === controller) {
         aiSearchAbortRef.current = null;
         setIsSearching(false);
         setSearchPhase(null);
       }
     }
-  }, [repositories, aiConfigs, activeAIConfig, language, setSearchResults, setSearchFilters, keywordSearch, t]);
+  }, [keywordSearch]);
 
   const syncStars = useCallback(async (mode: 'auto' | 'stars-only' | 'stars-and-lists' = 'auto') => {
     if (!githubToken) {

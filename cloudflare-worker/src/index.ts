@@ -1,8 +1,13 @@
-interface Env {
-  DB: D1Database;
-  ASSETS: Fetcher;
-  GITHUB_TOKEN?: string;
-}
+import {
+  cacheRepositoryReadme,
+  cleanupVectorIndex,
+  deleteVectorIndex,
+  queryVectorIndex,
+  refreshSearchProjection,
+  searchRepositoryIndex,
+  upsertVectorIndex,
+  vectorStatus,
+} from './search';
 
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -104,7 +109,7 @@ async function saveAIConfigs(env: Env, configs: AIConfig[]): Promise<void> {
   await writeState(env, 'configs/ai', configs);
 }
 
-async function handleApi(request: Request, env: Env): Promise<Response> {
+async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
   if (url.pathname === '/api/health') return json({ status: 'ok', mode: 'worker-env', service: 'github-stars-manager' });
   if (url.pathname === '/api/session' && request.method === 'GET') {
@@ -174,6 +179,56 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     return new Response(response.body, { status: response.status, headers: { ...CORS_HEADERS, 'Content-Type': response.headers.get('Content-Type') || 'application/json' } });
   }
   const path = url.pathname.replace(/^\/api\//, '');
+  if (path === 'search/repositories' && request.method === 'POST') {
+    try {
+      return json(await searchRepositoryIndex(env, await request.json()));
+    } catch (error) {
+      console.error(JSON.stringify({ message: 'Repository search failed', error: error instanceof Error ? error.message : String(error) }));
+      return json({ error: 'Search index unavailable', code: 'SEARCH_INDEX_UNAVAILABLE' }, 503);
+    }
+  }
+  if (path === 'search/readme' && request.method === 'PUT') {
+    try {
+      return json({ success: true, ...(await cacheRepositoryReadme(env, await request.json())) });
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : String(error), code: 'README_CACHE_FAILED' }, 400);
+    }
+  }
+  if (path === 'search/vector/status' && request.method === 'GET') {
+    try {
+      return json(await vectorStatus(env));
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : String(error), code: 'VECTORIZE_UNAVAILABLE' }, 503);
+    }
+  }
+  if (path === 'search/vector/query' && request.method === 'POST') {
+    try {
+      return json(await queryVectorIndex(env, await request.json()));
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : String(error), code: 'VECTOR_QUERY_FAILED' }, 503);
+    }
+  }
+  if (path === 'search/vector/upsert' && request.method === 'POST') {
+    try {
+      return json({ success: true, ...(await upsertVectorIndex(env, await request.json())) });
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : String(error), code: 'VECTOR_UPSERT_FAILED' }, 503);
+    }
+  }
+  if (path === 'search/vector/delete' && request.method === 'POST') {
+    try {
+      return json({ success: true, ...(await deleteVectorIndex(env, await request.json())) });
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : String(error), code: 'VECTOR_DELETE_FAILED' }, 503);
+    }
+  }
+  if (path === 'search/vector/cleanup' && request.method === 'POST') {
+    try {
+      return json({ success: true, ...(await cleanupVectorIndex(env, await request.json())) });
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : String(error), code: 'VECTOR_CLEANUP_FAILED' }, 503);
+    }
+  }
   if (path === 'configs/ai' && request.method === 'GET') return json(await getAIConfigs(env));
   if (path === 'configs/ai/bulk' && request.method === 'PUT') {
     const body = await request.json() as { configs?: AIConfig[] };
@@ -190,7 +245,13 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
   }
   if (collection && request.method === 'PUT') {
     const body = await request.json() as Record<string, unknown>;
-    await writeState(env, collection, body[collection] ?? body.configs ?? []);
+    const value = body[collection] ?? body.configs ?? [];
+    await writeState(env, collection, value);
+    if (collection === 'repositories' && Array.isArray(value)) {
+      ctx.waitUntil(refreshSearchProjection(env, value).catch((error) => {
+        console.error(JSON.stringify({ message: 'Search projection refresh failed', error: error instanceof Error ? error.message : String(error) }));
+      }));
+    }
     return json({ success: true });
   }
   if (path === 'configs/vector-search' && request.method === 'GET') return json(await readState(env, path, {}));
@@ -279,11 +340,11 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
     const url = new URL(request.url);
     try {
-      if (url.pathname.startsWith('/api/')) return await handleApi(request, env);
+      if (url.pathname.startsWith('/api/')) return await handleApi(request, env, ctx);
       // Browsers may request the conventional favicon path even though the
       // Vite document points to /icon.png. Redirect it to the shipped asset so
       // a missing optional file cannot enter the asset fallback path.
