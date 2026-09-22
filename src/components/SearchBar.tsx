@@ -1,6 +1,6 @@
 import { Input } from './ui/input';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Search, X, SlidersHorizontal, CheckCircle, Bell, BellOff, Bot, Edit3, Lock, Unlock, AlertCircle, ChevronDown, RefreshCw, Clock, ArrowDown, ArrowUp } from 'lucide-react';
+import { Search, X, SlidersHorizontal, CheckCircle, Bell, BellOff, Bot, Edit3, Lock, Unlock, AlertCircle, Archive, ChevronDown, RefreshCw, Clock, ArrowDown, ArrowUp } from 'lucide-react';
 import { getPlatformDisplayName, getPlatformIcon } from './platformMeta';
 import { useAppStore, getAllCategories } from '../store/useAppStore';
 import { useShallow } from 'zustand/react/shallow';
@@ -22,13 +22,14 @@ import {
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
 
-type SortBy = 'stars' | 'updated' | 'name' | 'starred';
+type SortBy = 'stars' | 'updated' | 'name' | 'starred' | 'created';
 
 const sortOptions: { value: SortBy; labelZh: string; labelEn: string }[] = [
   { value: 'stars', labelZh: '按星标排序', labelEn: 'Sort by Stars' },
   { value: 'updated', labelZh: '按更新排序', labelEn: 'Sort by Updated' },
   { value: 'name', labelZh: '按名称排序', labelEn: 'Sort by Name' },
   { value: 'starred', labelZh: '按加星时间排序', labelEn: 'Sort by Starred Time' },
+  { value: 'created', labelZh: '按创建时间排序', labelEn: 'Sort by Created Time' },
 ];
 
 interface SortByDropdownProps {
@@ -260,7 +261,7 @@ export const SearchBar: React.FC = () => {
     // Search helpers are intentionally kept as local closures; the explicit deps below
     // cover the state they read without causing a search loop on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchFilters.languages, searchFilters.tags, searchFilters.platforms, searchFilters.licenses, searchFilters.isAnalyzed, searchFilters.isSubscribed, searchFilters.isEdited, searchFilters.isCategoryLocked, searchFilters.analysisFailed, searchFilters.minStars, searchFilters.maxStars, searchFilters.sortBy, searchFilters.sortOrder, searchFilters.query, repositories, releaseSubscriptions, allCategories]);
+  }, [searchFilters.languages, searchFilters.tags, searchFilters.platforms, searchFilters.licenses, searchFilters.isAnalyzed, searchFilters.isSubscribed, searchFilters.isEdited, searchFilters.isCategoryLocked, searchFilters.analysisFailed, searchFilters.healthArchived, searchFilters.healthRecentActivity, searchFilters.healthHasLicense, searchFilters.minStars, searchFilters.maxStars, searchFilters.sortBy, searchFilters.sortOrder, searchFilters.query, repositories, releaseSubscriptions, allCategories]);
 
   // Real-time search stays local and covers the lightweight search projection.
   useEffect(() => {
@@ -554,6 +555,9 @@ export const SearchBar: React.FC = () => {
       isEdited: undefined,
       isCategoryLocked: undefined,
       analysisFailed: undefined,
+      healthArchived: undefined,
+      healthRecentActivity: undefined,
+      healthHasLicense: undefined,
     });
   };
 
@@ -568,7 +572,10 @@ export const SearchBar: React.FC = () => {
     (searchFilters.isSubscribed !== undefined ? 1 : 0) +
     (searchFilters.isEdited !== undefined ? 1 : 0) +
     (searchFilters.isCategoryLocked !== undefined ? 1 : 0) +
-    (searchFilters.analysisFailed !== undefined ? 1 : 0);
+    (searchFilters.analysisFailed !== undefined ? 1 : 0) +
+    (searchFilters.healthArchived !== undefined ? 1 : 0) +
+    (searchFilters.healthRecentActivity !== undefined ? 1 : 0) +
+    (searchFilters.healthHasLicense !== undefined ? 1 : 0);
 
   // 平台图标与显示名统一由 platformMeta 模块提供
 
@@ -847,7 +854,7 @@ export const SearchBar: React.FC = () => {
         <div className="flex items-center gap-2 relative z-30">
           <SortByDropdown
             value={searchFilters.sortBy}
-            onChange={(value) => setSearchFilters({ sortBy: value as 'stars' | 'updated' | 'name' | 'starred' })}
+            onChange={(value) => setSearchFilters({ sortBy: value })}
             t={t}
           />
           <Button
@@ -1268,6 +1275,50 @@ export const SearchBar: React.FC = () => {
                   ≥{preset.label}
                 </Button>
               ))}
+            </div>
+          </div>
+
+          <div>
+            <h4 className="mb-3 text-sm font-medium text-foreground dark:text-foreground">
+              {t('仓库健康事实', 'Repository Health Facts')}
+            </h4>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                onClick={() => setSearchFilters({
+                  healthArchived: searchFilters.healthArchived === true ? undefined : true,
+                })}
+                aria-pressed={searchFilters.healthArchived === true}
+                title={t('只显示已归档仓库', 'Show archived repositories only')}
+                variant="ghost"
+                className={`${filterChipBaseClass} ${searchFilters.healthArchived === true ? filterChipActiveClass : filterChipInactiveClass}`}
+              >
+                <Archive className="h-4 w-4" />
+                <span>{t('已归档', 'Archived')}</span>
+              </Button>
+              <Button
+                onClick={() => setSearchFilters({
+                  healthRecentActivity: searchFilters.healthRecentActivity === true ? undefined : true,
+                })}
+                aria-pressed={searchFilters.healthRecentActivity === true}
+                title={t('只显示最近一年有提交的仓库', 'Show repositories pushed within the last year')}
+                variant="ghost"
+                className={`${filterChipBaseClass} ${searchFilters.healthRecentActivity === true ? filterChipActiveClass : filterChipInactiveClass}`}
+              >
+                <Clock className="h-4 w-4" />
+                <span>{t('近一年有提交', 'Pushed in the last year')}</span>
+              </Button>
+              <Button
+                onClick={() => setSearchFilters({
+                  healthHasLicense: searchFilters.healthHasLicense === false ? undefined : false,
+                })}
+                aria-pressed={searchFilters.healthHasLicense === false}
+                title={t('只显示没有声明许可证的仓库', 'Show repositories without a declared license')}
+                variant="ghost"
+                className={`${filterChipBaseClass} ${searchFilters.healthHasLicense === false ? filterChipActiveClass : filterChipInactiveClass}`}
+              >
+                <AlertCircle className="h-4 w-4" />
+                <span>{t('无许可证', 'No declared license')}</span>
+              </Button>
             </div>
           </div>
         </div>

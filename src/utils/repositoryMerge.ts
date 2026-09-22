@@ -16,6 +16,12 @@ const LOCAL_REPOSITORY_FIELDS: Array<keyof Repository> = [
   'category_locked',
   'last_edited',
   'vector_indexed_at',
+  'archived',
+  'disabled',
+  'fork',
+  'is_template',
+  'open_issues_count',
+  'default_branch',
 ];
 
 /**
@@ -30,6 +36,12 @@ export const CLIENT_ONLY_REPOSITORY_FIELDS: ReadonlySet<keyof Repository> = new 
   'analysis_error',
   'has_fetched_releases',
   'last_release_fetch_time',
+  'archived',
+  'disabled',
+  'fork',
+  'is_template',
+  'open_issues_count',
+  'default_branch',
 ]);
 
 /** Drop client-only fields from a repo list, projecting the shape the backend

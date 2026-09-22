@@ -286,8 +286,6 @@ export const CategorySidebar: React.FC<CategorySidebarProps> = ({
       justDroppedRef.current = false;
     }, 300);
 
-    if (category.id === 'all') return;
-
     const repoId = event.dataTransfer.getData('application/x-gsm-repository-id');
     const repository = repositoryMap.get(repoId);
     if (!repository) return;
@@ -296,6 +294,30 @@ export const CategorySidebar: React.FC<CategorySidebarProps> = ({
 
     // 获取所有分类用于计算AI和默认分类
     const allCategoriesList = getAllCategories(customCategories, language, hiddenDefaultCategoryIds, defaultCategoryOverrides);
+
+    // 拖到“全部”表示取消手动分类，同时解除分类锁定。
+    // 已经没有任何分类归属的仓库无需写入，避免无意义的同步。
+    if (category.id === 'all') {
+      const hasAssignedCategory = Boolean(repository.custom_category)
+        || Boolean(getAICategory(repository, allCategoriesList))
+        || Boolean(getDefaultCategory(repository, allCategoriesList));
+      if (!hasAssignedCategory && !repository.category_locked) return;
+
+      updateRepository({
+        ...repository,
+        custom_category: '',
+        category_locked: false,
+        last_edited: new Date().toISOString(),
+      });
+
+      try {
+        await forceSyncToBackend();
+      } catch {
+        handleSyncError(originalRepo);
+      }
+      return;
+    }
+
     const aiCat = getAICategory(repository, allCategoriesList);
     const defaultCat = getDefaultCategory(repository, allCategoriesList);
 
@@ -361,7 +383,6 @@ export const CategorySidebar: React.FC<CategorySidebarProps> = ({
                   key={category.id}
                   className="group shrink-0"
                   onDragOver={(event) => {
-                    if (category.id === 'all') return;
                     event.preventDefault();
                     setDragOverCategoryId(category.id);
                   }}
@@ -460,7 +481,6 @@ export const CategorySidebar: React.FC<CategorySidebarProps> = ({
                           key={category.id}
                           className="group relative"
                           onDragOver={(event) => {
-                            if (category.id === 'all') return;
                             event.preventDefault();
                             setDragOverCategoryId(category.id);
                           }}
@@ -564,7 +584,6 @@ export const CategorySidebar: React.FC<CategorySidebarProps> = ({
                           transitionDelay: showText ? `${Math.min(index * 30, 300)}ms` : '0ms',
                         }}
                         onDragOver={(event) => {
-                          if (category.id === 'all') return;
                           event.preventDefault();
                           setDragOverCategoryId(category.id);
                         }}

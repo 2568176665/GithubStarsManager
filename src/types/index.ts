@@ -2,6 +2,17 @@ import type { ThemePresetId } from '../constants/themePresets';
 
 import type { RepositoryChatSettings } from './repositoryChat';
 export type { RepositoryChatSettings } from './repositoryChat';
+export type {
+  RepositoryHealthFact,
+  RepositoryHealthFactId,
+  RepositoryHealthFactKind,
+  RepositoryHealthFactSource,
+  RepositoryHealthGroup,
+  RepositoryHealthGroupView,
+  RepositoryHealthSignal,
+  RepositoryHealthSignalId,
+  RepositoryHealthSnapshot,
+} from './health';
 
 export interface Repository {
   id: number;
@@ -22,6 +33,13 @@ export interface Repository {
     avatar_url: string;
   };
   topics: string[];
+  /** GitHub 原生状态字段；旧缓存和后端返回可能缺失，因此保持可选。 */
+  archived?: boolean;
+  disabled?: boolean;
+  fork?: boolean;
+  is_template?: boolean;
+  open_issues_count?: number;
+  default_branch?: string;
   ai_summary?: string;
   ai_tags?: string[];
   ai_platforms?: string[];
@@ -332,7 +350,7 @@ export interface SearchFilters {
   tags: string[];
   languages: string[];
   platforms: string[]; // 新增：平台过滤
-  sortBy: 'stars' | 'updated' | 'name' | 'starred';
+  sortBy: 'stars' | 'updated' | 'name' | 'starred' | 'created';
   sortOrder: 'desc' | 'asc';
   minStars?: number;
   maxStars?: number;
@@ -343,6 +361,9 @@ export interface SearchFilters {
   analysisFailed?: boolean; // 新增：分析是否失败
   /** SPDX id 过滤；过滤面板可采用 `NO_LICENSE_SENTINEL` 表示「无/未声明 license」。 */
   licenses: string[]; // 新增：开源许可过滤
+  healthArchived?: boolean;
+  healthRecentActivity?: boolean;
+  healthHasLicense?: boolean;
 }
 
 export type CategoryMatchMode = 'legacy' | 'effective';

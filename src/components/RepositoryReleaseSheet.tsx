@@ -14,6 +14,7 @@ import { Button } from './ui/button';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from './ui/sheet';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
+import { RepositoryHealthPanel } from './RepositoryHealthPanel';
 
 const RELEASES_PER_PAGE = 10;
 const ASSETS_PER_PAGE = 8;
@@ -302,6 +303,11 @@ export const RepositoryReleaseSheet: React.FC<RepositoryReleaseSheetProps> = ({
             </a>
           </Button>
         </div>
+        <RepositoryHealthPanel
+          repository={repository}
+          releases={isLoading || error ? undefined : releases}
+          language={language}
+        />
         <div className="min-h-0 flex-1 overflow-y-auto pr-1">
           {isLoading ? (
             <div className="flex h-40 items-center justify-center gap-2 text-sm text-muted-foreground" role="status" aria-live="polite">

@@ -31,6 +31,9 @@ export const initialSearchFilters: SearchFilters = {
   isEdited: undefined,
   isCategoryLocked: undefined,
   analysisFailed: undefined,
+  healthArchived: undefined,
+  healthRecentActivity: undefined,
+  healthHasLicense: undefined,
 };
 
 export const initialGistSearchFilters: GistSearchFilters = {
@@ -117,7 +120,10 @@ export type PersistedAppState = Partial<
     | 'categoryListIdMap'
   >, 'gistSearchFilters' | 'searchFilters' | 'releaseExpandedRepositories' | 'forkExpandedRepositories'>> & {
   gistSearchFilters?: Pick<GistSearchFilters, 'sortBy' | 'sortOrder'>;
-  searchFilters?: Pick<SearchFilters, 'sortBy' | 'sortOrder'>;
+  searchFilters?: Pick<
+    SearchFilters,
+    'sortBy' | 'sortOrder' | 'healthArchived' | 'healthRecentActivity' | 'healthHasLicense'
+  >;
   rpcDownloadConfig?: RpcDownloadConfig;
   releaseSubscriptions?: unknown;
   readReleases?: unknown;

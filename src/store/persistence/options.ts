@@ -99,8 +99,11 @@ sortOrder: state.gistSearchFilters.sortOrder,
 
   // 持久化搜索排序设置
   searchFilters: {
-sortBy: state.searchFilters.sortBy,
-sortOrder: state.searchFilters.sortOrder,
+    sortBy: state.searchFilters.sortBy,
+    sortOrder: state.searchFilters.sortOrder,
+    healthArchived: state.searchFilters.healthArchived,
+    healthRecentActivity: state.searchFilters.healthRecentActivity,
+    healthHasLicense: state.searchFilters.healthHasLicense,
   },
 
   // 持久化仓库页面视图设置

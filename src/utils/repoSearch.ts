@@ -1,6 +1,7 @@
 import type { Category, Repository, SearchFilters } from '../types';
 import { isRepoCustomized } from './repoUtils';
 import { normalizeLicense } from './licenseFilter';
+import { hasDeclaredLicense, hasRecentActivity } from './repositoryHealth';
 
 /** Partial filters used by UI and Worker search endpoints. */
 export type RepoSearchFilterInput = Partial<SearchFilters> & {
@@ -137,6 +138,8 @@ function getSortValue(repo: Repository, sortBy: SearchFilters['sortBy']): number
       return repo.name.toLocaleLowerCase();
     case 'starred':
       return toSortableTimestamp(repo.starred_at);
+    case 'created':
+      return toSortableTimestamp(repo.created_at);
     default:
       return toUpdatedSortValue(repo);
   }
@@ -254,6 +257,22 @@ export function applyRepoFilters<T extends Repository>(
     });
   }
 
+  if (searchFilters.healthArchived !== undefined) {
+    filtered = filtered.filter((repo) => repo.archived === searchFilters.healthArchived);
+  }
+
+  if (searchFilters.healthRecentActivity !== undefined) {
+    filtered = filtered.filter((repo) => (
+      hasRecentActivity(repo) === searchFilters.healthRecentActivity
+    ));
+  }
+
+  if (searchFilters.healthHasLicense !== undefined) {
+    filtered = filtered.filter((repo) => (
+      hasDeclaredLicense(repo) === searchFilters.healthHasLicense
+    ));
+  }
+
   if (searchFilters.minStars !== undefined) {
     filtered = filtered.filter((repo) => repo.stargazers_count >= searchFilters.minStars!);
   }
@@ -284,6 +303,9 @@ export function hasActiveSearchFilters(filters: SearchFilters): boolean {
     filters.isEdited !== undefined ||
     filters.isCategoryLocked !== undefined ||
     filters.analysisFailed !== undefined ||
+    filters.healthArchived !== undefined ||
+    filters.healthRecentActivity !== undefined ||
+    filters.healthHasLicense !== undefined ||
     filters.sortBy !== 'stars' ||
     filters.sortOrder !== 'desc'
   );

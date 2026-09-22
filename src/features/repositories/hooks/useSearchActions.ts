@@ -65,6 +65,13 @@ export const mergeStarredRepositories = (
         topics: newRepo.topics,
         // 回填历史仓库缺失的 license 字段（GitHub 源元数据，跟随 newRepo）
         license: newRepo.license ?? null,
+        // GitHub 原生健康字段：源数据缺失时保留已有值，避免刷新后退化为未知。
+        archived: newRepo.archived ?? existing.archived,
+        disabled: newRepo.disabled ?? existing.disabled,
+        fork: newRepo.fork ?? existing.fork,
+        is_template: newRepo.is_template ?? existing.is_template,
+        open_issues_count: newRepo.open_issues_count ?? existing.open_issues_count,
+        default_branch: newRepo.default_branch ?? existing.default_branch,
       };
     }
     return newRepo;
