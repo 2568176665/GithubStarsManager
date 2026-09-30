@@ -50,6 +50,8 @@ import { isThemePresetId } from '../../constants/themePresets';
 import type { ThemePresetId } from '../../constants/themePresets';
 import { indexedDBStorage } from '../../services/indexedDbStorage';
 import { IncludeKeysToggle } from './IncludeKeysToggle';
+import { parseBackupDocument, restoreBackupDocument, type BackupData, type BackupDocument } from '../../features/settings/backup/backupService';
+import { version as appVersion } from '../../../package.json';
 import type { 
   Repository, 
   Release, 
@@ -105,7 +107,7 @@ interface ExportData {
   version: string;
   exportDate: string;
   appVersion: string;
-  data: {
+  data: BackupData & {
     repositories?: Repository[];
     releases?: Release[];
     aiConfigs?: AIConfig[];
@@ -160,8 +162,10 @@ const isRealSecret = (value: unknown): value is string => (
 const hasMaskedSecrets = (data: ExportData['data']): boolean => {
   return !!(
     data.aiConfigs?.some(config => config.apiKey === MASKED_SECRET) ||
+    data.embeddingConfigs?.some(config => config.apiKey === MASKED_SECRET) ||
     data.webdavConfigs?.some(config => config.password === MASKED_SECRET) ||
-    data.rpcDownloadConfig?.secret === MASKED_SECRET
+    data.rpcDownloadConfig?.secret === MASKED_SECRET ||
+    data.vectorSearchConfig?.authToken === MASKED_SECRET
   );
 };
 
@@ -587,7 +591,7 @@ export const DataManagementPanel: React.FC<DataManagementPanelProps> = ({ t }) =
       const exportDataObj: ExportData = {
         version: '1.0',
         exportDate: new Date().toISOString(),
-        appVersion: '0.4.0',
+        appVersion,
         data: { includeKeysInBackup: includeKeys }
       };
 
@@ -681,15 +685,13 @@ export const DataManagementPanel: React.FC<DataManagementPanelProps> = ({ t }) =
     reader.onload = (e) => {
       try {
         const content = e.target?.result as string;
-        const data = JSON.parse(content) as ExportData;
-        
-        if (!data.version || !data.data) {
-          showError(t('无效的备份文件格式', 'Invalid backup file format'));
+        const data = parseBackupDocument(JSON.parse(content)) as ExportData;
+        setImportPreview({ data, isOpen: true, fileName: file.name });
+      } catch (error) {
+        if (error instanceof Error && error.message.startsWith('Unsupported backup version:')) {
+          showError(error.message);
           return;
         }
-
-        setImportPreview({ data, isOpen: true, fileName: file.name });
-      } catch {
         showError(t('解析文件失败，请确保是有效的JSON文件', 'Failed to parse file, ensure it is a valid JSON file'));
       }
     };
@@ -704,6 +706,16 @@ export const DataManagementPanel: React.FC<DataManagementPanelProps> = ({ t }) =
     try {
       const store = useAppStore.getState();
       const importedData = importPreview.data.data;
+      if (importPreview.data.version !== '1.0') {
+        await restoreBackupDocument(importPreview.data as BackupDocument, mode);
+        showSuccess(hasMaskedSecrets(importedData)
+          ? t('数据导入成功。屏蔽的密钥已保留本机现有值。', 'Data imported. Existing local values were retained for masked secrets.')
+          : t('数据导入成功', 'Data imported successfully'));
+        addLog(t('导入数据', 'Import data'), true);
+        setImportPreview({ data: null, isOpen: false, fileName: '' });
+        return;
+      }
+
       // Legacy compatibility: treat missing flag as true (older exports contained keys)
       const wasIncluded = importedData.includeKeysInBackup ?? true;
 
@@ -1964,6 +1976,16 @@ export const DataManagementPanel: React.FC<DataManagementPanelProps> = ({ t }) =
                       • {t('Release数据', 'Releases')}: {importPreview.data.data.releases.length} {t('条', 'items')}
                     </p>
                   )}
+                  {importPreview.data.data.gists && (
+                    <p className="text-muted-foreground dark:text-muted-foreground">
+                      • {t('Gist 数据', 'Gists')}: {importPreview.data.data.gists.length} {t('条', 'items')}
+                    </p>
+                  )}
+                  {importPreview.data.data.forks && (
+                    <p className="text-muted-foreground dark:text-muted-foreground">
+                      • {t('Fork 数据', 'Forks')}: {importPreview.data.data.forks.length} {t('条', 'items')}
+                    </p>
+                  )}
                   {importPreview.data.data.aiConfigs && (
                     <p className="text-muted-foreground dark:text-muted-foreground">
                       • {t('AI配置', 'AI Configs')}: {importPreview.data.data.aiConfigs.length} {t('条', 'items')}
@@ -1984,6 +2006,21 @@ export const DataManagementPanel: React.FC<DataManagementPanelProps> = ({ t }) =
                       • {t('资源过滤器', 'Asset Filters')}: {importPreview.data.data.assetFilters.length} {t('条', 'items')}
                     </p>
                   )}
+                  {importPreview.data.data.repositoryChat && (
+                    <p className="text-muted-foreground dark:text-muted-foreground">
+                      • {t('仓库聊天会话', 'Repository chat sessions')}: {importPreview.data.data.repositoryChat.sessions.length} {t('条', 'items')}
+                    </p>
+                  )}
+                  {importPreview.data.data.discoveryAnalyses && (
+                    <p className="text-muted-foreground dark:text-muted-foreground">
+                      • {t('发现页 AI 分析', 'Discovery AI analyses')}: {Object.keys(importPreview.data.data.discoveryAnalyses).length} {t('条', 'items')}
+                    </p>
+                  )}
+                  {importPreview.data.data.searchHistory && (
+                    <p className="text-muted-foreground dark:text-muted-foreground">
+                      • {t('搜索历史', 'Search history')}: {importPreview.data.data.searchHistory.length} {t('条', 'items')}
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -1993,8 +2030,8 @@ export const DataManagementPanel: React.FC<DataManagementPanelProps> = ({ t }) =
                   <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5" />
                   <p className="text-sm">
                     {t(
-                      '警告：此备份中的部分密钥已被屏蔽。导入后请在相应配置中重新输入密钥。',
-                      'Warning: Some secrets in this backup are masked. Please re-enter them in the respective configurations after import.'
+                      '此备份中的部分密钥已屏蔽。恢复时会保留本机同一配置的密钥；新导入的配置需要重新输入密钥。',
+                      'Some secrets in this backup are masked. Restore keeps matching local keys; newly imported configurations need their keys entered again.'
                     )}
                   </p>
                 </div>

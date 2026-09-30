@@ -12,12 +12,14 @@ const FALLBACK_MODE_KEY = 'gsm-repository-chat-use-fallback-v1';
 const STORE_NAMES = ['sessions', 'messages', 'toolEvents', 'evidence'] as const;
 type StoreName = typeof STORE_NAMES[number];
 
-type FallbackSnapshot = {
+export type RepositoryChatSnapshot = {
   sessions: RepositoryChatSession[];
   messages: RepositoryChatMessage[];
   toolEvents: RepositoryChatToolEvent[];
   evidence: ToolEvidence[];
 };
+
+type FallbackSnapshot = RepositoryChatSnapshot;
 
 const emptySnapshot = (): FallbackSnapshot => ({ sessions: [], messages: [], toolEvents: [], evidence: [] });
 
@@ -112,6 +114,13 @@ const requestValue = <T>(request: IDBRequest<T>): Promise<T> => new Promise((res
   request.onerror = () => reject(request.error ?? new Error('IndexedDB request failed'));
 });
 
+const readIndexedDbSnapshot = () => runTransaction([...STORE_NAMES], 'readonly', async (stores): Promise<RepositoryChatSnapshot> => ({
+  sessions: await requestValue(stores.sessions.getAll()) as RepositoryChatSession[],
+  messages: await requestValue(stores.messages.getAll()) as RepositoryChatMessage[],
+  toolEvents: await requestValue(stores.toolEvents.getAll()) as RepositoryChatToolEvent[],
+  evidence: await requestValue(stores.evidence.getAll()) as ToolEvidence[],
+}));
+
 const runTransaction = async <T>(storeNames: StoreName | StoreName[], mode: IDBTransactionMode, operation: (stores: Record<StoreName, IDBObjectStore>) => Promise<T>): Promise<T> => {
   const db = await openDb();
   try {
@@ -137,12 +146,7 @@ const mergeById = <T extends { id: string }>(fallbackValues: T[], indexedDbValue
 const migrateIndexedDbSnapshotToFallback = async (): Promise<boolean> => {
   if (!canUseIndexedDb()) return false;
   try {
-    const indexedDbSnapshot = await withTimeout(runTransaction([...STORE_NAMES], 'readonly', async (stores) => ({
-      sessions: await requestValue(stores.sessions.getAll()) as RepositoryChatSession[],
-      messages: await requestValue(stores.messages.getAll()) as RepositoryChatMessage[],
-      toolEvents: await requestValue(stores.toolEvents.getAll()) as RepositoryChatToolEvent[],
-      evidence: await requestValue(stores.evidence.getAll()) as ToolEvidence[],
-    })));
+    const indexedDbSnapshot = await withTimeout(readIndexedDbSnapshot());
     const fallbackSnapshot = readFallback();
     writeFallback({
       sessions: mergeById(fallbackSnapshot.sessions, indexedDbSnapshot.sessions),
@@ -179,7 +183,74 @@ const byCreatedAt = <T extends { id: string; createdAt: string; role?: 'user' | 
 };
 const byUpdatedAtDescending = <T extends { updatedAt: string }>(left: T, right: T) => right.updatedAt.localeCompare(left.updatedAt);
 
+const mergeSnapshots = (current: RepositoryChatSnapshot, incoming: RepositoryChatSnapshot): RepositoryChatSnapshot => ({
+  sessions: mergeById(current.sessions, incoming.sessions),
+  messages: mergeById(current.messages, incoming.messages),
+  toolEvents: mergeById(current.toolEvents, incoming.toolEvents),
+  evidence: mergeById(current.evidence, incoming.evidence),
+});
+
+const validateSnapshot = (value: unknown): RepositoryChatSnapshot => {
+  if (!value || typeof value !== 'object') throw new Error('Invalid repository chat snapshot');
+  const input = value as Record<string, unknown>;
+  const readStore = (name: StoreName): Array<{ id: string }> => {
+    if (!Array.isArray(input[name]) || input[name].some((item) => !item || typeof item !== 'object' || typeof (item as { id?: unknown }).id !== 'string')) {
+      throw new Error(`Invalid repository chat snapshot store: ${name}`);
+    }
+    return input[name] as Array<{ id: string }>;
+  };
+  return {
+    sessions: readStore('sessions') as RepositoryChatSession[],
+    messages: readStore('messages') as RepositoryChatMessage[],
+    toolEvents: readStore('toolEvents') as RepositoryChatToolEvent[],
+    evidence: readStore('evidence') as ToolEvidence[],
+  };
+};
+
+const writeSnapshot = async (stores: Record<StoreName, IDBObjectStore>, snapshot: RepositoryChatSnapshot, replace: boolean) => {
+  if (replace) await Promise.all(STORE_NAMES.map((name) => requestValue(stores[name].clear())));
+  await Promise.all(STORE_NAMES.flatMap((name) => snapshot[name].map((item) => requestValue(stores[name].put(item)) )));
+};
+
+export async function exportRepositoryChatSnapshot(): Promise<RepositoryChatSnapshot> {
+  if (useFallbackStorage || !canUseIndexedDb()) {
+    if (!enableFallbackStorage()) throw new Error('[repository-chat] localStorage is unavailable for snapshot export');
+    return readFallback();
+  }
+  try {
+    return await withTimeout(readIndexedDbSnapshot());
+  } catch (error) {
+    console.warn('[repository-chat] snapshot export fell back to localStorage', error);
+    if (!await transitionToFallbackStorage()) throw error;
+    if (!enableFallbackStorage()) throw new Error('[repository-chat] localStorage is unavailable for snapshot export');
+    return readFallback();
+  }
+}
+
+export async function restoreRepositoryChatSnapshot(snapshot: RepositoryChatSnapshot, mode: 'merge' | 'replace' = 'merge'): Promise<void> {
+  const validatedSnapshot = validateSnapshot(snapshot);
+  const restoreFallback = () => {
+    if (!enableFallbackStorage()) throw new Error('[repository-chat] localStorage is unavailable for snapshot restore');
+    const next = mode === 'replace' ? validatedSnapshot : mergeSnapshots(readFallback(), validatedSnapshot);
+    writeFallback(next);
+  };
+  if (useFallbackStorage || !canUseIndexedDb()) return restoreFallback();
+  try {
+    await withTimeout(runTransaction([...STORE_NAMES], 'readwrite', async (stores) => {
+      await writeSnapshot(stores, validatedSnapshot, mode === 'replace');
+    }));
+  } catch (error) {
+    console.warn('[repository-chat] snapshot restore fell back to localStorage', error);
+    if (!await transitionToFallbackStorage()) throw error;
+    restoreFallback();
+  }
+}
+
 export const repositoryChatSessionRepository = {
+  exportSnapshot: exportRepositoryChatSnapshot,
+
+  restoreSnapshot: restoreRepositoryChatSnapshot,
+
   async listSessionsByRepository(repoId: number): Promise<RepositoryChatSession[]> {
     const fallback = () => fallbackList<RepositoryChatSession>('sessions', (session) => session.repoId === repoId && !session.deletedAt).sort(byUpdatedAtDescending);
     if (useFallbackStorage || !canUseIndexedDb()) {

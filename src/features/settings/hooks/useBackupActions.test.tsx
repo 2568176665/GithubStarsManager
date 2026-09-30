@@ -9,6 +9,15 @@ const mocks = vi.hoisted(() => ({
   listFiles: vi.fn(),
   downloadFile: vi.fn(),
   uploadFile: vi.fn(),
+  createBackupDocument: vi.fn(),
+  parseBackupDocument: vi.fn(),
+  restoreBackupDocument: vi.fn(),
+}));
+
+vi.mock('../backup/backupService', () => ({
+  createBackupDocument: mocks.createBackupDocument,
+  parseBackupDocument: mocks.parseBackupDocument,
+  restoreBackupDocument: mocks.restoreBackupDocument,
 }));
 
 vi.mock('../../../hooks/useDialog', () => ({
@@ -38,6 +47,8 @@ describe('useBackupActions asset filter compatibility', () => {
     mocks.confirm.mockResolvedValue(true);
     mocks.listFiles.mockResolvedValue(['github-stars-backup-2026-09-30.json']);
     mocks.downloadFile.mockResolvedValue(JSON.stringify({
+      version: '1.2',
+      exportedAt: '2026-09-30T00:00:00.000Z',
       includeKeysInBackup: false,
       assetFilters: [{
         id: 'release-assets',
@@ -50,6 +61,13 @@ describe('useBackupActions asset filter compatibility', () => {
       }],
     }));
     mocks.uploadFile.mockResolvedValue(true);
+    mocks.createBackupDocument.mockResolvedValue({
+      version: '2.0',
+      exportDate: '2026-09-30T00:00:00.000Z',
+      appVersion: '0.8.4',
+      data: { assetFilters: [{ id: 'release-assets', name: 'Builds', keywords: ['msi'] }] },
+    });
+    mocks.parseBackupDocument.mockReturnValue({ version: '1.2', exportDate: '2026-09-30T00:00:00.000Z', appVersion: '0.8.4', data: {} });
     storeState = {
       language: 'zh',
       routeMode: 'auto',
@@ -88,24 +106,24 @@ describe('useBackupActions asset filter compatibility', () => {
     store.setState = partial => { storeState = { ...storeState, ...partial }; };
   });
 
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
 
-  it('includes asset filters in WebDAV backup and normalizes them on restore', async () => {
+  it('uploads the full backup document and restores the latest file through the shared restorer', async () => {
     const { result } = renderHook(() => useBackupActions({ t: (zh) => zh }));
 
     await act(async () => result.current.backup());
     const backupJson = mocks.uploadFile.mock.calls[0][1] as string;
-    expect(JSON.parse(backupJson).assetFilters).toEqual(storeState.assetFilters);
+    expect(JSON.parse(backupJson)).toMatchObject({
+      version: '2.0',
+      data: { assetFilters: [{ id: 'release-assets', name: 'Builds', keywords: ['msi'] }] },
+    });
 
     await act(async () => result.current.restore());
 
-    expect(storeState.assetFilters).toEqual([{
-      id: 'release-assets',
-      name: 'Builds',
-      keywords: ['MSI'],
-      excludeKeywords: ['Source'],
-      includeRepos: ['owner/repo'],
-      alwaysExcludeRepos: ['other/repo'],
-    }]);
+    expect(mocks.parseBackupDocument).toHaveBeenCalledWith(expect.objectContaining({ version: '1.2' }));
+    expect(mocks.restoreBackupDocument).toHaveBeenCalledWith(expect.objectContaining({ version: '1.2' }), 'replace');
   });
 });

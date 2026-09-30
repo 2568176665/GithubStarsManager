@@ -28,10 +28,10 @@ export const BackupPanel: React.FC<BackupPanelProps> = ({ t }) => {
             <AlertCircle className="w-5 h-5 text-muted-foreground dark:text-muted-foreground mt-0.5" />
             <div>
               <p className="text-sm text-muted-foreground dark:text-muted-foreground ">
-                {t('请先配置并激活WebDAV服务', 'Please configure and activate WebDAV service first')}
+                {t('WebDAV 云端备份需要先配置并激活服务', 'Configure and activate WebDAV for cloud backups')}
               </p>
               <p className="text-xs text-muted-foreground dark:text-muted-foreground mt-1">
-                {t('备份和恢复功能需要WebDAV服务支持', 'Backup and restore features require WebDAV service')}
+                {t('本机导出请前往“数据管理”页面。', 'Use Data Management for local exports.')}
               </p>
             </div>
           </div>
@@ -108,12 +108,11 @@ export const BackupPanel: React.FC<BackupPanelProps> = ({ t }) => {
           {t('备份内容包括：', 'Backup includes:')}
         </h4>
         <ul className="text-sm text-muted-foreground dark:text-muted-foreground space-y-1">
-          <li>• {t('GitHub Stars 仓库列表', 'GitHub Stars repository list')}</li>
-          <li>• {t('Release 发布信息', 'Release information')}</li>
-          <li>• {t('自定义分类', 'Custom categories')}</li>
-          <li>• {t('AI 服务配置', 'AI service configurations')}</li>
-          <li>• {t('WebDAV 配置', 'WebDAV configurations')}</li>
-          <li>• {t('Release 订阅、来源与已读状态', 'Release subscriptions, sources & read state')}</li>
+          <li>• {t('仓库、Release、Gist 与 Fork 数据', 'Repositories, releases, Gists, and forks')}</li>
+          <li>• {t('频道、订阅、分类、筛选及界面设置', 'Channels, subscriptions, categories, filters, and UI settings')}</li>
+          <li>• {t('AI、Embedding、WebDAV、向量搜索和下载配置', 'AI, embedding, WebDAV, vector search, and download settings')}</li>
+          <li>• {t('仓库聊天记录、发现页 AI 分析与本地搜索历史', 'Repository chats, Discovery AI analyses, and local search history')}</li>
+          <li>• {t('登录令牌不包含在备份中', 'Login tokens are not included')}</li>
         </ul>
       </div>
     </div>

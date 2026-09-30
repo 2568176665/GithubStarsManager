@@ -9,6 +9,8 @@ export interface DiscoveryAnalysisData {
 
 export type DiscoveryAnalysisRecord = Record<string, DiscoveryAnalysisData>;
 
+export type DiscoveryAnalysisRestoreMode = 'merge' | 'replace';
+
 const DB_NAME = 'github-stars-discovery-analysis';
 const STORE_NAME = 'analysis';
 const DB_VERSION = 1;
@@ -63,7 +65,146 @@ const withTimeout = async <T>(
   return await Promise.race([wrappedPromise, timeoutPromise]);
 };
 
+const indexedDbUnavailable = (): Error => new Error('Discovery analysis IndexedDB is unavailable');
+
+const parseAnalysisRecord = (key: IDBValidKey, raw: unknown): DiscoveryAnalysisData => {
+  if (typeof raw !== 'string') {
+    throw new Error(`Invalid discovery analysis record for ${String(key)}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`Invalid discovery analysis record for ${String(key)}`);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`Invalid discovery analysis record for ${String(key)}`);
+  }
+  return parsed as DiscoveryAnalysisData;
+};
+
+const normalizeAnalysisEntries = (analyses: DiscoveryAnalysisRecord): Array<[number, string]> => {
+  return Object.entries(analyses).map(([repoId, data]) => {
+    const numericRepoId = Number(repoId);
+    if (!Number.isSafeInteger(numericRepoId) || numericRepoId < 0) {
+      throw new Error(`Invalid discovery analysis repository id: ${repoId}`);
+    }
+    return [numericRepoId, JSON.stringify(data)] as [number, string];
+  });
+};
+
+const readAllAnalysesStrict = async (db: IDBDatabase): Promise<DiscoveryAnalysisRecord> => {
+  return await new Promise<DiscoveryAnalysisRecord>((resolve, reject) => {
+    const result: DiscoveryAnalysisRecord = {};
+    let tx: IDBTransaction;
+    let request: IDBRequest<IDBCursorWithValue | null>;
+    try {
+      tx = db.transaction(STORE_NAME, 'readonly');
+      request = tx.objectStore(STORE_NAME).openCursor();
+    } catch (error) {
+      db.close();
+      reject(error);
+      return;
+    }
+    let settled = false;
+
+    const close = () => db.close();
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      close();
+      reject(error instanceof Error ? error : new Error('Failed to read discovery analyses'));
+    };
+
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) return;
+      try {
+        result[String(cursor.key)] = parseAnalysisRecord(cursor.key, cursor.value);
+        cursor.continue();
+      } catch (error) {
+        fail(error);
+      }
+    };
+    request.onerror = () => fail(request.error);
+    tx.oncomplete = () => {
+      if (settled) return;
+      settled = true;
+      close();
+      resolve(result);
+    };
+    tx.onerror = () => fail(tx.error);
+    tx.onabort = () => fail(tx.error ?? new Error('Discovery analysis read aborted'));
+  });
+};
+
+const writeAllAnalysesStrict = async (
+  db: IDBDatabase,
+  entries: Array<[number, string]>,
+  mode: DiscoveryAnalysisRestoreMode,
+): Promise<void> => {
+  await new Promise<void>((resolve, reject) => {
+    let tx: IDBTransaction;
+    let store: IDBObjectStore;
+    try {
+      tx = db.transaction(STORE_NAME, 'readwrite');
+      store = tx.objectStore(STORE_NAME);
+    } catch (error) {
+      db.close();
+      reject(error);
+      return;
+    }
+    let settled = false;
+
+    const close = () => db.close();
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      close();
+      reject(error instanceof Error ? error : new Error('Failed to restore discovery analyses'));
+    };
+
+    try {
+      if (mode === 'replace') store.clear();
+      entries.forEach(([repoId, raw]) => store.put(raw, repoId));
+    } catch (error) {
+      fail(error);
+      return;
+    }
+
+    tx.oncomplete = () => {
+      if (settled) return;
+      settled = true;
+      close();
+      resolve();
+    };
+    tx.onerror = () => fail(tx.error);
+    tx.onabort = () => fail(tx.error ?? new Error('Discovery analysis restore aborted'));
+  });
+};
+
 export const discoveryAnalysisStorage = {
+  /** Strict snapshot read for backups: an empty object is a valid empty snapshot; failures reject. */
+  async exportAllAnalyses(): Promise<DiscoveryAnalysisRecord> {
+    if (!canUseIndexedDB()) throw indexedDbUnavailable();
+    const db = await withTimeout(openDb(), 3000, (lateDb) => lateDb.close());
+    return await readAllAnalysesStrict(db);
+  },
+
+  /** Strict restore for backups. Replace is atomic and clears records before writing the snapshot. */
+  async restoreAllAnalyses(
+    analyses: DiscoveryAnalysisRecord,
+    mode: DiscoveryAnalysisRestoreMode = 'merge',
+  ): Promise<void> {
+    if (!canUseIndexedDB()) throw indexedDbUnavailable();
+    if (mode !== 'merge' && mode !== 'replace') {
+      throw new Error(`Invalid discovery analysis restore mode: ${mode}`);
+    }
+    const entries = normalizeAnalysisEntries(analyses);
+    const db = await withTimeout(openDb(), 3000, (lateDb) => lateDb.close());
+    await writeAllAnalysesStrict(db, entries, mode);
+  },
+
   async saveAnalysis(repoId: number, data: DiscoveryAnalysisData): Promise<void> {
     if (!canUseIndexedDB()) return;
     try {

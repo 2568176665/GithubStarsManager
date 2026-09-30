@@ -1,10 +1,10 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import type { AIConfig, WebDAVConfig } from '../../../types';
+import type { WebDAVConfig } from '../../../types';
 import { useAppStore } from '../../../store/useAppStore';
 import { useDialog } from '../../../hooks/useDialog';
 import { WebDAVService } from '../../../services/webdavService';
-import { normalizeAssetFilters } from '../../../utils/assetFilters';
+import { createBackupDocument, parseBackupDocument, restoreBackupDocument } from '../backup/backupService';
 
 interface UseBackupActionsOptions {
   t: (zh: string, en: string) => string;
@@ -18,46 +18,20 @@ export interface BackupActions {
   restore: () => Promise<void>;
 }
 
-/**
- * Owns WebDAV backup and restore orchestration. The payload deliberately keeps
- * the existing key-masking rules, including the RPC secret.
- */
+const buildContent = async () => JSON.stringify(await createBackupDocument(), null, 2);
+
 export const useBackupActions = ({ t }: UseBackupActionsOptions): BackupActions => {
-  const state = useAppStore(useShallow((store) => ({
-    repositories: store.repositories,
-    releases: store.releases,
-    customCategories: store.customCategories,
-    assetFilters: store.assetFilters,
-    hiddenDefaultCategoryIds: store.hiddenDefaultCategoryIds,
-    aiConfigs: store.aiConfigs,
+  const { webdavConfigs, activeWebDAVConfig, setLastBackup } = useAppStore(useShallow((store) => ({
     webdavConfigs: store.webdavConfigs,
     activeWebDAVConfig: store.activeWebDAVConfig,
-    rpcDownloadConfig: store.rpcDownloadConfig,
-    routeMode: store.routeMode,
-    includeKeysInBackup: store.includeKeysInBackup,
     setLastBackup: store.setLastBackup,
-    setRepositories: store.setRepositories,
-    setReleases: store.setReleases,
-    addCustomCategory: store.addCustomCategory,
-    deleteCustomCategory: store.deleteCustomCategory,
-    hideDefaultCategory: store.hideDefaultCategory,
-    showDefaultCategory: store.showDefaultCategory,
-    addAIConfig: store.addAIConfig,
-    updateAIConfig: store.updateAIConfig,
-    deleteAIConfig: store.deleteAIConfig,
-    addWebDAVConfig: store.addWebDAVConfig,
-    updateWebDAVConfig: store.updateWebDAVConfig,
-    deleteWebDAVConfig: store.deleteWebDAVConfig,
-    setRpcDownloadConfig: store.setRpcDownloadConfig,
-    setRouteMode: store.setRouteMode,
-    setReleaseSourceSettings: store.setReleaseSourceSettings,
   })));
   const { toast, confirm } = useDialog();
   const [isBackingUp, setIsBackingUp] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
   const activeConfig = useMemo(
-    () => state.webdavConfigs.find((config) => config.id === state.activeWebDAVConfig),
-    [state.activeWebDAVConfig, state.webdavConfigs],
+    () => webdavConfigs.find((config) => config.id === activeWebDAVConfig),
+    [activeWebDAVConfig, webdavConfigs],
   );
 
   const backup = useCallback(async () => {
@@ -67,48 +41,19 @@ export const useBackupActions = ({ t }: UseBackupActionsOptions): BackupActions 
     }
     setIsBackingUp(true);
     try {
-      const backupData = {
-        repositories: state.repositories,
-        releases: state.releases,
-        customCategories: state.customCategories,
-        assetFilters: state.assetFilters,
-        hiddenDefaultCategoryIds: state.hiddenDefaultCategoryIds,
-        aiConfigs: state.aiConfigs.map((config) => ({
-          ...config,
-          apiKey: state.includeKeysInBackup ? config.apiKey : (config.apiKey ? '***' : ''),
-        })),
-        webdavConfigs: state.webdavConfigs.map((config) => ({
-          ...config,
-          password: state.includeKeysInBackup ? config.password : (config.password ? '***' : ''),
-        })),
-        rpcDownloadConfig: {
-          ...state.rpcDownloadConfig,
-          secret: state.includeKeysInBackup ? state.rpcDownloadConfig.secret : (state.rpcDownloadConfig.secret ? '***' : ''),
-        },
-        routeMode: state.routeMode,
-        releaseSubscriptions: Array.from(useAppStore.getState().releaseSubscriptions),
-        releaseSourceSettings: useAppStore.getState().releaseSourceSettings,
-        readReleases: Array.from(useAppStore.getState().readReleases),
-        includeKeysInBackup: state.includeKeysInBackup,
-        exportedAt: new Date().toISOString(),
-        version: '1.2',
-      };
-      const filename = `github-stars-backup-${new Date().toISOString().split('T')[0]}.json`;
-      const success = await new WebDAVService(activeConfig).uploadFile(filename, JSON.stringify(backupData, null, 2));
-      if (success) {
-        state.setLastBackup(new Date().toISOString());
-        toast(t('数据备份成功！', 'Data backup successful!'), 'success');
-      } else {
-        console.error('Backup failed: uploadFile returned falsy');
-        toast(t('数据备份失败！', 'Data backup failed!'), 'error');
-      }
+      const content = await buildContent();
+      const filename = `github-stars-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      const success = await new WebDAVService(activeConfig).uploadFile(filename, content);
+      if (!success) throw new Error(t('WebDAV 上传失败', 'WebDAV upload failed'));
+      setLastBackup(new Date().toISOString());
+      toast(t('数据备份成功！', 'Data backup successful!'), 'success');
     } catch (error) {
       console.error('Backup failed:', error);
       toast(`${t('备份失败', 'Backup failed')}: ${(error as Error).message}`, 'error');
     } finally {
       setIsBackingUp(false);
     }
-  }, [activeConfig, state, t, toast]);
+  }, [activeConfig, setLastBackup, t, toast]);
 
   const restore = useCallback(async () => {
     if (!activeConfig) {
@@ -117,7 +62,7 @@ export const useBackupActions = ({ t }: UseBackupActionsOptions): BackupActions 
     }
     const confirmed = await confirm(
       t('恢复数据', 'Restore Data'),
-      t('恢复数据将覆盖当前所有数据，是否继续？', 'Restoring data will overwrite all current data. Continue?'),
+      t('恢复数据将覆盖当前已有的备份内容，是否继续？', 'Restoring data will replace backed-up data currently in this browser. Continue?'),
       { type: 'warning' },
     );
     if (!confirmed) return;
@@ -127,136 +72,19 @@ export const useBackupActions = ({ t }: UseBackupActionsOptions): BackupActions 
       const service = new WebDAVService(activeConfig);
       const files = await service.listFiles();
       const backupFiles = files.filter((file) => file.startsWith('github-stars-backup-'));
-      if (backupFiles.length === 0) {
-        toast(t('未找到备份文件。', 'No backup files found.'), 'error');
-        return;
-      }
+      if (backupFiles.length === 0) throw new Error(t('未找到备份文件。', 'No backup files found.'));
       const content = await service.downloadFile(backupFiles.sort().reverse()[0]);
-      if (!content) {
-        toast(t('备份文件内容为空，无法恢复。', 'Backup file is empty, cannot restore.'), 'error');
-        return;
-      }
-      const backupData = JSON.parse(content) as Record<string, unknown>;
-      const backupIncludedKeys = backupData.includeKeysInBackup ?? true;
-      if (Array.isArray(backupData.repositories)) state.setRepositories(backupData.repositories as typeof state.repositories);
-      if (Array.isArray(backupData.releases)) state.setReleases(backupData.releases as typeof state.releases);
-      if (Array.isArray(backupData.assetFilters)) {
-        useAppStore.setState({ assetFilters: normalizeAssetFilters(backupData.assetFilters) });
-      }
-
-      try {
-        if (Array.isArray(backupData.releaseSubscriptions)) {
-          const values = backupData.releaseSubscriptions.filter((id): id is number => typeof id === 'number');
-          useAppStore.setState({ releaseSubscriptions: new Set(values) });
-        }
-        if (backupData.releaseSourceSettings) state.setReleaseSourceSettings(backupData.releaseSourceSettings as Parameters<typeof state.setReleaseSourceSettings>[0]);
-        if (Array.isArray(backupData.readReleases)) {
-          const values = backupData.readReleases.filter((id): id is number => typeof id === 'number');
-          useAppStore.setState({ readReleases: new Set(values) });
-        }
-      } catch (error) {
-        console.warn('恢复 Release 订阅与已读状态时发生问题：', error);
-      }
-
-      try {
-        for (const category of useAppStore.getState().customCategories) {
-          if (category?.id) state.deleteCustomCategory(category.id);
-        }
-        if (Array.isArray(backupData.customCategories)) {
-          for (const category of backupData.customCategories) {
-            if (category && typeof category === 'object' && 'id' in category && 'name' in category) {
-              state.addCustomCategory({ ...(category as Parameters<typeof state.addCustomCategory>[0]), isCustom: true });
-            }
-          }
-        }
-        for (const categoryId of useAppStore.getState().hiddenDefaultCategoryIds) {
-          if (typeof categoryId === 'string') state.showDefaultCategory(categoryId);
-        }
-        if (Array.isArray(backupData.hiddenDefaultCategoryIds)) {
-          for (const categoryId of backupData.hiddenDefaultCategoryIds) {
-            if (typeof categoryId === 'string') state.hideDefaultCategory(categoryId);
-          }
-        }
-      } catch (error) {
-        console.warn('恢复自定义分类时发生问题：', error);
-      }
-
-      try {
-        if (Array.isArray(backupData.aiConfigs)) {
-          const currentMap = new Map(useAppStore.getState().aiConfigs.map((config: AIConfig) => [config.id, config]));
-          const backupConfigs = backupData.aiConfigs as AIConfig[];
-          const backupIds = new Set(backupConfigs.map((config) => config?.id).filter(Boolean));
-          for (const [id] of currentMap) if (!backupIds.has(id)) state.deleteAIConfig(id);
-          for (const config of backupConfigs) {
-            if (!config?.id) continue;
-            const existing = currentMap.get(config.id);
-            const apiKey = backupIncludedKeys && config.apiKey && config.apiKey !== '***' ? config.apiKey : existing?.apiKey ?? '';
-            if (existing) {
-              state.updateAIConfig(config.id, { ...config, apiKey, isActive: existing.isActive });
-            } else {
-              state.addAIConfig({ ...config, apiKey, isActive: config.isActive });
-            }
-          }
-        }
-      } catch (error) {
-        console.warn('恢复 AI 配置时发生问题：', error);
-      }
-
-      try {
-        if (Array.isArray(backupData.webdavConfigs)) {
-          const currentMap = new Map(useAppStore.getState().webdavConfigs.map((config: WebDAVConfig) => [config.id, config]));
-          const backupConfigs = backupData.webdavConfigs as WebDAVConfig[];
-          const backupIds = new Set(backupConfigs.map((config) => config?.id).filter(Boolean));
-          for (const [id] of currentMap) if (!backupIds.has(id)) state.deleteWebDAVConfig(id);
-          for (const config of backupConfigs) {
-            if (!config?.id) continue;
-            const existing = currentMap.get(config.id);
-            const password = backupIncludedKeys && config.password && config.password !== '***' ? config.password : existing?.password ?? '';
-            if (existing) {
-              state.updateWebDAVConfig(config.id, { ...config, password, isActive: existing.isActive });
-            } else {
-              state.addWebDAVConfig({ ...config, password, isActive: false });
-            }
-          }
-        }
-      } catch (error) {
-        console.warn('恢复 WebDAV 配置时发生问题：', error);
-      }
-
-      try {
-        if (backupData.rpcDownloadConfig && typeof backupData.rpcDownloadConfig === 'object') {
-          const backupConfig = backupData.rpcDownloadConfig as typeof state.rpcDownloadConfig;
-          state.setRpcDownloadConfig({
-            ...backupConfig,
-            secret: backupIncludedKeys && backupConfig.secret && backupConfig.secret !== '***' ? backupConfig.secret : useAppStore.getState().rpcDownloadConfig.secret,
-          });
-        }
-      } catch (error) {
-        console.warn('恢复远程下载配置时发生问题：', error);
-      }
-      // routeMode 是本地偏好：仅接受合法枚举，缺失/非法回退 auto（随 1.2 备份导出）
-      try {
-        const restored = backupData.routeMode;
-        const next: 'auto' | 'backend' | 'browser' = restored === 'backend' || restored === 'browser' || restored === 'auto'
-          ? restored
-          : 'auto';
-        if (useAppStore.getState().routeMode !== next) {
-          useAppStore.getState().setRouteMode(next);
-        }
-      } catch (error) {
-        console.warn('恢复网络路由偏好时发生问题：', error);
-      }
-      toast(t(
-        `已从备份恢复数据：仓库 ${(backupData.repositories as unknown[] | undefined)?.length ?? 0}，发布 ${(backupData.releases as unknown[] | undefined)?.length ?? 0}，自定义分类 ${(backupData.customCategories as unknown[] | undefined)?.length ?? 0}。`,
-        `Data restored from backup: repositories ${(backupData.repositories as unknown[] | undefined)?.length ?? 0}, releases ${(backupData.releases as unknown[] | undefined)?.length ?? 0}, custom categories ${(backupData.customCategories as unknown[] | undefined)?.length ?? 0}.`,
-      ), 'success');
+      if (!content) throw new Error(t('备份文件内容为空，无法恢复。', 'Backup file is empty, cannot restore.'));
+      const document = parseBackupDocument(JSON.parse(content));
+      await restoreBackupDocument(document, 'replace');
+      toast(t('数据已从备份恢复。', 'Data restored from backup.'), 'success');
     } catch (error) {
       console.error('Restore failed:', error);
       toast(`${t('恢复失败', 'Restore failed')}: ${(error as Error).message}`, 'error');
     } finally {
       setIsRestoring(false);
     }
-  }, [activeConfig, confirm, state, t, toast]);
+  }, [activeConfig, confirm, t, toast]);
 
   return { activeConfig, isBackingUp, isRestoring, backup, restore };
 };

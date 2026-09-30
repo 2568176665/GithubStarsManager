@@ -126,4 +126,46 @@ describe('repositoryChatSessionRepository local fallback', () => {
     await expect(repositoryChatSessionRepository.saveSession(createSession('cannot-persist', 1, '2026-08-26T00:00:00.000Z')))
       .rejects.toThrow('unable to persist fallback snapshot');
   });
+
+  it('exports all chat stores and restores them by id in merge or replace mode', async () => {
+    const original = createSession('session-1', 1, '2026-08-26T00:00:00.000Z');
+    const originalMessage = createMessage('message-1', original.id);
+    await repositoryChatSessionRepository.saveSession(original);
+    await repositoryChatSessionRepository.saveMessage(originalMessage);
+    const snapshot = await repositoryChatSessionRepository.exportSnapshot();
+
+    expect(snapshot).toMatchObject({
+      sessions: [original],
+      messages: [originalMessage],
+      toolEvents: [],
+      evidence: [],
+    });
+
+    await repositoryChatSessionRepository.restoreSnapshot({
+      ...snapshot,
+      sessions: [{ ...original, title: 'updated' }],
+      messages: [createMessage('message-2', original.id)],
+    }, 'merge');
+    await expect(repositoryChatSessionRepository.getSession(original.id)).resolves.toMatchObject({ title: 'updated' });
+    await expect(repositoryChatSessionRepository.listMessages(original.id)).resolves.toHaveLength(2);
+
+    await repositoryChatSessionRepository.restoreSnapshot({
+      sessions: [createSession('replacement', 2, '2026-08-27T00:00:00.000Z')],
+      messages: [],
+      toolEvents: [],
+      evidence: [],
+    }, 'replace');
+    await expect(repositoryChatSessionRepository.getSession(original.id)).resolves.toBeNull();
+    await expect(repositoryChatSessionRepository.getSession('replacement')).resolves.toMatchObject({ id: 'replacement' });
+    await expect(repositoryChatSessionRepository.listMessages(original.id)).resolves.toEqual([]);
+  });
+
+  it('rejects snapshots with malformed store records before writing', async () => {
+    await expect(repositoryChatSessionRepository.restoreSnapshot({
+      sessions: [{ id: 1 }],
+      messages: [],
+      toolEvents: [],
+      evidence: [],
+    } as never)).rejects.toThrow('Invalid repository chat snapshot store: sessions');
+  });
 });
