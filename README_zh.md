@@ -1,35 +1,40 @@
 # GitHub Stars Manager
 
-GitHub Stars Manager 是一个 Vite + React 应用，用于整理 GitHub 星标仓库，支持 AI 分类、全文与向量搜索、仓库问答、Release 追踪、WebDAV 备份和可选的 aria2 RPC 下载。
+一个浏览器优先的 GitHub 星标仓库管理工具，帮助你整理、重新发现并持续跟进收藏的仓库。生产环境由单个 Cloudflare Worker 提供，同时保留前端本地缓存和浏览器直连 GitHub 的回退能力。
 
-## 架构
+## 项目方向
 
-本项目只部署到 Cloudflare Worker：
+- 聚焦浏览器中的 GitHub 星标整理与发现。
+- Vite + React 前端和 `/api/*` 接口统一部署到 Cloudflare Worker，D1 保存同步的应用状态。
+- 保留本地缓存和浏览器直连回退，不把应用改造成依赖独立后端的服务。
+- AI、Vectorize 向量搜索、WebDAV 备份和 aria2 下载均为可选能力。
+- 本 fork 只支持 Worker 部署，不加入独立服务器、桌面客户端、容器或反向代理。
 
-- Vite 将前端构建到 `dist/`。
-- Worker 提供 SPA 静态资源和全部 `/api/*` 接口。
-- Cloudflare D1 保存同步后的应用状态。
-- `GITHUB_TOKEN` 作为 Worker Secret，用于代管 GitHub 会话和 GitHub API 代理。
-- AI、WebDAV、向量搜索和 RPC 配置在应用中维护，并按现有接口同步到 D1。
+## 主要功能
 
-不再支持独立服务器、桌面壳、容器镜像或反向代理部署。
+- 整理星标仓库，并将分类写入 GitHub Lists。
+- 通过可配置的发现频道浏览仓库；也可以粘贴链接、Markdown、`owner/repo` 或 JSON 批量 Star。
+- 跟踪 Release，并按关键词和仓库名单包含或排除项目。
+- 搜索仓库；Worker 使用 FTS5，Vectorize 可作为可选增强。
+- 按需启用 AI 辅助功能、WebDAV 备份和 aria2 下载。
 
-## 快速开始
+## 项目结构
 
-安装依赖并启动前端：
+- `src/`：Vite + React 浏览器应用和本地缓存。
+- `cloudflare-worker/`：SPA 入口、`/api/*` 路由、Wrangler 配置和 D1 migrations。
+- `GITHUB_TOKEN`：Worker Secret，用于代管 GitHub 会话和 GitHub API 代理。
+- D1：同步仓库、Release、应用设置和服务配置。
+
+Cloudflare Worker 是唯一支持的生产入口。修改前端或 Worker 时，应保留现有 API 契约和浏览器回退行为。
+
+## 本地开发
 
 ```bash
 npm ci
 npm run dev
 ```
 
-构建前端：
-
-```bash
-npm run build
-```
-
-在本地运行 Worker：
+本地运行 Worker：
 
 ```bash
 cd cloudflare-worker
@@ -39,39 +44,21 @@ npm run dev
 
 ## 部署到 Cloudflare
 
-1. 创建或选择 `cloudflare-worker/wrangler.toml` 中配置的 D1 数据库。
-2. 执行现有 D1 migration：
+在 `cloudflare-worker/wrangler.toml` 中配置 D1 数据库；首次配置环境时，将 `GITHUB_TOKEN` 设置为 Worker Secret。只有存在尚未应用的 schema 变更时才执行 D1 migration：
 
-   ```bash
-   cd cloudflare-worker
-   npx wrangler d1 migrations apply github-stars-manager --remote
-   ```
+```bash
+cd cloudflare-worker
+npx wrangler d1 migrations apply github-stars-manager --remote
+npx wrangler secret put GITHUB_TOKEN
+```
 
-3. 配置 GitHub Worker Secret：
+回到仓库根目录部署：
 
-   ```bash
-   npx wrangler secret put GITHUB_TOKEN
-   ```
+```bash
+npm run deploy
+```
 
-4. 回到仓库根目录部署：
-
-   ```bash
-   npm run deploy
-   ```
-
-部署脚本始终带 `--keep-vars`，避免覆盖 Cloudflare 中已有变量。完整说明见 [`cloudflare-worker/README.md`](cloudflare-worker/README.md)。
-
-## 保留的 Worker 能力
-
-Worker 保持现有 `/api/*` 契约，包含：
-
-- `/api/health`、`/api/session`
-- GitHub 和 AI 代理
-- 仓库、Release、应用设置和服务配置的 D1 同步
-- aria2 RPC 测试与 Release 下载转发
-- SPA 静态资源回退
-
-Worker 暂时不可用时，前端仍保留本地缓存和浏览器直连回退能力；生产入口统一使用 Worker 地址。
+部署脚本会构建前端，并通过 Wrangler 的 `--keep-vars` 保留 Cloudflare 中现有变量。Worker 配置详见 [`cloudflare-worker/README.md`](cloudflare-worker/README.md)。
 
 ## 验证
 
@@ -88,4 +75,4 @@ npx tsc -p tsconfig.json --noEmit
 
 ## 安全
 
-不要提交 Token、API Key、本地 `.env`、D1 数据库或生成的部署状态。使用 Wrangler Secret 管理 `GITHUB_TOKEN`，每次部署都保留 `--keep-vars`。
+不要提交 Token、API Key、`.env`、D1 数据或生成的部署状态。使用 Wrangler Secret 管理 `GITHUB_TOKEN`，每次部署都保留 `--keep-vars`。

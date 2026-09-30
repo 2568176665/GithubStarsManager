@@ -24,20 +24,6 @@ export const checkClipboardSupport = (): ClipboardSupport => {
 };
 
 /**
- * 检查是否支持写入剪贴板
- */
-export const isWriteSupported = (): boolean => {
-  return checkClipboardSupport().writeText;
-};
-
-/**
- * 检查是否支持读取剪贴板
- */
-export const isReadSupported = (): boolean => {
-  return checkClipboardSupport().readText;
-};
-
-/**
  * 获取剪贴板不支持时的错误信息
  */
 export const getClipboardErrorMessage = (

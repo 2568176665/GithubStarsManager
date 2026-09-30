@@ -1,36 +1,40 @@
 # GitHub Stars Manager
 
-GitHub Stars Manager is a Vite + React application for organizing starred repositories with AI classification, full-text and vector search, repository Q&A, release tracking, WebDAV backup, and optional aria2 RPC downloads.
+A browser-first app for organizing, rediscovering, and following GitHub starred repositories. The production app is served by one Cloudflare Worker; it keeps the browser cache and direct GitHub fallback used by the frontend.
+
+## Project direction
+
+- Keep the product focused on managing GitHub stars in the browser.
+- Deploy the Vite + React frontend and `/api/*` endpoints together on Cloudflare Workers, with D1 for synchronized app state.
+- Preserve local-cache and browser-direct fallback behavior.
+- Keep AI, Vectorize search, WebDAV backup, and aria2 integration optional.
+- Keep this fork Worker-only: no separately deployed server, desktop app, container, or reverse proxy.
+
+## What you can do
+
+- Organize starred repositories and write categories to GitHub Lists.
+- Discover repositories through configurable channels and star repositories from pasted links, Markdown, `owner/repo` entries, or JSON.
+- Track Releases with keyword and repository include/exclude rules.
+- Search repositories, with FTS5 as the Worker search path and Vectorize as an optional enhancement.
+- Add optional AI-assisted workflows, WebDAV backup, and aria2 downloads when configured.
 
 ## Architecture
 
-This project is deployed only as a Cloudflare Worker:
+- `src/` — Vite + React browser app and its local cache.
+- `cloudflare-worker/` — Worker SPA entry point, `/api/*` routes, Wrangler config, and D1 migrations.
+- `GITHUB_TOKEN` — Worker Secret used for the managed GitHub session and GitHub API proxy.
+- D1 — synchronized repositories, Releases, settings, and service configuration.
 
-- Vite builds the frontend into `dist/`.
-- The Worker serves the SPA and all `/api/*` routes.
-- Cloudflare D1 stores synchronized application state.
-- `GITHUB_TOKEN` is a Worker Secret used for the managed GitHub session and GitHub API proxy.
-- AI, WebDAV, vector search, and RPC settings are configured in the application and synchronized to D1 where supported.
-- Repository search is FTS5-first; Vectorize is an optional enhancement and is disabled by default.
+The Worker is the only supported production entry point. Keep existing API contracts and browser fallback behavior when changing the frontend or Worker.
 
-There is no separate server, desktop shell, container image, or reverse proxy in the supported deployment.
-
-## Quick start
-
-Install dependencies and start the frontend locally:
+## Local development
 
 ```bash
 npm ci
 npm run dev
 ```
 
-Build the frontend:
-
-```bash
-npm run build
-```
-
-Run the Worker locally from its directory:
+To run the Worker locally:
 
 ```bash
 cd cloudflare-worker
@@ -40,40 +44,21 @@ npm run dev
 
 ## Deploy to Cloudflare
 
-1. Create or select the D1 database configured in `cloudflare-worker/wrangler.toml`.
-2. Apply the existing migrations:
+Configure the D1 database in `cloudflare-worker/wrangler.toml` and set `GITHUB_TOKEN` as a Worker Secret when setting up a new environment. Apply D1 migrations only when there are unapplied schema changes:
 
-   ```bash
-   cd cloudflare-worker
-   npx wrangler d1 migrations apply github-stars-manager --remote
-   ```
+```bash
+cd cloudflare-worker
+npx wrangler d1 migrations apply github-stars-manager --remote
+npx wrangler secret put GITHUB_TOKEN
+```
 
-3. Configure the GitHub credential as a Worker Secret:
+Deploy from the repository root:
 
-   ```bash
-   npx wrangler secret put GITHUB_TOKEN
-   ```
+```bash
+npm run deploy
+```
 
-4. Deploy from the repository root:
-
-   ```bash
-   npm run deploy
-   ```
-
-The Worker deploy script always uses `--keep-vars` so existing Cloudflare variables are preserved. See [`cloudflare-worker/README.md`](cloudflare-worker/README.md) for the full deployment and migration notes.
-
-## Supported API areas
-
-The Worker keeps the existing `/api/*` contract, including:
-
-- `/api/health` and `/api/session`
-- GitHub and AI proxy routes
-- D1 synchronization for repositories, releases, settings, and service configurations
-- FTS5 repository search, README projection caching, and optional native Vectorize routes
-- aria2 RPC testing and Release download forwarding
-- SPA static asset fallback
-
-The frontend keeps local cache and browser-direct fallback behavior when the Worker is temporarily unavailable. Production deployments should use the Worker as the only application entry point.
+The deploy script builds the frontend and runs Wrangler with `--keep-vars` to preserve Cloudflare dashboard variables. See [`cloudflare-worker/README.md`](cloudflare-worker/README.md) for Worker setup details.
 
 ## Validation
 
@@ -90,4 +75,4 @@ npx tsc -p tsconfig.json --noEmit
 
 ## Security
 
-Do not commit tokens, API keys, local `.env` files, D1 databases, or generated deployment state. Use Wrangler Secrets for `GITHUB_TOKEN`, and keep the required `--keep-vars` flag on every deployment.
+Never commit tokens, API keys, `.env` files, D1 data, or generated deployment state. Use Wrangler Secrets for `GITHUB_TOKEN`, and keep `--keep-vars` on every deployment.
