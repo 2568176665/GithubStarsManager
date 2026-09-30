@@ -36,7 +36,7 @@ export const NetworkPanel: React.FC<NetworkPanelProps> = ({ t }) => {
           <Switch checked={rpcForm.enabled} onCheckedChange={(enabled) => void toggleRpc(enabled)} disabled={isRpcToggling} aria-label={t('启用远程下载', 'Enable remote download')} />
         </div>
 
-        {rpcForm.enabled && <div className="space-y-4">
+        <div className="space-y-4">
           <div className="grid grid-cols-3 gap-3">
             <div className="col-span-2"><label htmlFor="rpc-host" className="mb-1 block text-sm font-medium text-muted-foreground">{t('主机地址', 'Host')}</label><Input id="rpc-host" value={rpcForm.host} onChange={(event) => setRpcForm({ ...rpcForm, host: event.target.value })} placeholder="127.0.0.1" /></div>
             <div><label htmlFor="rpc-port" className="mb-1 block text-sm font-medium text-muted-foreground">{t('端口', 'Port')}</label><NumberInput id="rpc-port" value={rpcForm.port || undefined} onChange={(value) => setRpcForm({ ...rpcForm, port: value ?? 0 })} placeholder="6800" min={1} max={65535} allowUndefined /></div>
@@ -55,10 +55,10 @@ export const NetworkPanel: React.FC<NetworkPanelProps> = ({ t }) => {
             <Button onClick={() => void testRpc()} disabled={rpcTesting || !rpcForm.host || !rpcForm.port} variant="secondary">{rpcTesting ? <><Loader2 className="h-4 w-4 animate-spin" />{t('测试中…', 'Testing…')}</> : t('测试连接', 'Test Connection')}</Button>
             <Button onClick={() => void saveRpc()} disabled={rpcSaving || !hasRpcChanges || !isRpcFormValid}>{rpcSaving ? <><Loader2 className="h-4 w-4 animate-spin" />{t('保存中…', 'Saving…')}</> : t('保存', 'Save')}</Button>
           </div>
-          {rpcTestResult && <div className={`flex items-start gap-2 rounded-lg p-3 text-sm ${rpcTestResult.success ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'}`}>
-            {rpcTestResult.success ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /> : <XCircle className="mt-0.5 h-4 w-4 shrink-0" />}
-            <span>{rpcTestResult.success ? `${t('连接成功', 'Connection successful')}${rpcTestResult.version ? ` (aria2 v${rpcTestResult.version})` : ''}` : rpcTestResult.error || t('连接失败', 'Connection failed')}</span>
-          </div>}
+        </div>
+        {rpcTestResult && <div className={`mt-4 flex items-start gap-2 rounded-lg p-3 text-sm ${rpcTestResult.success ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'}`}>
+          {rpcTestResult.success ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /> : <XCircle className="mt-0.5 h-4 w-4 shrink-0" />}
+          <span>{rpcTestResult.success ? `${t('连接成功', 'Connection successful')}${rpcTestResult.version ? ` (aria2 v${rpcTestResult.version})` : ''}` : rpcTestResult.error || t('连接失败', 'Connection failed')}</span>
         </div>}
       </div>
     </div>

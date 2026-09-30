@@ -1,6 +1,7 @@
 import type { RpcDownloadConfig } from '../types';
 import { useAppStore } from '../store/useAppStore';
 import { backend } from './backendAdapter';
+import { translateBackendErrorResponse } from '../utils/backendErrors';
 
 interface RpcTestResult {
   success: boolean;
@@ -87,7 +88,7 @@ export async function testRpcDownload(
       }),
     });
     if (!resp.ok) {
-      return { success: false, error: `Server returned ${resp.status}` };
+      return { success: false, error: await translateBackendErrorResponse(resp, `Server returned ${resp.status}`) };
     }
     return await resp.json();
   } catch (e) {
@@ -129,7 +130,7 @@ export async function sendToRpcDownload(
       body: JSON.stringify({ url, filename }),
     });
     if (!resp.ok) {
-      return { success: false, error: `Server returned ${resp.status}` };
+      return { success: false, error: await translateBackendErrorResponse(resp, `Server returned ${resp.status}`) };
     }
     return await resp.json();
   } catch (e) {

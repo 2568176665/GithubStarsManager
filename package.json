@@ -16,6 +16,7 @@
     "test": "vitest",
     "test:run": "vitest run && npm run test:update-version",
     "test:update-version": "node --test scripts/update-version.test.cjs",
+    "test:worker-rpc": "vitest run -c cloudflare-worker/vitest.config.ts cloudflare-worker/tests/rpcDownload.test.ts",
     "test:wrangler": "node --test tests/wrangler-worker.test.mjs",
     "test:coverage": "vitest run --coverage",
     "sync-version": "node scripts/update-version.cjs --sync-lock",

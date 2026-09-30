@@ -55,6 +55,11 @@ const ERROR_MESSAGES: Record<string, { zh: string; en: string }> = {
   INVALID_REQUEST: { zh: '无效的请求', en: 'Invalid request' },
   FETCH_SETTINGS_FAILED: { zh: '获取设置失败', en: 'Failed to fetch settings' },
   UPDATE_SETTINGS_FAILED: { zh: '更新设置失败', en: 'Failed to update settings' },
+  // RPC download
+  RPC_DOWNLOAD_DISABLED: { zh: '请先在设置中启用远程下载', en: 'Enable remote download in Settings first' },
+  RPC_HOST_REQUIRED: { zh: '请在设置中填写 RPC 主机地址', en: 'Set the RPC host in Settings' },
+  RPC_PORT_INVALID: { zh: 'RPC 端口必须为 1–65535 的整数', en: 'RPC port must be an integer from 1 to 65535' },
+  RPC_DOWNLOAD_URL_REQUIRED: { zh: '下载链接为空', en: 'Download URL is missing' },
   // Sync
   EXPORT_DATA_FAILED: { zh: '导出数据失败', en: 'Failed to export data' },
   IMPORT_DATA_FAILED: { zh: '导入数据失败', en: 'Failed to import data' },
@@ -80,4 +85,13 @@ export function translateBackendError(code: string | undefined, fallback: string
   if (!entry) return fallback;
   const lang = getCurrentLanguage();
   return entry[lang];
+}
+
+export async function translateBackendErrorResponse(response: Response, fallback: string): Promise<string> {
+  try {
+    const data = await response.json() as { code?: unknown };
+    return translateBackendError(typeof data?.code === 'string' ? data.code : undefined, fallback);
+  } catch {
+    return fallback;
+  }
 }

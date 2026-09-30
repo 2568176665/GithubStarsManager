@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useAppStore } from '../../../store/useAppStore';
 import { backend } from '../../../services/backendAdapter';
 import { testRpcDownload } from '../../../services/rpcDownloadService';
+import { translateBackendErrorResponse } from '../../../utils/backendErrors';
 import type { RpcDownloadConfig } from '../../../types';
 
 interface UseNetworkActionsOptions {
@@ -74,7 +75,7 @@ export const useNetworkActions = ({ t }: UseNetworkActionsOptions): NetworkActio
         const body: Record<string, unknown> = { enabled: rpcForm.enabled, host: rpcForm.host, port: rpcForm.port };
         if (rpcForm.secret) body.secret = rpcForm.secret;
         const response = await fetch(`${backend.backendUrl}/settings/rpc-download`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-        if (!response.ok) throw new Error(`Worker returned ${response.status}`);
+        if (!response.ok) throw new Error(await translateBackendErrorResponse(response, `Worker returned ${response.status}`));
       }
       setRpcDownloadConfig(rpcForm);
       if (rpcForm.secret) setHasStoredSecret(true);
@@ -97,6 +98,7 @@ export const useNetworkActions = ({ t }: UseNetworkActionsOptions): NetworkActio
     const previous = rpcForm;
     const next = { ...rpcDownloadConfig, enabled };
     setIsRpcToggling(true);
+    setRpcTestResult(null);
     setRpcForm((current) => ({ ...current, enabled }));
     try {
       await saveRpcConfig(next);
@@ -114,7 +116,7 @@ export const useNetworkActions = ({ t }: UseNetworkActionsOptions): NetworkActio
     const body: Record<string, unknown> = { enabled: config.enabled, host: config.host, port: config.port };
     if (config.secret) body.secret = config.secret;
     const response = await fetch(`${backend.backendUrl}/settings/rpc-download`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    if (!response.ok) throw new Error(`Worker returned ${response.status}`);
+    if (!response.ok) throw new Error(await translateBackendErrorResponse(response, `Worker returned ${response.status}`));
   };
 
   return {

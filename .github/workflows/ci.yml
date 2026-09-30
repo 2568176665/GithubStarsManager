@@ -56,5 +56,8 @@ jobs:
         run: npx tsc -p tsconfig.json --noEmit
         working-directory: cloudflare-worker
 
+      - name: Worker RPC tests
+        run: npm run test:worker-rpc
+
       - name: Wrangler integration tests
         run: npm run test:wrangler

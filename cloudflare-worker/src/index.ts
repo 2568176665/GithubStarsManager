@@ -17,6 +17,17 @@ const CORS_HEADERS: Record<string, string> = {
 
 const json = (data: unknown, status = 200) => Response.json(data, { status, headers: CORS_HEADERS });
 
+function parseRpcPort(value: unknown): number | null {
+  const port = typeof value === 'number'
+    ? value
+    : typeof value === 'string' && value.trim() ? Number(value) : NaN;
+  return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null;
+}
+
+function rpcValidationError(code: string, error: string, includeSuccess: boolean): Response {
+  return json(includeSuccess ? { success: false, error, code } : { error, code }, 400);
+}
+
 async function readState(env: Env, key: string, fallback: unknown): Promise<unknown> {
   const row = await env.DB.prepare('SELECT value FROM sync_state WHERE key = ?').bind(key).first<{ value: string }>();
   if (!row) return fallback;
@@ -277,10 +288,9 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
   if (path === 'settings/rpc-download' && request.method === 'PUT') {
     const body = await request.json() as Record<string, unknown>;
     const host = typeof body.host === 'string' ? body.host.trim() : '';
-    const port = typeof body.port === 'number' ? body.port : Number(body.port);
-    if ((body.enabled === true && !host) || !Number.isInteger(port) || port < 1 || port > 65535) {
-      return json({ error: 'valid RPC host and port required' }, 400);
-    }
+    const port = parseRpcPort(body.port);
+    if (body.enabled === true && !host) return rpcValidationError('RPC_HOST_REQUIRED', 'valid RPC host and port required', false);
+    if (port === null) return rpcValidationError('RPC_PORT_INVALID', 'valid RPC host and port required', false);
     const previous = await readState(env, path, {}) as Record<string, unknown>;
     const next: Record<string, unknown> = { enabled: body.enabled === true, host, port };
     if (typeof body.secret === 'string' && body.secret.length > 0) next.secret = body.secret;
@@ -291,9 +301,10 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
   if (path === 'settings/rpc-download/test' && request.method === 'POST') {
     const body = await request.json() as Record<string, unknown>;
     const host = typeof body.host === 'string' ? body.host.trim() : '';
-    const port = typeof body.port === 'number' ? body.port : Number(body.port);
+    const port = parseRpcPort(body.port);
     const secret = typeof body.secret === 'string' ? body.secret : '';
-    if (!host || !Number.isInteger(port) || port < 1 || port > 65535) return json({ success: false, error: 'valid RPC host and port required' }, 400);
+    if (!host) return rpcValidationError('RPC_HOST_REQUIRED', 'valid RPC host and port required', true);
+    if (port === null) return rpcValidationError('RPC_PORT_INVALID', 'valid RPC host and port required', true);
     const params = secret ? [`token:${secret}`] : [];
     try {
       const response = await fetch(`http://${host}:${port}/jsonrpc`, {
@@ -313,9 +324,13 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
     const body = await request.json() as { url?: string; filename?: string };
     const config = await readState(env, 'settings/rpc-download', {}) as Record<string, unknown>;
     const host = typeof config.host === 'string' ? config.host.trim() : '';
-    const port = typeof config.port === 'number' ? config.port : Number(config.port);
-    if (config.enabled !== true || !host || !body.url || !Number.isInteger(port)) return json({ success: false, error: 'RPC download not configured' }, 400);
-    const params: unknown[] = typeof config.secret === 'string' && config.secret ? [`token:${config.secret}`, [body.url]] : [[body.url]];
+    const port = parseRpcPort(config.port);
+    const downloadUrl = typeof body.url === 'string' ? body.url.trim() : '';
+    if (config.enabled !== true) return rpcValidationError('RPC_DOWNLOAD_DISABLED', 'RPC download not configured', true);
+    if (!host) return rpcValidationError('RPC_HOST_REQUIRED', 'RPC download not configured', true);
+    if (port === null) return rpcValidationError('RPC_PORT_INVALID', 'RPC download not configured', true);
+    if (!downloadUrl) return rpcValidationError('RPC_DOWNLOAD_URL_REQUIRED', 'RPC download not configured', true);
+    const params: unknown[] = typeof config.secret === 'string' && config.secret ? [`token:${config.secret}`, [downloadUrl]] : [[downloadUrl]];
     if (body.filename) params.push({ out: body.filename });
     try {
       const response = await fetch(`http://${host}:${port}/jsonrpc`, {
