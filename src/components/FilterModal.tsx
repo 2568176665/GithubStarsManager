@@ -1,10 +1,10 @@
+import React, { useEffect, useState } from 'react';
+import { Plus, X } from 'lucide-react';
+import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
-import { Badge } from './ui/badge';
-import React, { useState, useEffect } from 'react';
-import { X, Plus } from 'lucide-react';
 import { Modal } from './Modal';
-import { AssetFilter } from '../types';
+import type { AssetFilter } from '../types';
 
 interface FilterModalProps {
   isOpen: boolean;
@@ -13,164 +13,119 @@ interface FilterModalProps {
   onSave: (filter: AssetFilter) => void;
 }
 
-export const FilterModal: React.FC<FilterModalProps> = ({
-  isOpen,
-  onClose,
-  filter,
-  onSave
-}) => {
+const addUnique = (values: string[], value: string) => {
+  const trimmed = value.trim();
+  return trimmed && !values.some(item => item.toLocaleLowerCase() === trimmed.toLocaleLowerCase())
+    ? [...values, trimmed]
+    : values;
+};
+
+const ListEditor: React.FC<{
+  label: string;
+  placeholder: string;
+  values: string[];
+  onChange: (values: string[]) => void;
+}> = ({ label, placeholder, values, onChange }) => {
+  const [value, setValue] = useState('');
+  const add = () => {
+    const next = addUnique(values, value);
+    if (next !== values) setValue('');
+    onChange(next);
+  };
+  return (
+    <div>
+      <label className="mb-2 block text-sm font-medium text-foreground dark:text-foreground">{label}</label>
+      <div className="mb-2 flex space-x-2">
+        <Input
+          value={value}
+          onChange={event => setValue(event.target.value)}
+          onKeyDown={event => {
+            if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              add();
+            }
+          }}
+          placeholder={placeholder}
+          className="flex-1"
+        />
+        <Button type="button" onClick={add} disabled={!value.trim()} aria-label={`添加${label}`}>
+          <Plus className="h-4 w-4" />
+        </Button>
+      </div>
+      {values.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {values.map((item, index) => (
+            <div key={`${item}-${index}`} className="flex items-center gap-1 rounded-md border border-border bg-muted px-2 py-1">
+              <Badge variant="secondary" className="h-auto border-0 bg-transparent px-0">{item}</Badge>
+              <Button type="button" variant="ghost" size="icon" className="h-6 w-6" onClick={() => onChange(values.filter((_, itemIndex) => itemIndex !== index))} aria-label={`删除${label} ${item}`}>
+                <X className="h-3 w-3" />
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+export const FilterModal: React.FC<FilterModalProps> = ({ isOpen, onClose, filter, onSave }) => {
   const [name, setName] = useState('');
   const [keywords, setKeywords] = useState<string[]>([]);
-  const [newKeyword, setNewKeyword] = useState('');
+  const [excludeKeywords, setExcludeKeywords] = useState<string[]>([]);
+  const [includeRepos, setIncludeRepos] = useState<string[]>([]);
+  const [alwaysExcludeRepos, setAlwaysExcludeRepos] = useState<string[]>([]);
 
   useEffect(() => {
-    if (filter) {
-      setName(filter.name);
-      setKeywords([...filter.keywords]);
-    } else {
-      setName('');
-      setKeywords([]);
-    }
-    setNewKeyword('');
+    setName(filter?.name ?? '');
+    setKeywords([...(filter?.keywords ?? [])]);
+    setExcludeKeywords([...(filter?.excludeKeywords ?? [])]);
+    setIncludeRepos([...(filter?.includeRepos ?? [])]);
+    setAlwaysExcludeRepos([...(filter?.alwaysExcludeRepos ?? [])]);
   }, [filter, isOpen]);
 
-  const handleAddKeyword = () => {
-    const trimmed = newKeyword.trim();
-    if (trimmed && !keywords.includes(trimmed)) {
-      setKeywords([...keywords, trimmed]);
-      setNewKeyword('');
-    }
-  };
-
-  const handleRemoveKeyword = (index: number) => {
-    setKeywords(keywords.filter((_, i) => i !== index));
-  };
-
   const handleSave = () => {
-    if (!name.trim() || keywords.length === 0) {
-      return;
-    }
-
+    if (!name.trim() || (keywords.length === 0 && excludeKeywords.length === 0 && includeRepos.length === 0 && alwaysExcludeRepos.length === 0)) return;
     const savedFilter: AssetFilter = {
       id: filter?.id || Date.now().toString(),
       name: name.trim(),
-      keywords: keywords.filter(k => k.trim())
+      keywords: keywords.map(item => item.trim()).filter(Boolean),
+      ...(excludeKeywords.length ? { excludeKeywords } : {}),
+      ...(includeRepos.length ? { includeRepos } : {}),
+      ...(alwaysExcludeRepos.length ? { alwaysExcludeRepos } : {}),
+      ...(filter?.isPreset ? { isPreset: true } : {}),
+      ...(filter?.icon ? { icon: filter.icon } : {}),
     };
-
     onSave(savedFilter);
     onClose();
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
-      e.preventDefault();
-      handleAddKeyword();
-    }
-  };
-
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={filter ? '编辑过滤器' : '新建过滤器'}>
-      <div className="space-y-4">
-        {/* Filter Name */}
+      <div className="space-y-5">
         <div>
-          <label htmlFor="filter-name" className="block text-sm font-medium text-foreground dark:text-foreground mb-2">
-            过滤器名称
-          </label>
-          <Input
-            id="filter-name"
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="例如: macOS"
-            className="w-full px-3 py-2 border border-border dark:border-border rounded-lg focus:ring-2 focus:ring-ring focus:border-transparent bg-card dark:bg-muted/40 text-foreground dark:text-foreground"
-          />
+          <label htmlFor="filter-name" className="mb-2 block text-sm font-medium">过滤器名称</label>
+          <Input id="filter-name" value={name} onChange={event => setName(event.target.value)} placeholder="例如: macOS" />
         </div>
 
-        {/* Keywords */}
-        <div>
-          <label htmlFor="filter-keywords" className="block text-sm font-medium text-foreground dark:text-foreground mb-2">
-            匹配关键词
-          </label>
-          
-          {/* Add keyword input */}
-          <div className="flex space-x-2 mb-3">
-            <Input
-              id="filter-keywords"
-              type="text"
-              value={newKeyword}
-              onChange={(e) => setNewKeyword(e.target.value)}
-              onKeyDown={handleKeyPress}
-              placeholder="输入关键词，如: mac, dmg"
-              className="flex-1 px-3 py-2 border border-border dark:border-border rounded-lg focus:ring-2 focus:ring-ring focus:border-transparent bg-card dark:bg-muted/40 text-foreground dark:text-foreground"
-            />
-            <Button
-              onClick={handleAddKeyword}
-              disabled={!newKeyword.trim()}
-              className="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 dark:bg-primary/80 dark:hover:bg-primary disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-1 transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              <span>添加</span>
-            </Button>
-          </div>
+        <section className="space-y-4 rounded-lg border border-border p-3">
+          <h3 className="text-sm font-semibold">Assets / 资源</h3>
+          <ListEditor label="包含关键词" placeholder="例如: mac, dmg" values={keywords} onChange={setKeywords} />
+          <ListEditor label="排除关键词" placeholder="例如: debug, source" values={excludeKeywords} onChange={setExcludeKeywords} />
+        </section>
 
-          {/* Keywords list */}
-          {keywords.length > 0 && (
-            <div className="space-y-2">
-              <p className="text-sm text-muted-foreground dark:text-muted-foreground">
-                已添加的关键词:
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {keywords.map((keyword, index) => (
-                  <div
-                    key={index}
-                    className="flex items-center gap-1 rounded-md border border-border bg-muted px-2 py-1"
-                  >
-                    <Badge variant="secondary" className="h-auto rounded-sm border-0 bg-transparent px-0 text-sm font-medium text-secondary-foreground">
-                      {keyword}
-                    </Badge>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => handleRemoveKeyword(index)}
-                      aria-label={`删除关键词 ${keyword}`}
-                      className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground dark:text-muted-foreground dark:hover:text-foreground transition-colors"
-                    >
-                      <X className="w-3 h-3" />
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+        <section className="space-y-4 rounded-lg border border-border p-3">
+          <h3 className="text-sm font-semibold">Repositories / 仓库</h3>
+          <ListEditor label="仅匹配仓库" placeholder="owner/repository" values={includeRepos} onChange={setIncludeRepos} />
+          <ListEditor label="始终排除仓库" placeholder="owner/repository" values={alwaysExcludeRepos} onChange={setAlwaysExcludeRepos} />
+        </section>
 
-          {keywords.length === 0 && (
-            <p className="text-sm text-muted-foreground dark:text-muted-foreground">
-              请添加至少一个关键词用于匹配文件名
-            </p>
-          )}
-        </div>
+        <p className="rounded-lg border border-border bg-muted p-3 text-sm text-muted-foreground">
+          可只填写仓库规则或排除关键词；多个过滤器之间使用 OR 关系。仓库排除规则优先级最高。
+        </p>
 
-        {/* Help text */}
-        <div className="bg-muted dark:bg-muted/40 border border-border dark:border-border rounded-lg p-3">
-          <p className="text-sm text-muted-foreground dark:text-muted-foreground">
-            <strong>提示:</strong> 关键词将用于匹配 GitHub Release 中的文件名。例如，添加 "mac" 和 "dmg" 关键词可以匹配包含这些字符的文件。
-          </p>
-        </div>
-
-        {/* Action buttons */}
-        <div className="flex justify-end space-x-3 pt-4 border-t dark:border-border mt-4">
-          <Button
-            onClick={onClose}
-            className="px-4 py-2 text-foreground dark:text-foreground bg-muted dark:bg-muted/40 dark:border dark:border-border rounded-lg hover:bg-accent dark:hover:bg-accent transition-colors"
-          >
-            取消
-          </Button>
-          <Button
-            onClick={handleSave}
-            disabled={!name.trim() || keywords.length === 0}
-            className={`px-4 py-2 rounded-lg transition-colors ${(!name.trim() || keywords.length === 0) ? 'bg-muted text-muted-foreground dark:bg-card/5 dark:text-muted-foreground cursor-not-allowed' : 'bg-primary text-primary-foreground hover:bg-primary/90 dark:bg-success/80 dark:hover:bg-success'}`}
-          >
+        <div className="flex justify-end space-x-3 border-t border-border pt-4">
+          <Button type="button" variant="outline" onClick={onClose}>取消</Button>
+          <Button type="button" onClick={handleSave} disabled={!name.trim() || (keywords.length === 0 && excludeKeywords.length === 0 && includeRepos.length === 0 && alwaysExcludeRepos.length === 0)}>
             {filter ? '保存' : '创建'}
           </Button>
         </div>

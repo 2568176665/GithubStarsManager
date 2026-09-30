@@ -611,4 +611,15 @@
     </changelog>
     <downloadUrl>https://github.com/2568176665/GithubStarsManager/releases/tag/v0.8.2</downloadUrl>
   </version>
+  <version>
+    <number>0.8.4</number>
+    <releaseDate>2026-09-30</releaseDate>
+    <changelog>
+      <item>feat: Added GitHub Lists write preflight validation.</item>
+      <item>feat: Added batch repository starring from links, Markdown, owner/repo text, and JSON.</item>
+      <item>feat: Added discovery channel visibility management.</item>
+      <item>feat: Enhanced Release filters with excluded keywords and repository include/exclude lists.</item>
+    </changelog>
+    <downloadUrl>https://github.com/2568176665/GithubStarsManager/releases/tag/v0.8.4</downloadUrl>
+  </version>
 </versions>

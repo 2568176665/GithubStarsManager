@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { beforeEach } from 'vitest';
-import type { Repository } from '../../types';
+import type { Category, Repository } from '../../types';
 import { defaultCategories } from '../schema';
 import { createRepositorySlice } from './repositorySlice';
 import { logger } from '../../services/logger';
@@ -52,6 +52,7 @@ function makeSliceHarness(options: {
   currentLists: Array<{ id: string; name: string; items: string[] }>;
   categoryListIdMap?: Record<string, string>;
   repositories?: Repository[];
+  defaultCategoryOverrides?: Record<string, Partial<Category>>;
 }) {
   const state: HarnessState = {
     listsPush: { isRunning: false, total: 0, done: 0, currentLabel: null, message: null, error: null },
@@ -61,7 +62,7 @@ function makeSliceHarness(options: {
     customCategories: [],
     language: 'en',
     hiddenDefaultCategoryIds: defaultCategories.filter(c => c.id !== 'devtools').map(c => c.id),
-    defaultCategoryOverrides: {},
+    defaultCategoryOverrides: options.defaultCategoryOverrides ?? {},
     categoryListIdMap: options.categoryListIdMap ?? {},
   };
   const set = (partial: unknown) => {
@@ -157,5 +158,64 @@ describe('pushCategoriesToLists 语言切换自动重命名', () => {
 
     expect(api.createUserList).toHaveBeenCalledWith('Development Tools', true);
     expect(state.categoryListIdMap.devtools).toBe('L_new');
+  });
+});
+
+describe('pushCategoriesToLists GitHub Lists 限制预检', () => {
+  const makeExistingLists = (count: number) => Array.from({ length: count }, (_, index) => ({
+    id: `L_${index}`,
+    name: `Existing ${index}`,
+    items: [],
+  }));
+
+  it('现有 31 个 list 时允许创建第 32 个', async () => {
+    const { push, api, state } = makeSliceHarness({ currentLists: makeExistingLists(31) });
+
+    await push();
+
+    expect(api.createUserList).toHaveBeenCalledWith('Development Tools', true);
+    expect(state.listsPush.error).toBeNull();
+  });
+
+  it.each([32, 33])('现有 %i 个 list 时拒绝创建新 list，并保持零写入', async (count) => {
+    const { push, api, state } = makeSliceHarness({ currentLists: makeExistingLists(count) });
+
+    await push();
+
+    expect(api.createUserList).not.toHaveBeenCalled();
+    expect(api.updateUserList).not.toHaveBeenCalled();
+    expect(api.updateUserListsForItem).not.toHaveBeenCalled();
+    expect(api.resolveRepositoryNodeIds).not.toHaveBeenCalled();
+    expect(state.listsPush.error).toContain('32');
+  });
+
+  it('允许长度恰好为 32 的新 list 名称', async () => {
+    const name = 'A'.repeat(32);
+    const { push, api, state } = makeSliceHarness({
+      currentLists: [],
+      defaultCategoryOverrides: { devtools: { name } },
+    });
+
+    await push();
+
+    expect(api.createUserList).toHaveBeenCalledWith(name, true);
+    expect(state.listsPush.error).toBeNull();
+  });
+
+  it('拒绝长度为 33 的重命名，并保持零写入', async () => {
+    const name = 'A'.repeat(33);
+    const { push, api, state } = makeSliceHarness({
+      currentLists: [{ id: 'L_devtools', name: 'Development Tools', items: [] }],
+      categoryListIdMap: { devtools: 'L_devtools' },
+      defaultCategoryOverrides: { devtools: { name } },
+    });
+
+    await push();
+
+    expect(api.createUserList).not.toHaveBeenCalled();
+    expect(api.updateUserList).not.toHaveBeenCalled();
+    expect(api.updateUserListsForItem).not.toHaveBeenCalled();
+    expect(api.resolveRepositoryNodeIds).not.toHaveBeenCalled();
+    expect(state.listsPush.error).toContain(name);
   });
 });

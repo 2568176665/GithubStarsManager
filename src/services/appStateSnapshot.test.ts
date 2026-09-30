@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { useAppStore } from '../store/useAppStore';
 import { createInitialState } from '../store/initialState';
 import {
   APP_STATE_SNAPSHOT_KEYS,
+  applyAppStateSnapshot,
   buildAppStateSnapshot,
   hasAppStateSnapshotChanged,
 } from './appStateSnapshot';
@@ -35,5 +36,33 @@ describe('appStateSnapshot', () => {
 
     expect(hasAppStateSnapshotChanged(changedTheme, initial)).toBe(true);
     expect(hasAppStateSnapshotChanged(changedToken, initial)).toBe(false);
+  });
+
+  it('preserves local asset filters when restoring a pre-filter D1 snapshot', () => {
+    const store = useAppStore as unknown as {
+      getState?: () => { githubToken: string | null };
+      setState?: (state: Record<string, unknown>) => void;
+    };
+    const originalGetState = store.getState;
+    const originalSetState = store.setState;
+    const setState = vi.fn();
+    store.getState = () => ({ githubToken: null });
+    store.setState = setState;
+
+    try {
+      applyAppStateSnapshot({ theme: 'dark' });
+      expect(setState).toHaveBeenCalledWith(expect.not.objectContaining({ assetFilters: expect.anything() }));
+
+      setState.mockClear();
+      applyAppStateSnapshot({ assetFilters: [{ id: 'filter', name: 'Filter', keywords: [' MSI '], excludeRepos: ['old/repo'] }] });
+      expect(setState).toHaveBeenCalledWith(expect.objectContaining({
+        assetFilters: [{ id: 'filter', name: 'Filter', keywords: ['MSI'] }],
+      }));
+    } finally {
+      if (originalGetState) store.getState = originalGetState;
+      else delete store.getState;
+      if (originalSetState) store.setState = originalSetState;
+      else delete store.setState;
+    }
   });
 });

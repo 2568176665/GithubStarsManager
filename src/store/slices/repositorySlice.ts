@@ -189,48 +189,69 @@ export const createRepositorySlice: AppStoreSlice<Pick<import('../types').AppAct
           //    - 优先复用已持久化的 categoryListIdMap[cat.id]（跨语言稳定）
           //    - 否则按规范名及其本地化变体在既有 list 中查找（迁移历史 list，避免重复创建）
           //    - 仍找不到才新建，并用规范名命名，随后记录到映射
-          const listIdByCategoryId = new Map<string, string>();
-          const managedListIds = new Set<string>();
-          const nextCategoryListIdMap = { ...categoryListIdMap };
-          const renameFailures: string[] = [];
-          for (const cat of allCategories) {
+          const plannedLists = allCategories.map(cat => {
             const persistedId = categoryListIdMap[cat.id];
             const existing = persistedId ? currentLists.find(l => l.id === persistedId) : undefined;
-            if (persistedId && existing) {
-              // auto-migrate name on language switch — best-effort, keep mapping even if rename fails (retry next push)
-              if (existing.name !== cat.name) {
-                try {
-                  await api.updateUserList(persistedId, cat.name);
-                } catch (e) {
-                  console.warn('rename list failed', persistedId, existing.name, '->', cat.name, e);
-                  renameFailures.push(`${existing.name} -> ${cat.name}`);
-                }
-              }
-              listIdByCategoryId.set(cat.id, persistedId);
-              managedListIds.add(persistedId);
-              continue;
-            }
+            if (existing) return { cat, existing };
+
             // 规范名：默认分类用其稳定中文名（除非被用户覆盖），自定义分类用其自身名称
             const defaultCat = defaultCategories.find(d => d.id === cat.id);
             const canonicalName = defaultCat ? defaultCat.name : cat.name;
             const overrideName = defaultCategoryOverrides[cat.id]?.name;
             const nameVariants = getCategoryNameVariants(canonicalName, overrideName);
-            const matchedList = currentLists.find(l =>
-              nameVariants.some(v => v.toLowerCase() === l.name.toLowerCase())
-            );
-            if (matchedList) {
-              // rename if language changed (e.g. 开发工具 -> Development Tools) — best-effort
-              if (matchedList.name !== cat.name) {
+            return {
+              cat,
+              existing: currentLists.find(l =>
+                nameVariants.some(v => v.toLowerCase() === l.name.toLowerCase())
+              ),
+            };
+          });
+
+          // GitHub limits each account to 32 lists and each list name to 32 characters.
+          // Validate the complete plan before resolving repository ids or issuing mutations.
+          const projectedListCount = currentLists.length + plannedLists.filter(plan => !plan.existing).length;
+          const invalidNames = plannedLists
+            .filter(plan => plan.cat.name.length > 32)
+            .map(plan => plan.cat.name);
+          const limitErrors: string[] = [];
+          if (projectedListCount > 32) {
+            limitErrors.push(t(
+              `计划中的 Lists 数量为 ${projectedListCount}，超过 GitHub 上限 32 个`,
+              `The planned Lists count is ${projectedListCount}, exceeding GitHub's limit of 32`
+            ));
+          }
+          for (const name of invalidNames) {
+            limitErrors.push(t(
+              `List 名称超过 32 个字符：${name}`,
+              `List name exceeds 32 characters: ${name}`
+            ));
+          }
+          if (limitErrors.length > 0) {
+            set({ listsPush: { isRunning: false, total: 0, done: 0, currentLabel: null, message: null, error: t(
+              `GitHub Lists 写入已取消：${limitErrors.join('；')}`,
+              `GitHub Lists push cancelled: ${limitErrors.join('; ')}`
+            ) } });
+            return;
+          }
+
+          const listIdByCategoryId = new Map<string, string>();
+          const managedListIds = new Set<string>();
+          const nextCategoryListIdMap = { ...categoryListIdMap };
+          const renameFailures: string[] = [];
+          for (const { cat, existing } of plannedLists) {
+            if (existing) {
+              // auto-migrate name on language switch — best-effort, keep mapping even if rename fails (retry next push)
+              if (existing.name !== cat.name) {
                 try {
-                  await api.updateUserList(matchedList.id, cat.name);
+                  await api.updateUserList(existing.id, cat.name);
                 } catch (e) {
-                  console.warn('rename list failed', matchedList.id, matchedList.name, '->', cat.name, e);
-                  renameFailures.push(`${matchedList.name} -> ${cat.name}`);
+                  console.warn('rename list failed', existing.id, existing.name, '->', cat.name, e);
+                  renameFailures.push(`${existing.name} -> ${cat.name}`);
                 }
               }
-              listIdByCategoryId.set(cat.id, matchedList.id);
-              nextCategoryListIdMap[cat.id] = matchedList.id;
-              managedListIds.add(matchedList.id);
+              listIdByCategoryId.set(cat.id, existing.id);
+              nextCategoryListIdMap[cat.id] = existing.id;
+              managedListIds.add(existing.id);
               continue;
             }
             const id = await api.createUserList(cat.name, true);

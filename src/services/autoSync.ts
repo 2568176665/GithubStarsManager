@@ -6,6 +6,7 @@ import { discoveryAnalysisStorage } from './discoveryAnalysisStorage';
 import { analysesMapToRecord, mergeDiscoveryAnalyses } from '../utils/discoveryAnalysisMerge';
 import { applyAppStateSnapshot, buildAppStateSnapshot, hasAppStateSnapshotChanged } from './appStateSnapshot';
 import type { Repository } from '../types';
+import { normalizeAssetFilters } from '../utils/assetFilters';
 
 // Prevent sync loops: when we pull data FROM backend and update store,
 // the store subscription would trigger a push TO backend. This flag blocks that.
@@ -430,7 +431,7 @@ export async function syncFromBackend(): Promise<void> {
         useAppStore.setState({ customCategories: settings.customCategories });
       }
       if (Array.isArray(settings.assetFilters)) {
-        useAppStore.setState({ assetFilters: settings.assetFilters });
+        useAppStore.setState({ assetFilters: normalizeAssetFilters(settings.assetFilters) });
       }
       if (settings.releaseSourceSettings && typeof settings.releaseSourceSettings === 'object') {
         state.setReleaseSourceSettings(settings.releaseSourceSettings as typeof state.releaseSourceSettings);

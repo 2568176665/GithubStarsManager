@@ -1,6 +1,6 @@
 import { Input } from './ui/input';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Search, X, SlidersHorizontal, CheckCircle, Bell, BellOff, Bot, Edit3, Lock, Unlock, AlertCircle, Archive, ChevronDown, RefreshCw, Clock, ArrowDown, ArrowUp } from 'lucide-react';
+import { Search, X, SlidersHorizontal, CheckCircle, Bell, BellOff, Bot, Edit3, Lock, Unlock, AlertCircle, Archive, ChevronDown, RefreshCw, Clock, ArrowDown, ArrowUp, Star } from 'lucide-react';
 import { getPlatformDisplayName, getPlatformIcon } from './platformMeta';
 import { useAppStore, getAllCategories } from '../store/useAppStore';
 import { useShallow } from 'zustand/react/shallow';
@@ -13,6 +13,7 @@ import { NO_LICENSE_SENTINEL, normalizeLicense } from '../utils/licenseFilter';
 import { NumberInput } from './ui/NumberInput';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip';
 import { Button } from './ui/button';
+import { BatchStarImportDialog } from './BatchStarImportDialog';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -108,6 +109,7 @@ export const SearchBar: React.FC = () => {
   } = useSearchActions();
   
   const [showFilters, setShowFilters] = useState(false);
+  const [showBatchStarImport, setShowBatchStarImport] = useState(false);
   const [searchQuery, setSearchQuery] = useState(searchFilters.query);
   const [isRealTimeSearch, setIsRealTimeSearch] = useState(false);
   const [isComposing, setIsComposing] = useState(false);
@@ -911,6 +913,14 @@ export const SearchBar: React.FC = () => {
                 >
                   <span className="whitespace-nowrap">{t('同步星标仓库及 list', 'Sync starred repos & lists')}</span>
                 </DropdownMenuItem>
+                <DropdownMenuItem
+                  disabled={isSyncingStars}
+                  onSelect={() => setShowBatchStarImport(true)}
+                  className="justify-start text-sm"
+                >
+                  <Star className="mr-2 h-4 w-4" />
+                  <span className="whitespace-nowrap">{t('从链接批量 Star', 'Star repositories from links')}</span>
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
             <Tooltip>
@@ -1326,6 +1336,11 @@ export const SearchBar: React.FC = () => {
 
 
       </div>
+      <BatchStarImportDialog
+        open={showBatchStarImport}
+        onClose={() => setShowBatchStarImport(false)}
+        onSynced={() => syncStars('stars-only')}
+      />
     </TooltipProvider>
   );
 };

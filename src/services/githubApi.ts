@@ -754,6 +754,36 @@ export class GitHubApiService {
     return { defaultBranch: response.default_branch };
   }
 
+  async getRepositoryForImport(owner: string, repo: string): Promise<Repository> {
+    const repository = await this.makeRequest<Repository & { license?: unknown }>(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+      { operationTag: 'batch-star-import:repository' },
+    );
+    const forks = repository.forks ?? repository.forks_count ?? 0;
+    return {
+      ...repository,
+      description: repository.description ?? null,
+      forks,
+      forks_count: repository.forks_count ?? forks,
+      pushed_at: repository.pushed_at || repository.updated_at,
+      topics: Array.isArray(repository.topics) ? repository.topics : [],
+      license: toLicenseSpdxId(repository.license),
+    };
+  }
+
+  async isRepositoryStarred(owner: string, repo: string): Promise<boolean> {
+    try {
+      await this.makeRequest<void>(
+        `/user/starred/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+        { operationTag: 'batch-star-import:starred' },
+      );
+      return true;
+    } catch (error) {
+      if (error instanceof Error && /^GitHub API error: 404\b/.test(error.message)) return false;
+      throw error;
+    }
+  }
+
   async getRepositoryHeadSha(owner: string, repo: string, branch: string, signal?: AbortSignal): Promise<string> {
     const response = await this.makeRequest<{ sha?: unknown }>(
       `/repos/${owner}/${repo}/commits/${encodeURIComponent(branch)}`,

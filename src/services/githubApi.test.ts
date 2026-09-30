@@ -439,3 +439,44 @@ describe('GitHubApiService 401 处理', () => {
     expect(window.fetch).toHaveBeenCalledWith('https://api.github.com/user', expect.anything());
   });
 });
+
+describe('GitHubApiService batch Star import', () => {
+  const makeResponse = (status: number, body: unknown = null): Response => ({
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: status === 404 ? 'Not Found' : '',
+    headers: { get: () => null },
+    json: async () => body,
+  } as unknown as Response);
+
+  afterEach(() => vi.mocked(window.fetch).mockReset());
+
+  it('normalizes repository metadata for the preview and local sync', async () => {
+    const service = new GitHubApiService('token');
+    vi.mocked(window.fetch).mockResolvedValue(makeResponse(200, {
+      ...makeRepository(1, 'Owner/example'),
+      forks_count: 3,
+      forks: 3,
+      license: { spdx_id: 'MIT', key: 'mit', name: 'MIT License' },
+    }));
+
+    const repository = await service.getRepositoryForImport('Owner', 'example');
+
+    expect(repository.full_name).toBe('Owner/example');
+    expect(repository.license).toBe('MIT');
+    expect(repository.forks).toBe(3);
+    expect(window.fetch).toHaveBeenCalledWith('https://api.github.com/repos/Owner/example', expect.anything());
+  });
+
+  it('resolves starred state and treats only GitHub 404 as not starred', async () => {
+    const service = new GitHubApiService('token');
+    vi.mocked(window.fetch)
+      .mockResolvedValueOnce(makeResponse(204))
+      .mockResolvedValueOnce(makeResponse(404, { message: 'Not Found' }))
+      .mockResolvedValueOnce(makeResponse(403, { message: 'Forbidden' }));
+
+    await expect(service.isRepositoryStarred('owner', 'repo')).resolves.toBe(true);
+    await expect(service.isRepositoryStarred('owner', 'repo')).resolves.toBe(false);
+    await expect(service.isRepositoryStarred('owner', 'repo')).rejects.toThrow('GitHub API error: 403');
+  });
+});

@@ -9,6 +9,7 @@ import type {
 import { defaultHeaderMenuConfig, defaultSubscriptionChannels } from '../../types';
 import { DEFAULT_THEME_PRESET_ID, isThemePresetId } from '../../constants/themePresets';
 import { normalizeReleaseSourceSettings } from '../../utils/releaseSources';
+import { normalizeAssetFilters } from '../../utils/assetFilters';
 import { resolveActiveAIConfig } from '../../utils/aiConfig';
 import type { AppStoreState } from '../types';
 import { readAuthMirror } from '../persistence/authStorage';
@@ -169,7 +170,10 @@ export const normalizePersistedState = (
     categoryOrder: Array.isArray(safePersisted.categoryOrder) ? safePersisted.categoryOrder.filter((id: unknown): id is string => typeof id === 'string') : [],
     collapsedSidebarCategoryCount: typeof safePersisted.collapsedSidebarCategoryCount === 'number' && safePersisted.collapsedSidebarCategoryCount > 0 ? safePersisted.collapsedSidebarCategoryCount : 20,
     categoryMatchMode: safePersisted.categoryMatchMode === 'legacy' ? 'legacy' : 'effective',
-    assetFilters: Array.isArray(safePersisted.assetFilters) && safePersisted.assetFilters.length > 0 ? safePersisted.assetFilters : defaultPresetFilters,
+    assetFilters: (() => {
+      const normalized = normalizeAssetFilters(safePersisted.assetFilters);
+      return normalized.length > 0 ? normalized : defaultPresetFilters;
+    })(),
     language: safePersisted.language || 'zh',
     translationEngine: safePersisted.translationEngine === 'google' || safePersisted.translationEngine === 'ai'
       ? safePersisted.translationEngine

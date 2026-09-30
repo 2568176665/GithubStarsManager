@@ -1,4 +1,5 @@
 import { useAppStore } from '../store/useAppStore';
+import { normalizeAssetFilters } from '../utils/assetFilters';
 
 type AppStoreState = ReturnType<typeof useAppStore.getState>;
 
@@ -138,7 +139,7 @@ export function buildAppStateSnapshot(state: AppStoreState): Record<string, unkn
     categoryOrder: state.categoryOrder,
     collapsedSidebarCategoryCount: state.collapsedSidebarCategoryCount,
     categoryMatchMode: state.categoryMatchMode,
-    assetFilters: state.assetFilters,
+    assetFilters: normalizeAssetFilters(state.assetFilters),
     releaseSourceSettings: state.releaseSourceSettings,
     includePreRelease: state.includePreRelease,
     includeKeysInBackup: state.includeKeysInBackup,
@@ -190,7 +191,13 @@ export function applyAppStateSnapshot(snapshot: Record<string, unknown>): void {
   ] as const;
 
   for (const field of arrayFields) {
-    if (Array.isArray(snapshot[field])) next[field] = snapshot[field];
+    if (field === 'assetFilters') {
+      if (Object.prototype.hasOwnProperty.call(snapshot, field)) {
+        next[field] = normalizeAssetFilters(snapshot[field]);
+      }
+    } else if (Array.isArray(snapshot[field])) {
+      next[field] = snapshot[field];
+    }
   }
   for (const field of objectFields) {
     if (snapshot[field] && typeof snapshot[field] === 'object' && !Array.isArray(snapshot[field])) {

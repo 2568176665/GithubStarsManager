@@ -4,6 +4,7 @@ import type { AIConfig, WebDAVConfig } from '../../../types';
 import { useAppStore } from '../../../store/useAppStore';
 import { useDialog } from '../../../hooks/useDialog';
 import { WebDAVService } from '../../../services/webdavService';
+import { normalizeAssetFilters } from '../../../utils/assetFilters';
 
 interface UseBackupActionsOptions {
   t: (zh: string, en: string) => string;
@@ -26,6 +27,7 @@ export const useBackupActions = ({ t }: UseBackupActionsOptions): BackupActions 
     repositories: store.repositories,
     releases: store.releases,
     customCategories: store.customCategories,
+    assetFilters: store.assetFilters,
     hiddenDefaultCategoryIds: store.hiddenDefaultCategoryIds,
     aiConfigs: store.aiConfigs,
     webdavConfigs: store.webdavConfigs,
@@ -69,6 +71,7 @@ export const useBackupActions = ({ t }: UseBackupActionsOptions): BackupActions 
         repositories: state.repositories,
         releases: state.releases,
         customCategories: state.customCategories,
+        assetFilters: state.assetFilters,
         hiddenDefaultCategoryIds: state.hiddenDefaultCategoryIds,
         aiConfigs: state.aiConfigs.map((config) => ({
           ...config,
@@ -137,6 +140,9 @@ export const useBackupActions = ({ t }: UseBackupActionsOptions): BackupActions 
       const backupIncludedKeys = backupData.includeKeysInBackup ?? true;
       if (Array.isArray(backupData.repositories)) state.setRepositories(backupData.repositories as typeof state.repositories);
       if (Array.isArray(backupData.releases)) state.setReleases(backupData.releases as typeof state.releases);
+      if (Array.isArray(backupData.assetFilters)) {
+        useAppStore.setState({ assetFilters: normalizeAssetFilters(backupData.assetFilters) });
+      }
 
       try {
         if (Array.isArray(backupData.releaseSubscriptions)) {

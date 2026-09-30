@@ -381,6 +381,12 @@ export interface AssetFilter {
   id: string;
   name: string;
   keywords: string[];
+  /** 资源名称中不允许出现的关键词。 */
+  excludeKeywords?: string[];
+  /** 仅匹配这些仓库（owner/repo，不区分大小写）。 */
+  includeRepos?: string[];
+  /** 永远不匹配这些仓库（owner/repo，不区分大小写）。 */
+  alwaysExcludeRepos?: string[];
   isPreset?: boolean;
   icon?: string;
 }

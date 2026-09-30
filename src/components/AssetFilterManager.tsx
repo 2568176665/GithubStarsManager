@@ -29,6 +29,13 @@ const PRESET_ICON_MAP: Record<string, string> = {
   'preset-source': 'Package',
 };
 
+const getFilterRuleSummary = (filter: AssetFilter): string => [
+  ...filter.keywords,
+  ...(filter.excludeKeywords ?? []).map(keyword => `-${keyword}`),
+  ...(filter.includeRepos ?? []).map(repository => `repo:${repository}`),
+  ...(filter.alwaysExcludeRepos ?? []).map(repository => `!repo:${repository}`),
+].join(', ');
+
 interface AssetFilterManagerProps {
   selectedFilters: string[];
   onFilterToggle: (filterId: string) => void;
@@ -194,7 +201,7 @@ export const AssetFilterManager: React.FC<AssetFilterManagerProps> = ({
                         variant="ghost"
                         onClick={() => handlePresetToggle(preset.id)}
                         className="h-auto min-h-0 flex items-center space-x-1.5 p-0"
-                        title={preset.keywords.join(', ')}
+                        title={[...preset.keywords, ...(preset.excludeKeywords ?? []).map(keyword => `-${keyword}`), ...(preset.includeRepos ?? [])].join(', ')}
                         type="button"
                         aria-pressed={isSelected}
                       >
@@ -242,14 +249,14 @@ export const AssetFilterManager: React.FC<AssetFilterManagerProps> = ({
                       onClick={() => onFilterToggle(filter.id)}
                       className="h-auto min-h-0 flex flex-1 items-center justify-start space-x-2 p-0"
                       aria-pressed={selectedFilters.includes(filter.id)}
-                      aria-label={`${filter.name} (${filter.keywords.join(', ')})`}
-                      title={`${filter.name} (${filter.keywords.join(', ')})`}
+                      aria-label={`${filter.name}${getFilterRuleSummary(filter) ? ` (${getFilterRuleSummary(filter)})` : ''}`}
+                      title={`${filter.name}${getFilterRuleSummary(filter) ? ` (${getFilterRuleSummary(filter)})` : ''}`}
                       type="button"
                     >
                       <span className="font-medium text-sm">{filter.name}</span>
-                      <span className="text-xs opacity-75 hidden lg:inline">
-                        ({filter.keywords.join(', ')})
-                      </span>
+                      {getFilterRuleSummary(filter) && (
+                        <span className="text-xs opacity-75 hidden lg:inline">({getFilterRuleSummary(filter)})</span>
+                      )}
                     </Button>
                     
                     <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">

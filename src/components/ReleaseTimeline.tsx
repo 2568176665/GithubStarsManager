@@ -22,6 +22,7 @@ import {
   latestEffectiveRelease,
   shouldShowAssetsUpdatedIndicator,
 } from '../utils/releaseAssets';
+import { matchesReleaseAssetFilters } from '../utils/assetFilters';
 
 export const ReleaseTimeline: React.FC = () => {
   const {
@@ -86,24 +87,20 @@ export const ReleaseTimeline: React.FC = () => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   };
 
-  // Helper function to check if a link matches any active filter
-  const matchesActiveFilters = useCallback((linkName: string): boolean => {
+  // Release filters decide visibility; once matched, all download links remain visible.
+  const matchesActiveFilters = useCallback((release: Release, allLinkNames: string[]): boolean => {
     if (selectedFilters.length === 0) return true;
-    
-    const lowerLinkName = linkName.toLowerCase();
-    const activeCustomFilters = assetFilters.filter(filter => selectedFilters.includes(filter.id));
-    const activePresetFilters = PRESET_FILTERS.filter(filter => selectedFilters.includes(filter.id));
-    
-    const matchesCustom = activeCustomFilters.some(filter => 
-      filter.keywords.some(keyword => lowerLinkName.includes(keyword.toLowerCase()))
-    );
-    
-    const matchesPreset = activePresetFilters.some(filter => 
-      filter.keywords.some(keyword => lowerLinkName.includes(keyword.toLowerCase()))
-    );
-    
-    return matchesCustom || matchesPreset;
+    const activeFilters = [
+      ...assetFilters,
+      ...PRESET_FILTERS.map(filter => ({ ...filter, isPreset: true })),
+    ].filter(filter => selectedFilters.includes(filter.id));
+    const uploaded = (release.assets ?? []).map(asset => asset.name);
+    return matchesReleaseAssetFilters(activeFilters, release.repository.full_name, {
+      uploaded,
+      all: allLinkNames,
+    });
   }, [selectedFilters, assetFilters]);
+  const matchesLinkForCard = useCallback(() => true, []);
 
   // Toggle assets expansion for a specific release
   const toggleAssets = (releaseId: number) => {
@@ -252,17 +249,15 @@ export const ReleaseTimeline: React.FC = () => {
   const releasesWithLinks = useMemo(() => {
     return subscribedReleases.map(release => {
       const allLinks = getDownloadLinks(release);
-      const filteredLinks = selectedFilters.length > 0
-        ? allLinks.filter(link => matchesActiveFilters(link.name))
-        : allLinks;
+      const hasMatchingAssets = matchesActiveFilters(release, allLinks.map(link => link.name));
       return {
         release,
         allLinks,
-        filteredLinks,
-        hasMatchingAssets: filteredLinks.length > 0
+        filteredLinks: hasMatchingAssets ? allLinks : [],
+        hasMatchingAssets,
       };
     });
-  }, [subscribedReleases, getDownloadLinks, selectedFilters, matchesActiveFilters]);
+  }, [subscribedReleases, getDownloadLinks, matchesActiveFilters]);
 
   const preUnreadFilteredReleases = useMemo(() => {
     let filtered = releasesWithLinks;
@@ -891,7 +886,7 @@ export const ReleaseTimeline: React.FC = () => {
                 isReleaseNotesExpanded={isReleaseNotesExpanded}
                 isFullContent={isFullContent}
                 truncatedBody={truncatedBody}
-                matchesActiveFilters={matchesActiveFilters}
+                matchesActiveFilters={matchesLinkForCard}
                 selectedFilters={selectedFilters}
                 onToggleAssets={() => toggleAssets(release.id)}
                 onToggleReleaseNotes={() => toggleReleaseNotes(release.id)}
@@ -1003,7 +998,7 @@ export const ReleaseTimeline: React.FC = () => {
                             isReleaseNotesExpanded={isReleaseNotesExpanded}
                             isFullContent={isFullContent}
                             truncatedBody={truncatedBody}
-                            matchesActiveFilters={matchesActiveFilters}
+                            matchesActiveFilters={matchesLinkForCard}
                             selectedFilters={selectedFilters}
                             onToggleAssets={() => toggleAssets(release.id)}
                             onToggleReleaseNotes={() => toggleReleaseNotes(release.id)}

@@ -19,7 +19,7 @@ import { SiAndroid, SiApple, SiLinux } from '@icons-pack/react-simple-icons';
 import { SiWindows } from './SiWindows';
 import { useAppStore } from '../store/useAppStore';
 import { useDiscoveryActions } from '../features/discovery/hooks/useDiscoveryActions';
-import { DiscoverySidebar } from './DiscoverySidebar';
+import { DiscoveryChannelVisibilityMenu, DiscoverySidebar } from './DiscoverySidebar';
 import { SubscriptionRepoCard } from './SubscriptionRepoCard';
 import { SortAlgorithmTooltip } from './SortAlgorithmTooltip';
 import { ScrollToBottom } from './ScrollToBottom';
@@ -75,15 +75,19 @@ const discoveryChannelStyleMap: Record<DiscoveryChannelIcon, { gradient: string;
 
 interface MobileTabNavProps {
   channels: { id: DiscoveryChannelId; name: string; nameEn: string; icon: React.ReactNode }[];
+  allChannels: import('../types').DiscoveryChannel[];
   selectedChannel: DiscoveryChannelId;
   onChannelSelect: (channel: DiscoveryChannelId) => void;
+  onToggleChannel: (channelId: DiscoveryChannelId) => void;
   language: 'zh' | 'en';
 }
 
 const MobileTabNav: React.FC<MobileTabNavProps> = ({ 
   channels, 
+  allChannels,
   selectedChannel, 
   onChannelSelect,
+  onToggleChannel,
   language 
 }) => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -207,6 +211,11 @@ const MobileTabNav: React.FC<MobileTabNavProps> = ({
             </span>
           </Button>
         ))}
+        <DiscoveryChannelVisibilityMenu
+          channels={allChannels}
+          onToggleChannel={onToggleChannel}
+          language={language}
+        />
       </div>
       
       {/* Active indicator */}
@@ -447,6 +456,7 @@ export const DiscoveryView: React.FC = React.memo(() => {
     handleAnalyzePage,
     handleAbortAnalysis,
   } = useDiscoveryActions(scrollContainerRef);
+  const toggleDiscoveryChannel = useAppStore((state) => state.toggleDiscoveryChannel);
 
   const [searchInput, setSearchInput] = useState(discoverySearchQuery);
   
@@ -466,6 +476,18 @@ export const DiscoveryView: React.FC = React.memo(() => {
     () => Array.isArray(discoveryChannels) ? discoveryChannels.filter(Boolean) : [],
     [discoveryChannels]
   );
+
+  useEffect(() => {
+    const enabledChannels = safeDiscoveryChannels.filter((channel) => channel.enabled);
+    if (enabledChannels.length === 0) {
+      const fallback = safeDiscoveryChannels[0];
+      if (fallback) toggleDiscoveryChannel(fallback.id);
+      return;
+    }
+    if (!enabledChannels.some((channel) => channel.id === selectedDiscoveryChannel)) {
+      setSelectedDiscoveryChannel(enabledChannels[0].id);
+    }
+  }, [safeDiscoveryChannels, selectedDiscoveryChannel, setSelectedDiscoveryChannel, toggleDiscoveryChannel]);
 
   // 获取当前频道的所有仓库
   const allRepos = useMemo(
@@ -618,7 +640,9 @@ export const DiscoveryView: React.FC = React.memo(() => {
       {/* Mobile Tab Navigation */}
       <MobileTabNav
         channels={mobileChannels}
+        allChannels={safeDiscoveryChannels}
         selectedChannel={selectedDiscoveryChannel}
+        onToggleChannel={toggleDiscoveryChannel}
         onChannelSelect={(channel) => {
           if (channel === selectedDiscoveryChannel) {
             return;
@@ -652,6 +676,7 @@ export const DiscoveryView: React.FC = React.memo(() => {
               setSelectedDiscoveryChannel(channel);
             }}
             onRefreshAll={refreshAll}
+            onToggleChannel={toggleDiscoveryChannel}
             isLoading={discoveryIsLoading}
             lastRefresh={discoveryLastRefresh}
             isAnalyzing={isAnalyzing}
