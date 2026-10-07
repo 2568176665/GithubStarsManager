@@ -60,6 +60,26 @@ export const GeneralPanel: React.FC<GeneralPanelProps> = ({ t }) => {
       <Card>
         <CardHeader>
           <div className="flex items-center space-x-3">
+            <Github className="h-5 w-5 text-muted-foreground dark:text-muted-foreground" />
+            <CardTitle>{t('GitHub Token 权限', 'GitHub Token Permissions')}</CardTitle>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm text-muted-foreground dark:text-muted-foreground">
+          <p>{t('如果批量 Star 失败，请确认当前 token 具备以下权限：', 'If batch starring fails, make sure the current token has the following permissions:')}</p>
+          <div className="space-y-2 text-xs leading-5">
+            <p><span className="font-medium text-foreground">{t('经典 token：', 'Classic token:')}</span> {t('勾选 user 权限；访问私有仓库时还需 repo。', 'Enable the user scope; repo is also required for private repositories.')}</p>
+            <p><span className="font-medium text-foreground">{t('细粒度 token：', 'Fine-grained token:')}</span> {t('授予 Starring（读写）和 Metadata（只读）权限，并选择可访问的仓库。', 'Grant Starring (read and write) and Metadata (read-only), then select the repositories it can access.')}</p>
+          </div>
+          <a href="https://github.com/settings/tokens" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline">
+            {t('管理 GitHub token →', 'Manage GitHub tokens →')}
+            <ExternalLink className="h-3.5 w-3.5" />
+          </a>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <div className="flex items-center space-x-3">
             <Package className="h-5 w-5 text-muted-foreground dark:text-muted-foreground" />
             <CardTitle>{t('检查更新', 'Check for Updates')}</CardTitle>
           </div>

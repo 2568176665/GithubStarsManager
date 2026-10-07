@@ -22,7 +22,7 @@ import {
   latestEffectiveRelease,
   shouldShowAssetsUpdatedIndicator,
 } from '../utils/releaseAssets';
-import { matchesReleaseAssetFilters } from '../utils/assetFilters';
+import { matchesAssetLinkFilter, matchesReleaseAssetFilters } from '../utils/assetFilters';
 
 export const ReleaseTimeline: React.FC = () => {
   const {
@@ -61,6 +61,7 @@ export const ReleaseTimeline: React.FC = () => {
   const [itemsPerPage, setItemsPerPage] = useState(20);
   // 独立的展开状态：下载资产和更新日志分开控制（本地状态，不持久化）
   const [expandedAssets, setExpandedAssets] = useState<Set<number>>(new Set());
+  const [showAllAssets, setShowAllAssets] = useState<Set<number>>(new Set());
   const [expandedReleaseNotes, setExpandedReleaseNotes] = useState<Set<number>>(new Set());
   const [fullContentReleases, setFullContentReleases] = useState<Set<number>>(new Set());
   const [isReleaseSourceSettingsOpen, setIsReleaseSourceSettingsOpen] = useState(false);
@@ -87,20 +88,30 @@ export const ReleaseTimeline: React.FC = () => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   };
 
-  // Release filters decide visibility; once matched, all download links remain visible.
+  const activeAssetFilters = useMemo(() => [
+    ...assetFilters,
+    ...PRESET_FILTERS.map(filter => ({ ...filter, isPreset: true })),
+  ].filter(filter => selectedFilters.includes(filter.id)), [assetFilters, selectedFilters]);
+
+  // Release filters decide visibility and the matching links shown in each card.
   const matchesActiveFilters = useCallback((release: Release, allLinkNames: string[]): boolean => {
     if (selectedFilters.length === 0) return true;
-    const activeFilters = [
-      ...assetFilters,
-      ...PRESET_FILTERS.map(filter => ({ ...filter, isPreset: true })),
-    ].filter(filter => selectedFilters.includes(filter.id));
     const uploaded = (release.assets ?? []).map(asset => asset.name);
-    return matchesReleaseAssetFilters(activeFilters, release.repository.full_name, {
+    return matchesReleaseAssetFilters(activeAssetFilters, release.repository.full_name, {
       uploaded,
       all: allLinkNames,
     });
-  }, [selectedFilters, assetFilters]);
-  const matchesLinkForCard = useCallback(() => true, []);
+  }, [activeAssetFilters, selectedFilters]);
+
+  const matchesLinkForCard = useCallback((release: Release, name: string, isSourceCode = false): boolean => {
+    if (selectedFilters.length === 0) return true;
+    return activeAssetFilters.some(filter => matchesAssetLinkFilter(
+      filter,
+      release.repository.full_name,
+      name,
+      isSourceCode,
+    ));
+  }, [activeAssetFilters, selectedFilters]);
 
   // Toggle assets expansion for a specific release
   const toggleAssets = (releaseId: number) => {
@@ -114,6 +125,15 @@ export const ReleaseTimeline: React.FC = () => {
         markReleaseAsRead(releaseId);
       }
       return newSet;
+    });
+  };
+
+  const toggleShowAllAssets = (releaseId: number) => {
+    setShowAllAssets(prev => {
+      const next = new Set(prev);
+      if (next.has(releaseId)) next.delete(releaseId);
+      else next.add(releaseId);
+      return next;
     });
   };
 
@@ -250,14 +270,17 @@ export const ReleaseTimeline: React.FC = () => {
     return subscribedReleases.map(release => {
       const allLinks = getDownloadLinks(release);
       const hasMatchingAssets = matchesActiveFilters(release, allLinks.map(link => link.name));
+      const filteredLinks = selectedFilters.length === 0
+        ? allLinks
+        : allLinks.filter(link => matchesLinkForCard(release, link.name, link.isSourceCode));
       return {
         release,
         allLinks,
-        filteredLinks: hasMatchingAssets ? allLinks : [],
+        filteredLinks: hasMatchingAssets ? filteredLinks : [],
         hasMatchingAssets,
       };
     });
-  }, [subscribedReleases, getDownloadLinks, matchesActiveFilters]);
+  }, [subscribedReleases, getDownloadLinks, matchesActiveFilters, matchesLinkForCard, selectedFilters.length]);
 
   const preUnreadFilteredReleases = useMemo(() => {
     let filtered = releasesWithLinks;
@@ -286,7 +309,8 @@ export const ReleaseTimeline: React.FC = () => {
       .map(({ release, allLinks, filteredLinks }) => ({
         release,
         // 如果有过滤器，只显示匹配的资产；否则显示全部
-        displayLinks: selectedFilters.length > 0 ? filteredLinks : allLinks
+        displayLinks: selectedFilters.length > 0 ? filteredLinks : allLinks,
+        allLinks,
       }));
   }, [releasesWithLinks, searchQuery, selectedFilters]);
 
@@ -327,7 +351,7 @@ export const ReleaseTimeline: React.FC = () => {
       latestRelease: Release;
     }>();
 
-    filteredReleases.forEach(({ release, displayLinks }) => {
+    filteredReleases.forEach(({ release, displayLinks, allLinks }) => {
       const repoId = release.repository.id;
       if (!groups.has(repoId)) {
         groups.set(repoId, {
@@ -337,7 +361,7 @@ export const ReleaseTimeline: React.FC = () => {
         });
       }
       const group = groups.get(repoId)!;
-      group.releases.push({ release, displayLinks });
+      group.releases.push({ release, displayLinks, allLinks });
       // 更新最新发布
       if (new Date(release.published_at) > new Date(group.latestRelease.published_at)) {
         group.latestRelease = release;
@@ -869,7 +893,7 @@ export const ReleaseTimeline: React.FC = () => {
           </div>
         ) : viewMode === 'timeline' ? (
           // 按日期排序视图
-          paginatedReleases.map(({ release, displayLinks }) => {
+          paginatedReleases.map(({ release, displayLinks, allLinks }) => {
             const isUnread = isReleaseUnread(release.id);
             const isAssetsExpanded = expandedAssets.has(release.id);
             const isReleaseNotesExpanded = expandedReleaseNotes.has(release.id);
@@ -881,14 +905,17 @@ export const ReleaseTimeline: React.FC = () => {
                 key={release.id}
                 release={release}
                 downloadLinks={displayLinks}
+                allDownloadLinks={allLinks}
+                showAllAssets={showAllAssets.has(release.id)}
                 isUnread={isUnread}
                 isAssetsExpanded={isAssetsExpanded}
                 isReleaseNotesExpanded={isReleaseNotesExpanded}
                 isFullContent={isFullContent}
                 truncatedBody={truncatedBody}
-                matchesActiveFilters={matchesLinkForCard}
+                matchesActiveFilters={(name, isSourceCode) => matchesLinkForCard(release, name, isSourceCode)}
                 selectedFilters={selectedFilters}
                 onToggleAssets={() => toggleAssets(release.id)}
+                onToggleAllAssets={() => toggleShowAllAssets(release.id)}
                 onToggleReleaseNotes={() => toggleReleaseNotes(release.id)}
                 onToggleFullContent={(e) => toggleFullContent(release.id, e)}
                 onUnsubscribe={() => handleUnsubscribeRelease(release.repository.id)}
@@ -981,7 +1008,7 @@ export const ReleaseTimeline: React.FC = () => {
                   <div className={`overflow-hidden min-h-0 ${isExpanded ? '' : 'collapse-hidden'}`}>
                     <div className="border-t ui-divider bg-background dark:bg-card/50">
                       <div className="p-1.5 space-y-1.5">
-                      {releases.map(({ release, displayLinks }) => {
+                      {releases.map(({ release, displayLinks, allLinks }) => {
                         const isUnread = isReleaseUnread(release.id);
                         const isAssetsExpanded = expandedAssets.has(release.id);
                         const isReleaseNotesExpanded = expandedReleaseNotes.has(release.id);
@@ -993,14 +1020,17 @@ export const ReleaseTimeline: React.FC = () => {
                             key={release.id}
                             release={release}
                             downloadLinks={displayLinks}
+                            allDownloadLinks={allLinks}
+                            showAllAssets={showAllAssets.has(release.id)}
                             isUnread={isUnread}
                             isAssetsExpanded={isAssetsExpanded}
                             isReleaseNotesExpanded={isReleaseNotesExpanded}
                             isFullContent={isFullContent}
                             truncatedBody={truncatedBody}
-                            matchesActiveFilters={matchesLinkForCard}
+                            matchesActiveFilters={(name, isSourceCode) => matchesLinkForCard(release, name, isSourceCode)}
                             selectedFilters={selectedFilters}
                             onToggleAssets={() => toggleAssets(release.id)}
+                            onToggleAllAssets={() => toggleShowAllAssets(release.id)}
                             onToggleReleaseNotes={() => toggleReleaseNotes(release.id)}
                             onToggleFullContent={(e) => toggleFullContent(release.id, e)}
                             onUnsubscribe={() => handleUnsubscribeRelease(release.repository.id)}

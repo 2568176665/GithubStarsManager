@@ -20,7 +20,7 @@ vi.mock('../../../services/translateService', () => ({
   translateBatch: mocks.translateBatch,
 }));
 
-import { useBatchStarImport } from './useBatchStarImport';
+import { formatBatchStarError, useBatchStarImport } from './useBatchStarImport';
 
 const makeRepository = (fullName: string): Repository => {
   const [owner, name] = fullName.split('/');
@@ -56,6 +56,12 @@ describe('useBatchStarImport', () => {
     mocks.isRepositoryStarred.mockResolvedValue(false);
     mocks.starRepository.mockResolvedValue(undefined);
     mocks.translateBatch.mockImplementation(async (texts: string[]) => texts.map(text => ({ translatedText: `translated: ${text}` })));
+  });
+
+  it('localizes the GitHub Star permission error and preserves other details', () => {
+    expect(formatBatchStarError(new Error('GitHub API error: 403 Forbidden'), 'zh')).toContain('Classic token 请勾选 user 权限');
+    expect(formatBatchStarError(new Error('403 Resource not accessible by personal access token'), 'en')).toContain('Starring (Read and write)');
+    expect(formatBatchStarError(new Error('GitHub unavailable'), 'en')).toBe('GitHub unavailable');
   });
 
   it('caps resolution at 50 candidates and reports overflow', async () => {
@@ -98,5 +104,15 @@ describe('useBatchStarImport', () => {
     expect(starResult).toEqual({ succeeded: 1, failed: 1 });
     expect(result.current.rows.map(row => row.status)).toEqual(['success', 'star-error']);
     expect(result.current.rows[1].error).toBe('GitHub unavailable');
+  });
+
+  it('shows a localized permission hint for a failed Star', async () => {
+    mocks.starRepository.mockRejectedValueOnce(new Error('GitHub API error: 403 Forbidden'));
+    const { result } = renderHook(() => useBatchStarImport());
+
+    await act(async () => result.current.resolveInput('owner/restricted', false));
+    await act(async () => { await result.current.starSelected(); });
+
+    expect(result.current.rows[0].error).toContain('enable the user scope');
   });
 });

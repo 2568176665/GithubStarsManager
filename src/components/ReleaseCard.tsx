@@ -1,5 +1,5 @@
 import React, { memo, useCallback, useMemo, useState, useEffect } from 'react';
-import { ExternalLink, GitBranch, Calendar, Download, ChevronDown, ChevronUp, BookOpen, ArrowUpRight, FolderOpen, Folder, BellOff, FileArchive, Code2, Loader2, CheckCircle2, Sparkles } from 'lucide-react';
+import { ExternalLink, GitBranch, Calendar, Download, ChevronDown, ChevronUp, BookOpen, ArrowUpRight, FolderOpen, Folder, BellOff, FileArchive, Code2, Loader2, CheckCircle2, Sparkles, Eye, EyeOff } from 'lucide-react';
 import { Release } from '../types';
 import { formatDistanceToNow } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
@@ -43,14 +43,17 @@ const AssetUpdatedTime = ({ updatedAt, language }: { updatedAt?: string; languag
 interface ReleaseCardProps {
   release: Release;
   downloadLinks: DownloadLink[];
+  allDownloadLinks?: DownloadLink[];
+  showAllAssets?: boolean;
   isUnread: boolean;
   isAssetsExpanded: boolean;
   isReleaseNotesExpanded: boolean;
   isFullContent: boolean;
   truncatedBody: string;
-  matchesActiveFilters: (linkName: string) => boolean;
+  matchesActiveFilters: (linkName: string, isSourceCode?: boolean) => boolean;
   selectedFilters: string[];
   onToggleAssets: () => void;
+  onToggleAllAssets?: () => void;
   onToggleReleaseNotes: () => void;
   onToggleFullContent: (e: React.MouseEvent) => void;
   onUnsubscribe: () => void;
@@ -63,6 +66,8 @@ interface ReleaseCardProps {
 const ReleaseCard: React.FC<ReleaseCardProps> = memo(({
   release,
   downloadLinks,
+  allDownloadLinks,
+  showAllAssets = false,
   isUnread,
   isAssetsExpanded,
   isReleaseNotesExpanded,
@@ -71,6 +76,7 @@ const ReleaseCard: React.FC<ReleaseCardProps> = memo(({
   matchesActiveFilters,
   selectedFilters,
   onToggleAssets,
+  onToggleAllAssets,
   onToggleReleaseNotes,
   onToggleFullContent,
   onUnsubscribe,
@@ -83,6 +89,9 @@ const ReleaseCard: React.FC<ReleaseCardProps> = memo(({
 
   const effectiveTime = effectiveReleaseTime(release);
   const showAssetsUpdatedIndicator = shouldShowAssetsUpdatedIndicator(release);
+  const allLinks = allDownloadLinks ?? downloadLinks;
+  const visibleDownloadLinks = showAllAssets ? allLinks : downloadLinks;
+  const hasHiddenAssets = selectedFilters.length > 0 && allLinks.length > downloadLinks.length;
 
   // RPC 发送与 AI 总结动作由共享 hook 承担（useRepositoryReleaseSheet 同源委托）
   const { rpcDownloadConfig } = useAppStore(useShallow((state) => ({
@@ -188,15 +197,15 @@ const ReleaseCard: React.FC<ReleaseCardProps> = memo(({
                   <Download className="w-3.5 h-3.5" />
                   <span>
                     {selectedFilters.length > 0
-                      ? `${downloadLinks.filter(link => matchesActiveFilters(link.name)).length}/${downloadLinks.length}`
-                      : downloadLinks.length}
+                      ? `${allLinks.filter(link => matchesActiveFilters(link.name, link.isSourceCode)).length}/${allLinks.length}`
+                      : allLinks.length}
                   </span>
                 </div>
               )}
             </div>
             {/* 固定宽度需容纳英文五控件（Assets/Notes/Summary+2图标，约340px），否则换行按钮会溢出头部 */}
             <div className="flex items-center justify-end gap-1 flex-shrink-0 md:w-[344px] md:min-w-[344px]">
-            {downloadLinks.length > 0 && (
+            {visibleDownloadLinks.length > 0 && (
               <Button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -289,20 +298,36 @@ const ReleaseCard: React.FC<ReleaseCardProps> = memo(({
       >
         <div className="overflow-hidden min-h-0">
           <div className="px-3 sm:px-4 pb-3 sm:pb-4 pt-3 sm:pt-4 border-t border-border dark:border-border">
-          {isAssetsExpanded && downloadLinks.length > 0 && (
+          {isAssetsExpanded && visibleDownloadLinks.length > 0 && (
             <div className="py-2">
-              <div className="flex items-center space-x-2 mb-3">
+              <div className="flex items-center gap-2 mb-3">
                 <FileArchive className="w-3.5 h-3.5 text-muted-foreground dark:text-muted-foreground" />
                 <span className="text-xs font-medium text-foreground dark:text-muted-foreground">
                   {t('下载文件', 'Download Files')}
                 </span>
                 <span className="text-xs text-muted-foreground dark:text-muted-foreground">
-                  ({downloadLinks.length})
+                  ({visibleDownloadLinks.length})
                 </span>
+                {hasHiddenAssets && onToggleAllAssets && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onToggleAllAssets();
+                    }}
+                    className="ml-auto h-7 gap-1 px-2 text-xs whitespace-nowrap"
+                    title={showAllAssets ? t('仅显示匹配资产', 'Show matching assets only') : t('显示全部资产', 'Show all assets')}
+                    aria-label={showAllAssets ? t('仅显示匹配资产', 'Show matching assets only') : t('显示全部资产', 'Show all assets')}
+                  >
+                    {showAllAssets ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    <span>{showAllAssets ? t('仅匹配', 'Matching') : t('全部', 'All')}</span>
+                  </Button>
+                )}
               </div>
 
               <div className="ui-inset-surface max-h-72 overflow-hidden overflow-y-auto">
-                {downloadLinks.map((link, index) => {
+                {visibleDownloadLinks.map((link, index) => {
                   const isRpcEnabled = rpcDownloadConfig.enabled;
                   // 与 sendRpcDownload 使用相同的版本化 key
                   const rpcKey = computeRpcDownloadKey(link);

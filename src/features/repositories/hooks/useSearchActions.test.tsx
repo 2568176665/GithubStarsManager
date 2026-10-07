@@ -847,6 +847,40 @@ describe('useSearchActions pure helpers', () => {
     expect(merged[1]).toMatchObject({ id: 3 });
   });
 
+  it('repairs legacy local IDs by normalized full_name and preserves local metadata', () => {
+    const storeRepos = [baseRepo({
+      id: 999,
+      full_name: 'Owner/One',
+      ai_summary: 'local summary',
+      ai_tags: ['local'],
+      custom_description: 'local description',
+      custom_tags: ['keep'],
+      custom_category: 'Tools',
+      category_locked: true,
+      last_edited: '2026-01-04T00:00:00.000Z',
+    })];
+    const newRepos = [baseRepo({
+      id: 1,
+      full_name: 'owner/one',
+      description: 'fresh description',
+    })];
+
+    const [merged] = mergeStarredRepositories(newRepos, storeRepos);
+
+    expect(merged).toMatchObject({
+      id: 1,
+      full_name: 'owner/one',
+      description: 'fresh description',
+      ai_summary: 'local summary',
+      ai_tags: ['local'],
+      custom_description: 'local description',
+      custom_tags: ['keep'],
+      custom_category: 'Tools',
+      category_locked: true,
+      last_edited: '2026-01-04T00:00:00.000Z',
+    });
+  });
+
   it('planListCategories skips reserved names and existing categories', () => {
     const { toCreate, categoryByLowerName } = planListCategories(
       [

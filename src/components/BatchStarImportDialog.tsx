@@ -1,11 +1,14 @@
-import { useState, type FC } from 'react';
-import { AlertCircle, Check, Loader2, Star, X } from 'lucide-react';
+import { lazy, Suspense, useEffect, useState, type FC, type ClipboardEvent } from 'react';
+import { AlertCircle, BookOpen, Check, Loader2, Star, X } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
 import { BATCH_STAR_IMPORT_LIMIT, useBatchStarImport } from '../features/repositories/hooks/useBatchStarImport';
+import type { Repository } from '../types';
 import { Button } from './ui/button';
 import { Checkbox } from './ui/checkbox';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
 import { Textarea } from './ui/textarea';
+
+const LazyReadmeModal = lazy(() => import('./ReadmeModal').then(module => ({ default: module.ReadmeModal })));
 
 interface BatchStarImportDialogProps {
   open: boolean;
@@ -27,8 +30,13 @@ const statusLabel = (status: string, t: (zh: string, en: string) => string): str
 export const BatchStarImportDialog: FC<BatchStarImportDialogProps> = ({ open, onClose, onSynced }) => {
   const language = useAppStore(state => state.language);
   const githubToken = useAppStore(state => state.githubToken);
+  const user = useAppStore(state => state.user);
   const [input, setInput] = useState('');
+  const [inputHistoryState, setInputHistoryState] = useState<{ key: string | null; entries: string[] }>({ key: null, entries: [] });
+  const [readmeRepository, setReadmeRepository] = useState<Repository | null>(null);
   const [translateDescriptions, setTranslateDescriptions] = useState(false);
+  const historyKey = user?.login ? `github-stars-batch-star-inputs:${user.login.toLowerCase()}` : null;
+  const inputHistory = inputHistoryState.key === historyKey ? inputHistoryState.entries : [];
   const {
     rows,
     duplicates,
@@ -50,12 +58,42 @@ export const BatchStarImportDialog: FC<BatchStarImportDialogProps> = ({ open, on
   const successfulCount = rows.filter(row => row.status === 'success').length;
   const failedCount = rows.filter(row => row.status === 'star-error' || row.status === 'resolve-error').length;
 
+  useEffect(() => {
+    if (!historyKey) {
+      setInputHistoryState({ key: null, entries: [] });
+      return;
+    }
+    try {
+      const saved = JSON.parse(localStorage.getItem(historyKey) || '[]');
+      setInputHistoryState({
+        key: historyKey,
+        entries: Array.isArray(saved) ? saved.filter((entry): entry is string => typeof entry === 'string').slice(0, 10) : [],
+      });
+    } catch {
+      setInputHistoryState({ key: historyKey, entries: [] });
+    }
+  }, [historyKey]);
+
+  const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const pasted = event.clipboardData.getData('text/plain').trim().slice(0, 200_000);
+    if (!pasted || !historyKey) return;
+
+    const nextHistory = [pasted, ...inputHistory.filter(entry => entry !== pasted)].slice(0, 10);
+    setInputHistoryState({ key: historyKey, entries: nextHistory });
+    try {
+      localStorage.setItem(historyKey, JSON.stringify(nextHistory));
+    } catch {
+      // Keep the current session usable when browser storage is unavailable or full.
+    }
+  };
+
   const handleOpenChange = (nextOpen: boolean) => {
     if (nextOpen) return;
     if (busy) return;
     reset();
     setInput('');
     setTranslateDescriptions(false);
+    setReadmeRepository(null);
     onClose();
   };
 
@@ -73,12 +111,34 @@ export const BatchStarImportDialog: FC<BatchStarImportDialogProps> = ({ open, on
           <Textarea
             value={input}
             onChange={(event) => setInput(event.target.value)}
+            onPaste={handlePaste}
             disabled={busy}
             maxLength={200_000}
             rows={5}
             aria-label={t('仓库链接或 JSON', 'Repository links or JSON')}
             placeholder={t('https://github.com/owner/repo\n[项目](https://github.com/owner/another-repo)', 'https://github.com/owner/repo\n[Project](https://github.com/owner/another-repo)')}
           />
+          {inputHistory.length > 0 && (
+            <label className="block space-y-1 text-xs text-muted-foreground">
+              <span>{t('最近粘贴的输入', 'Recent pasted inputs')}</span>
+              <select
+                aria-label={t('最近粘贴的输入', 'Recent pasted inputs')}
+                value=""
+                onChange={(event) => {
+                  const historyInput = inputHistory[Number(event.target.value)];
+                  if (historyInput !== undefined) setInput(historyInput);
+                }}
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+              >
+                <option value="">{t('选择一条输入以继续编辑', 'Select an input to edit')}</option>
+                {inputHistory.map((historyInput, index) => (
+                  <option key={`${index}-${historyInput.slice(0, 24)}`} value={index}>
+                    {historyInput.replace(/\s+/g, ' ').slice(0, 120)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <div className="flex flex-wrap items-center justify-between gap-3">
             <label className="flex items-center gap-2 text-sm text-muted-foreground">
               <Checkbox
@@ -133,6 +193,18 @@ export const BatchStarImportDialog: FC<BatchStarImportDialogProps> = ({ open, on
                       <a href={`https://github.com/${row.fullName}`} target="_blank" rel="noreferrer" className="truncate font-medium text-primary hover:underline">
                         {row.fullName}
                       </a>
+                      {row.repository && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 gap-1 px-2 text-xs"
+                          onClick={() => setReadmeRepository(row.repository ?? null)}
+                        >
+                          <BookOpen className="h-3.5 w-3.5" />
+                          {t('预览 README', 'Preview README')}
+                        </Button>
+                      )}
                       <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs ${row.status === 'resolve-error' || row.status === 'star-error' ? 'bg-destructive/10 text-destructive' : row.status === 'success' ? 'bg-green-500/10 text-green-700 dark:text-green-400' : 'bg-muted text-muted-foreground'}`}>
                         {row.status === 'success' ? <Check className="h-3 w-3" /> : row.status === 'resolve-error' || row.status === 'star-error' ? <AlertCircle className="h-3 w-3" /> : row.status === 'starred' ? <Star className="h-3 w-3" /> : null}
                         {statusLabel(row.status, t)}
@@ -194,6 +266,15 @@ export const BatchStarImportDialog: FC<BatchStarImportDialogProps> = ({ open, on
           </Button>
         </DialogFooter>
       </DialogContent>
+      {readmeRepository && (
+        <Suspense fallback={null}>
+          <LazyReadmeModal
+            isOpen={open}
+            repository={readmeRepository}
+            onClose={() => setReadmeRepository(null)}
+          />
+        </Suspense>
+      )}
     </Dialog>
   );
 };

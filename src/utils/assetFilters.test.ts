@@ -31,6 +31,12 @@ describe('asset filters', () => {
     expect(matchesAssetFilter({ ...exclusionOnly, keywords: ['source'] }, 'owner/repo', names([], ['Source code (v1.zip)']))).toBe(false);
   });
 
+  it('does not let generated source archives satisfy include keywords', () => {
+    const filter: AssetFilter = { id: 'f', name: 'zip', keywords: ['zip'] };
+    expect(matchesAssetFilter(filter, 'owner/repo', names([], ['Source code (v1.zip)']))).toBe(false);
+    expect(matchesAssetFilter(filter, 'owner/repo', names(['app.zip'], ['app.zip', 'Source code (v1.zip)']))).toBe(true);
+  });
+
   it('does not match a filter without a positive rule', () => {
     expect(matchesAssetFilter({ id: 'f', name: 'empty', keywords: [] }, 'owner/repo', names(['app.zip']))).toBe(false);
   });

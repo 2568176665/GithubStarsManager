@@ -12,6 +12,7 @@ import type { GitHubList } from '../../../services/githubListsApi';
 import type { VectorQueryResult } from '../../../services/vectorSearchService';
 import { backend } from '../../../services/backendAdapter';
 import { isReservedCategoryName } from '../../../utils/categoryUtils';
+import { mergeRepositoriesPreservingLocalMetadata } from '../../../utils/repositoryMerge';
 import {
   classifyLocalSearchQuality,
   mergeHybridSearchResults,
@@ -45,27 +46,26 @@ export const mergeStarredRepositories = (
   storeRepos: Repository[],
 ): Repository[] => {
   const existingRepoMap = new Map(storeRepos.map(repo => [repo.id, repo]));
+  const existingRepoNameMap = new Map(
+    storeRepos.map(repo => [repo.full_name.trim().toLowerCase(), repo]),
+  );
   return newRepos.map(newRepo => {
-    const existing = existingRepoMap.get(newRepo.id);
+    // Older versions generated a local ID when a repository was first added.
+    // Match those records by GitHub's stable full_name, then replace the ID
+    // with the real GitHub ID returned by the sync endpoint.
+    const existing = existingRepoMap.get(newRepo.id)
+      ?? existingRepoNameMap.get(newRepo.full_name.trim().toLowerCase());
     if (existing) {
+      const [merged] = mergeRepositoriesPreservingLocalMetadata(
+        [{ ...newRepo, id: existing.id }],
+        [existing],
+      );
       return {
-        ...existing,
-        name: newRepo.name,
-        full_name: newRepo.full_name,
-        description: newRepo.description,
-        html_url: newRepo.html_url,
-        stargazers_count: newRepo.stargazers_count,
-        forks_count: newRepo.forks_count,
-        forks: newRepo.forks,
-        language: newRepo.language,
-        updated_at: newRepo.updated_at,
-        pushed_at: newRepo.pushed_at,
-        starred_at: newRepo.starred_at,
-        owner: newRepo.owner,
-        topics: newRepo.topics,
-        // 回填历史仓库缺失的 license 字段（GitHub 源元数据，跟随 newRepo）
+        ...merged,
+        id: newRepo.id,
+        // GitHub source fields follow the fresh response. Missing optional
+        // health fields fall back to the cached value.
         license: newRepo.license ?? null,
-        // GitHub 原生健康字段：源数据缺失时保留已有值，避免刷新后退化为未知。
         archived: newRepo.archived ?? existing.archived,
         disabled: newRepo.disabled ?? existing.disabled,
         fork: newRepo.fork ?? existing.fork,

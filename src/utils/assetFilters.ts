@@ -83,7 +83,9 @@ export function matchesAssetFilter(filter: AssetFilter, repositoryFullName: stri
 
   // A repository allow-list is a positive rule and bypasses filename matching.
   if (hasIncludeRepos) return true;
-  if (hasIncludeKeywords) return containsKeyword(names.all, normalized.keywords);
+  // GitHub's zipball/tarball links are generated source archives, not uploaded
+  // assets. They must not make an include-keyword filter match a release.
+  if (hasIncludeKeywords) return containsKeyword(names.uploaded, normalized.keywords);
 
   // An always-exclude list alone means every other repository is included.
   if ((normalized.alwaysExcludeRepos?.length ?? 0) > 0 && !hasExcludeKeywords) return true;
@@ -91,6 +93,28 @@ export function matchesAssetFilter(filter: AssetFilter, repositoryFullName: stri
   // Exclusion-only filters need a real uploaded asset to avoid matching every
   // release that only has GitHub's automatically generated source archives.
   return hasExcludeKeywords && names.uploaded.length > 0;
+}
+
+/** Whether one displayed link is an asset matched by the filter. */
+export function matchesAssetLinkFilter(
+  filter: AssetFilter,
+  repositoryFullName: string,
+  name: string,
+  isSourceCode = false,
+): boolean {
+  const normalized = normalizeAssetFilter(filter);
+  if (!normalized) return false;
+
+  // Source archives are never uploaded assets, so positive filename rules do
+  // not select them. Repository-only rules still apply to the whole release.
+  if (isSourceCode && normalized.keywords.length > 0 && !normalized.includeRepos?.length) {
+    return false;
+  }
+
+  return matchesAssetFilter(normalized, repositoryFullName, {
+    uploaded: [name],
+    all: [name],
+  });
 }
 
 export function matchesReleaseAssetFilters(

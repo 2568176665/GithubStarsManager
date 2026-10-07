@@ -23,6 +23,16 @@ interface BatchStarImportResult {
   failed: number;
 }
 
+export const formatBatchStarError = (error: unknown, language: 'zh' | 'en'): string => {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/403\b/i.test(message) && /resource not accessible by personal access token|forbidden/i.test(message)) {
+    return language === 'zh'
+      ? 'GitHub 拒绝了 Star 请求：当前 token 缺少 Star 权限。Classic token 请勾选 user 权限；Fine-grained token 请授予 Starring（Read and write）和 Metadata（Read-only）权限，然后重新登录。'
+      : 'GitHub rejected the Star request because this token lacks Star permission. For a classic token, enable the user scope; for a fine-grained token, grant Starring (Read and write) and Metadata (Read-only), then sign in again.';
+  }
+  return message;
+};
+
 export const useBatchStarImport = (onSynced?: () => Promise<void>) => {
   const githubToken = useAppStore(state => state.githubToken);
   const language = useAppStore(state => state.language);
@@ -182,7 +192,7 @@ export const useBatchStarImport = (onSynced?: () => Promise<void>) => {
       } catch (error) {
         failed++;
         setRows(previous => previous.map(item => item.fullName === row.fullName
-          ? { ...item, status: 'star-error', error: error instanceof Error ? error.message : String(error) }
+          ? { ...item, status: 'star-error', error: formatBatchStarError(error, language) }
           : item
         ));
       } finally {
@@ -199,7 +209,7 @@ export const useBatchStarImport = (onSynced?: () => Promise<void>) => {
     }
     setIsStarring(false);
     return { succeeded, failed };
-  }, [githubToken, isStarring, isResolving, rows, onSynced]);
+  }, [githubToken, isStarring, isResolving, rows, onSynced, language]);
 
   return {
     rows,

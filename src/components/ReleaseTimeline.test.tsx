@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ReleaseTimeline } from './ReleaseTimeline';
 import { useAppStore } from '../store/useAppStore';
 import { defaultReleaseSourceSettings } from '../types';
-import type { Release, Repository } from '../types';
+import type { AssetFilter, Release, Repository } from '../types';
 
 const { markAllReleasesOnBackend } = vi.hoisted(() => ({
   markAllReleasesOnBackend: vi.fn(),
@@ -93,7 +93,7 @@ const baseStoreState = () => ({
   readReleases: new Set<number>(),
   githubToken: 'token',
   language: 'zh' as const,
-  assetFilters: [],
+  assetFilters: [] as AssetFilter[],
   addReleases: vi.fn(),
   upsertReleases: vi.fn(),
   markReleaseAsRead: vi.fn(),
@@ -106,7 +106,7 @@ const baseStoreState = () => ({
   updateReleaseSourceRepository: vi.fn(),
   addReleaseSourceRepository: vi.fn(),
   removeReleaseSourceRepositoryByName: vi.fn(),
-  releaseViewMode: 'list' as const,
+  releaseViewMode: 'list' as 'list' | 'timeline',
   releaseSelectedFilters: [] as string[],
   releaseSearchQuery: '',
   releaseExpandedRepositories: new Set<number>([7]),
@@ -119,7 +119,7 @@ const baseStoreState = () => ({
   setReleaseIsRefreshing: vi.fn(),
   includePreRelease: false,
   setIncludePreRelease: vi.fn(),
-  releaseShowMode: 'unread' as const,
+  releaseShowMode: 'unread' as 'all' | 'unread',
   setReleaseShowMode: vi.fn(),
   releaseLatestMode: 'all' as const,
   setReleaseLatestMode: vi.fn(),
@@ -197,5 +197,45 @@ describe('ReleaseTimeline unread snapshot', () => {
     });
     // 展开确实生效：资产行可见
     expect(await screen.findByText('app.zip')).toBeInTheDocument();
+  });
+
+  it('shows only matching assets by default and can reveal all assets per card', async () => {
+    const user = userEvent.setup();
+    const release = createRelease();
+    release.assets = [
+      release.assets[0],
+      {
+        ...release.assets[0],
+        id: 502,
+        name: 'notes.txt',
+        browser_download_url: 'https://github.com/owner/repo/releases/download/v1.0.0/notes.txt',
+      },
+    ];
+    release.zipball_url = 'https://api.github.com/repos/owner/repo/zipball/v1.0.0';
+    storeState = createStoreState({
+      releases: [release],
+      readReleases: new Set([release.id]),
+      releaseSelectedFilters: ['app-filter'],
+      assetFilters: [{ id: 'app-filter', name: 'App', keywords: ['app'] }],
+      releaseViewMode: 'timeline',
+      releaseShowMode: 'all',
+    });
+    mockUseAppStore.mockImplementation(((selector?: (s: typeof storeState) => unknown) =>
+      selector ? selector(storeState) : storeState) as unknown as typeof useAppStore);
+    Object.assign(mockUseAppStore, {
+      getState: vi.fn(() => storeState),
+      setState: vi.fn((update: Partial<typeof storeState>) => Object.assign(storeState, update)),
+    });
+
+    render(<ReleaseTimeline />);
+    await user.click(screen.getByRole('button', { name: '显示下载资产' }));
+
+    expect(await screen.findByText('app.zip')).toBeInTheDocument();
+    expect(screen.queryByText('notes.txt')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Source code \(v1\.0\.0\.zip\)/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '显示全部资产' }));
+    expect(await screen.findByText('notes.txt')).toBeInTheDocument();
+    expect(screen.getByText(/Source code \(v1\.0\.0\.zip\)/)).toBeInTheDocument();
   });
 });

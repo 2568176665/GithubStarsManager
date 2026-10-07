@@ -708,6 +708,45 @@ describe('useAppStore repository performance guards', () => {
 
     expect(useAppStore.getState().searchResults).toBe(useAppStore.getState().repositories);
   });
+
+  it('repairs a legacy repository ID while preserving local metadata', () => {
+    const existing = createRepository(999, {
+      full_name: 'Owner/Repo',
+      ai_summary: 'local summary',
+      custom_description: 'local description',
+      custom_tags: ['keep'],
+      custom_category: 'Tools',
+      category_locked: true,
+      last_edited: '2026-01-04T00:00:00.000Z',
+    });
+    useAppStore.setState({ repositories: [existing], searchResults: [existing] });
+
+    useAppStore.getState().addRepository(createRepository(42, {
+      full_name: 'owner/repo',
+      description: 'fresh description',
+    }));
+
+    expect(useAppStore.getState().repositories).toHaveLength(1);
+    expect(useAppStore.getState().repositories[0]).toMatchObject({
+      id: 42,
+      description: 'fresh description',
+      ai_summary: 'local summary',
+      custom_description: 'local description',
+      custom_tags: ['keep'],
+      custom_category: 'Tools',
+      category_locked: true,
+      last_edited: '2026-01-04T00:00:00.000Z',
+    });
+  });
+
+  it('keeps the GitHub ID when adding a new repository', () => {
+    useAppStore.setState({ repositories: [], searchResults: [] });
+
+    useAppStore.getState().addRepository(createRepository(42));
+
+    expect(useAppStore.getState().repositories).toHaveLength(1);
+    expect(useAppStore.getState().repositories[0].id).toBe(42);
+  });
 });
 
 describe('useAppStore auth localStorage mirror (Issue #259)', () => {

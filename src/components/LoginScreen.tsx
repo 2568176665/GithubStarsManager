@@ -137,9 +137,13 @@ export const LoginScreen: React.FC = () => {
             <h3 className="mb-2 text-sm font-medium text-foreground">{t('如何创建 GitHub token:', 'How to create a GitHub token:')}</h3>
             <ol className="space-y-1 text-xs leading-5 text-muted-foreground">
               <li>1. {t('访问 GitHub Settings → Developer settings → Personal access tokens', 'Go to GitHub Settings → Developer settings → Personal access tokens')}</li>
-              <li>2. {t('点击 Generate new token (classic)', 'Click Generate new token (classic)')}</li>
-              <li>3. {t('选择所需权限范围并复制 token', 'Select the required scopes and copy the token')}</li>
+              <li>2. {t('点击 Generate new token (classic) 或 Fine-grained token', 'Click Generate new token (classic) or Fine-grained token')}</li>
+              <li>3. {t('选择所需权限并复制 token', 'Select the required permissions and copy the token')}</li>
             </ol>
+            <div className="mt-3 space-y-2 border-t border-border pt-3 text-xs leading-5 text-muted-foreground">
+              <p><span className="font-medium text-foreground">{t('经典 token：', 'Classic token:')}</span> {t('勾选 user 权限；如果需要访问私有仓库，再勾选 repo。', 'Enable the user scope; also enable repo if you need access to private repositories.')}</p>
+              <p><span className="font-medium text-foreground">{t('细粒度 token：', 'Fine-grained token:')}</span> {t('授予 Starring（读写）和 Metadata（只读）权限，并选择可访问的仓库。', 'Grant Starring (read and write) and Metadata (read-only), then select the repositories it can access.')}</p>
+            </div>
             <a href="https://github.com/settings/tokens" target="_blank" rel="noopener noreferrer" className="mt-3 inline-block text-sm font-medium text-primary hover:underline">{t('在 GitHub 上创建 token →', 'Create a token on GitHub →')}</a>
           </div>}
         </Card>
