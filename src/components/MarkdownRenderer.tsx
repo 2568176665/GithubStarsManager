@@ -44,7 +44,8 @@ const REHYPE_PLUGINS_NO_HTML: never[] = [];
 
 // Matches $$display$$, \(inline\), \[display\] and $inline$ math so KaTeX is
 // only loaded for documents that actually use it.
-const MATH_PATTERN =
+// Exported so tests can assert the lazy-load gate directly.
+export const MATH_PATTERN =
   /\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|\$(?!\s)(?:\\.|[^$\\\n])*?[^\s$\\\n]\$/;
 
 interface MathPlugins {
@@ -100,10 +101,8 @@ const CodeBlock: React.FC<{
   }, [language]);
 
   const codeText = useMemo(() => {
-    if (typeof children === 'string') {
-      return children.replace(/\n$/, '');
-    }
-    return String(children).replace(/\n$/, '');
+    const raw = typeof children === 'string' ? children : String(children);
+    return raw.replace(/^\n+/, '').replace(/\n+$/, '');
   }, [children]);
 
   useEffect(() => {
@@ -913,10 +912,16 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = memo(({
       return <CodeBlock language={language}>{children}</CodeBlock>;
     },
     pre: ({ children }) => {
-      // 给 code 子元素添加标记，表明它是代码块而不是行内代码
-      if (React.isValidElement(children) && children.type === 'code') {
+      // react-markdown v10 传给 pre 的是覆写后的 code 组件元素，
+      // 因此用 hast node 的 tagName 识别 code 子元素。
+      const nodes = React.Children.toArray(children);
+      const onlyChild = nodes.length === 1 ? nodes[0] : null;
+      const isCodeChild = React.isValidElement(onlyChild)
+        && (onlyChild.type === 'code'
+          || (onlyChild.props as { node?: { tagName?: string } }).node?.tagName === 'code');
+      if (onlyChild && isCodeChild) {
         type CodeBlockMarkerProps = React.ComponentPropsWithoutRef<'code'> & { 'data-code-block'?: boolean };
-        return <>{React.cloneElement(children as React.ReactElement<CodeBlockMarkerProps>, { 'data-code-block': true })}</>;
+        return <>{React.cloneElement(onlyChild as React.ReactElement<CodeBlockMarkerProps>, { 'data-code-block': true })}</>;
       }
       // 对于非 code 子元素（如 ASCII 字符画），保留 pre 标签
       return <pre>{children}</pre>;

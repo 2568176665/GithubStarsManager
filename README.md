@@ -25,6 +25,8 @@ A browser-first app for organizing, rediscovering, and following GitHub starred 
 - `GITHUB_TOKEN` — Worker Secret used for the managed GitHub session and GitHub API proxy.
 - D1 — synchronized repositories, Releases, settings, and service configuration.
 
+The browser cache uses atomic IndexedDB shards and automatically migrates older single-snapshot caches. Only changed shards are written; large shards may wait up to one minute between idle writes, while hiding or leaving the page requests an immediate flush.
+
 The Worker is the only supported production entry point. Keep existing API contracts and browser fallback behavior when changing the frontend or Worker.
 
 ## Local development

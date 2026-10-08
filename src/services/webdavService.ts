@@ -137,44 +137,72 @@ export class WebDAVService {
       // 构建用于测试的目录URL（优先测试配置中的 path）
       const dirUrl = `${this.config.url}${this.config.path}`;
 
-      // 先尝试 HEAD 请求检测基本可达性（某些服务器对 PROPFIND/OPTIONS 支持较差）
+      // WebDAV 集合可能拒绝 HEAD；优先 PROPFIND，整个探测共用 10 秒预算。
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10秒超时
-
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
       try {
+        let propfindResponse: Response | undefined;
+        try {
+          propfindResponse = await fetch(dirUrl, {
+            method: 'PROPFIND',
+            headers: { 'Authorization': this.getAuthHeader(), 'Depth': '0' },
+            signal: controller.signal,
+          });
+        } catch (error) {
+          if ((error as Error).name === 'AbortError') throw error;
+          // 某些网关不放行 PROPFIND，保留浏览器 HEAD 回退。
+        }
+        if (propfindResponse?.status === 207) {
+          return await this.multistatusTargetSucceeded(propfindResponse, dirUrl);
+        }
+        if (propfindResponse?.ok) return true;
+        controller.signal.throwIfAborted();
         const headResponse = await fetch(dirUrl, {
           method: 'HEAD',
-          headers: {
-            'Authorization': this.getAuthHeader(),
-          },
+          headers: { 'Authorization': this.getAuthHeader() },
           signal: controller.signal,
         });
-
-        clearTimeout(timeoutId);
-
-        if (headResponse.ok) return true;
-
-        // HEAD 不可用时，尝试 PROPFIND（不少服务器返回 207 Multi-Status 表示成功）
-        const propfindResponse = await fetch(dirUrl, {
-          method: 'PROPFIND',
-          headers: {
-            'Authorization': this.getAuthHeader(),
-            'Depth': '0',
-          },
-        });
-
-        return propfindResponse.ok || propfindResponse.status === 207;
+        return headResponse.ok;
       } catch (fetchError: unknown) {
-        clearTimeout(timeoutId);
-        
         if ((fetchError as Error).name === 'AbortError') {
           throw new Error('连接超时。请检查WebDAV服务器是否可访问。');
         }
-        
         throw fetchError;
+      } finally {
+        clearTimeout(timeoutId);
       }
     } catch (error: unknown) {
       return this.handleNetworkError(error, '连接测试');
+    }
+  }
+
+  /** 207 外层成功可能包含目标资源的失败；属性级 404 不代表资源不存在。 */
+  private async multistatusTargetSucceeded(response: Response, targetUrl: string): Promise<boolean> {
+    const body = await response.text();
+    try {
+      const doc = new DOMParser().parseFromString(body, 'application/xml');
+      const normalizePath = (url: string): string => {
+        const pathname = new URL(url, targetUrl).pathname;
+        return decodeURIComponent(pathname).replace(/\/+$/, '') || '/';
+      };
+      const targetPath = normalizePath(targetUrl);
+      const responses = Array.from(doc.getElementsByTagName('*')).filter((el) => el.localName === 'response');
+      const match = responses.find((el) => {
+        const href = Array.from(el.children).find((child) => child.localName === 'href')?.textContent;
+        if (!href) return false;
+        try {
+          return normalizePath(href) === targetPath;
+        } catch {
+          return false;
+        }
+      });
+      const status = match && Array.from(match.children).find((child) => child.localName === 'status');
+      if (!status) return true;
+      const code = Number(status.textContent?.match(/\b(\d{3})\b/)?.[1] ?? 0);
+      return code === 0 || (code >= 200 && code < 300);
+    } catch {
+      // ponytail: 无法识别的 Multi-Status 按外层 207 放行；遇到真实兼容问题再收紧解析。
+      return true;
     }
   }
 
@@ -367,23 +395,32 @@ export class WebDAVService {
   }
 
   async fileExists(filename: string): Promise<boolean> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10秒超时
-
-      const response = await fetch(this.getFullPath(filename), {
+      const url = this.getFullPath(filename);
+      const response = await fetch(url, {
         method: 'HEAD',
-        headers: {
-          'Authorization': this.getAuthHeader(),
-        },
+        headers: { 'Authorization': this.getAuthHeader() },
         signal: controller.signal,
       });
-
-      clearTimeout(timeoutId);
+      if (response.status === 403) {
+        controller.signal.throwIfAborted();
+        const propfindResponse = await fetch(url, {
+          method: 'PROPFIND',
+          headers: { 'Authorization': this.getAuthHeader(), 'Depth': '0' },
+          signal: controller.signal,
+        });
+        return propfindResponse.status === 207
+          ? await this.multistatusTargetSucceeded(propfindResponse, url)
+          : propfindResponse.ok;
+      }
       return response.ok;
     } catch (error) {
       logger.error('webdav', 'WebDAV文件检查失败', error);
       return false;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 

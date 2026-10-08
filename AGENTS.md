@@ -32,6 +32,8 @@ Run `npm ci` at the repository root first; run `npm ci` in `cloudflare-worker/` 
 
 Use TypeScript with two-space indentation, single quotes, semicolons, and the existing ESLint configuration. Use `PascalCase` for React components, `camelCase` for functions/variables, and descriptive `*.test.ts` or `*.test.tsx` names. Keep application commands pure; put service calls in feature hooks or services. Frontend API calls must use the existing Worker adapter and preserve browser-direct fallback where supported.
 
+浏览器状态按分片引用判脏持久化。更新 `repositories`、`gists`、`starredGists`、`releases`、`forks` 时必须创建新数组，禁止对 store 中的数组或元素原地修改；清空缓存必须 await 持久化层的串行删除。
+
 ## Testing Guidelines
 
 Frontend tests use Vitest; frontend UI tests use Testing Library with `jsdom`. Add focused tests for behavior changes, colocated with the implementation or under a feature’s `__tests__/` directory. No coverage threshold is enforced, but run coverage for substantial changes.

@@ -1017,3 +1017,15 @@ describe('useAppStore persistence contracts', () => {
   });
 
 });
+
+describe('persistence reference stability', () => {
+  it('keeps repositories reference when release metadata needs no migration', () => {
+    const repositories = [createRepository(1)];
+    const normalized = normalizePersistedState(
+      { repositories, releases: [] },
+      useAppStore.getInitialState(),
+    );
+
+    expect(normalized.repositories).toBe(repositories);
+  });
+});

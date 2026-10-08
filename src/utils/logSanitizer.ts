@@ -193,17 +193,34 @@ function sanitizeHeaders(headers: Record<string, unknown>, seen: WeakSet<object>
   return result;
 }
 
+/** Redact credentials embedded in free-form error messages and stacks. */
+export function redactInline(text: string): string {
+  return String(text)
+    .replace(/https?:\/\/[^\s"'<>]+/g, (url) => redactUrl(url))
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, '$1 ***')
+    .replace(/\bghp_[A-Za-z0-9]{36}\b/g, (value) => maskSecret(value))
+    .replace(/\bsk-[A-Za-z0-9_-]{16,}\b/g, (value) => maskSecret(value))
+    .replace(/\bgsm_mcp_\S+/g, (value) => maskSecret(value))
+    .replace(/[^@\s"'<>]+@[^@\s"'<>]+\.[A-Za-z]{2,}/g, (value) => maskEmail(value));
+}
+
+const MAX_STACK_LENGTH = 8000;
+const MAX_NAME_LENGTH = 120;
+
 /**
  * Sanitize an Error object for logging.
  * Extracts message and stack, sanitizes any embedded secrets.
  */
 export function sanitizeError(err: unknown): { message: string; stack?: string; name?: string } {
-  if (!(err instanceof Error)) {
-    return { message: sanitizeString(String(err)) };
+  const isErrorLike = err instanceof Error
+    || (typeof DOMException !== 'undefined' && err instanceof DOMException);
+  if (!isErrorLike) {
+    return { message: redactInline(sanitizeString(String(err))) };
   }
+  const { name, message, stack } = err as Error;
   return {
-    name: err.name,
-    message: sanitizeString(err.message),
-    stack: err.stack ? sanitizeString(err.stack) : undefined,
+    name: redactInline(sanitizeString(String(name ?? ''))).slice(0, MAX_NAME_LENGTH),
+    message: redactInline(sanitizeString(message)),
+    stack: stack ? redactInline(sanitizeString(stack)).slice(0, MAX_STACK_LENGTH) : undefined,
   };
 }

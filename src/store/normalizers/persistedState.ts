@@ -57,9 +57,12 @@ export const normalizePersistedState = (
   const activeAIConfig = resolveActiveAIConfig(aiConfigs, persistedActiveAIConfig)?.id ?? null;
 
   // Migration for old users: mark repos with existing releases as already synced
-  const migratedRepositories = repositories.map(repo => {
+
+  let repositoriesChanged = false;
+  const migratedRepositoryCandidates = repositories.map(repo => {
     const hasExistingRelease = releases.some(r => r.repository?.id === repo.id);
     if (hasExistingRelease && !repo.has_fetched_releases) {
+      repositoriesChanged = true;
       // Backfill last_release_fetch_time from the latest persisted release timestamp
       const repoReleases = releases.filter(r => r.repository?.id === repo.id);
       const latestReleaseTime = repoReleases.length > 0
@@ -73,6 +76,7 @@ export const normalizePersistedState = (
     }
     return repo;
   });
+  const migratedRepositories = repositoriesChanged ? migratedRepositoryCandidates : repositories;
 
   // Default includePreRelease to true if not set (backward compatibility)
   const includePreRelease = safePersisted.includePreRelease !== undefined

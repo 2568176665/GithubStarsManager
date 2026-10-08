@@ -23,6 +23,34 @@ const LEVEL_ORDER: Record<LogLevel, number> = {
   error: 3,
 };
 
+function isErrorValue(value: unknown): boolean {
+  return value instanceof Error
+    || (typeof DOMException !== 'undefined' && value instanceof DOMException);
+}
+
+function errorToLogRecord(error: unknown): Record<string, unknown> {
+  const extras = sanitizeForLog({ ...(error as object) }) as Record<string, unknown>;
+  return { ...extras, ...sanitizeError(error) };
+}
+
+function prepareErrorValues(data: unknown, seen: WeakSet<object> = new WeakSet()): unknown {
+  if (isErrorValue(data)) return errorToLogRecord(data);
+  if (typeof data !== 'object' || data === null) return data;
+  if (seen.has(data)) return data;
+  seen.add(data);
+  let changed = false;
+  const convert = (value: unknown): unknown => {
+    const next = prepareErrorValues(value, seen);
+    if (next !== value) changed = true;
+    return next;
+  };
+  const converted = Array.isArray(data)
+    ? data.map(convert)
+    : Object.fromEntries(Object.entries(data as Record<string, unknown>).map(([key, value]) => [key, convert(value)]));
+  seen.delete(data);
+  return changed ? converted : data;
+}
+
 class Logger {
   private buffer: LogEntry[] = [];
   private maxEntries = 2000;
@@ -33,7 +61,7 @@ class Logger {
 
     // Sanitize at write time — buffer never contains secrets
     const sanitizedMessage = typeof message === 'string' ? sanitizeForLog(message) as string : String(message);
-    const sanitizedData = data !== undefined ? sanitizeForLog(data) : undefined;
+    const sanitizedData = data !== undefined ? sanitizeForLog(prepareErrorValues(data)) : undefined;
 
     const entry: LogEntry = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,

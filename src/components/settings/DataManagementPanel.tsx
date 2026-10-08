@@ -48,7 +48,7 @@ import { useAppStore } from '../../store/useAppStore';
 import { useShallow } from 'zustand/react/shallow';
 import { isThemePresetId } from '../../constants/themePresets';
 import type { ThemePresetId } from '../../constants/themePresets';
-import { indexedDBStorage } from '../../services/indexedDbStorage';
+import { removePersistedSnapshot } from '../../store/persistence/storage';
 import { IncludeKeysToggle } from './IncludeKeysToggle';
 import { parseBackupDocument, restoreBackupDocument, type BackupData, type BackupDocument } from '../../features/settings/backup/backupService';
 import { version as appVersion } from '../../../package.json';
@@ -353,9 +353,9 @@ export const DataManagementPanel: React.FC<DataManagementPanelProps> = ({ t }) =
     // Clear sessionStorage - only remove app-owned keys
     APP_SESSIONSTORAGE_KEYS.forEach((key) => sessionStorage.removeItem(key));
 
-    // Clear IndexedDB - only remove the specific database used by this app
+    // Await the persistence write chain before deleting shards and resetting dirty checks.
     try {
-      await indexedDBStorage.removeItem('github-stars-manager');
+      await removePersistedSnapshot(useAppStore.persist.getOptions().name ?? 'github-stars-manager');
     } catch (error) {
       console.error('Failed to clear IndexedDB', error);
       throw new Error('IndexedDB clear failed');
