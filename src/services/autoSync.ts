@@ -29,8 +29,20 @@ let _debounceTimer: ReturnType<typeof setTimeout> | null = null;
 // Polling timer for pull-from-backend
 let _pollTimer: ReturnType<typeof setInterval> | null = null;
 
-// Polling interval in milliseconds
-const POLL_INTERVAL = 5000;
+// Listener for visibility and window focus changes
+let _visibilityListener: (() => void) | null = null;
+export const POLL_INTERVAL = 30000;
+export const MIN_SYNC_ON_VISIBLE_INTERVAL = 10000;
+let _lastSyncAttemptTime = -MIN_SYNC_ON_VISIBLE_INTERVAL;
+
+function onVisibilityOrFocus(): void {
+  if (typeof document !== 'undefined' && Boolean(document.hidden)) return;
+  const now = Date.now();
+  if (now - _lastSyncAttemptTime >= MIN_SYNC_ON_VISIBLE_INTERVAL) {
+    _lastSyncAttemptTime = now;
+    void syncFromBackend();
+  }
+}
 
 // Last known backend data fingerprints — skip store update if unchanged
 const _lastHash = {
@@ -167,6 +179,7 @@ export async function syncFromBackend(): Promise<void> {
   }
 
   _isSyncingFromBackendActive = true;
+  _lastSyncAttemptTime = Date.now();
 
   const startTime = Date.now();
   try {
@@ -601,12 +614,25 @@ export function startAutoSync(): () => void {
   });
   _storeUnsubscribe = unsubscribe;
 
-  // 2. Poll backend every 5s → pull fresh data for cross-device sync
+  if (_visibilityListener && typeof document !== 'undefined') {
+    document.removeEventListener('visibilitychange', _visibilityListener);
+    window.removeEventListener('focus', _visibilityListener);
+    _visibilityListener = null;
+  }
+  if (typeof document !== 'undefined') {
+    _visibilityListener = onVisibilityOrFocus;
+    document.addEventListener('visibilitychange', _visibilityListener);
+    window.addEventListener('focus', _visibilityListener);
+  }
+
+  // 2. Poll backend every 30s when visible → pull fresh data for cross-device sync
   _pollTimer = setInterval(() => {
-    syncFromBackend();
+    if (typeof document !== 'undefined' && Boolean(document.hidden)) return;
+    _lastSyncAttemptTime = Date.now();
+    void syncFromBackend();
   }, POLL_INTERVAL);
 
-  logger.info('sync.start', 'Auto-sync started (push debounce: 2s, poll: 5s)');
+  logger.info('sync.start', 'Auto-sync started (push debounce: 2s, poll: 30s, pause-on-hidden)');
   return unsubscribe;
 }
 
@@ -622,6 +648,11 @@ export function stopAutoSync(unsubscribe: () => void): void {
     clearInterval(_pollTimer);
     _pollTimer = null;
   }
+  if (_visibilityListener && typeof document !== 'undefined') {
+    document.removeEventListener('visibilitychange', _visibilityListener);
+    window.removeEventListener('focus', _visibilityListener);
+    _visibilityListener = null;
+  }
   if (_storeUnsubscribe) {
     _storeUnsubscribe();
     _storeUnsubscribe = null;
@@ -634,5 +665,6 @@ export function stopAutoSync(unsubscribe: () => void): void {
   _isSyncingFromBackend = false;
   _hasPendingPush = false;
   _hasPendingLocalChanges = false;
+  _lastSyncAttemptTime = -MIN_SYNC_ON_VISIBLE_INTERVAL;
   logger.info('sync.stop', 'Auto-sync stopped');
 }
