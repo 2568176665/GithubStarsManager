@@ -632,4 +632,15 @@
     </changelog>
     <downloadUrl>https://github.com/2568176665/GithubStarsManager</downloadUrl>
   </version>
+  <version>
+    <number>0.8.7</number>
+    <releaseDate>2026-10-17</releaseDate>
+    <changelog>
+      <item>安全随机 ID 改造：OAuth state、日志与实体 id 改用 CSPRNG</item>
+      <item>邮箱识别正则加固，消除 ReDoS 风险</item>
+      <item>AI 接入点支持局域网地址走明文 HTTP</item>
+      <item>katex 升至 0.18.2、锁定 postcss-selector-parser 7.1.6，worker 依赖跟进上游 0.8.7</item>
+    </changelog>
+    <downloadUrl>https://github.com/2568176665/GithubStarsManager</downloadUrl>
+  </version>
 </versions>
