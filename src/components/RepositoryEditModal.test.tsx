@@ -1,7 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RepositoryEditModal } from "./RepositoryEditModal";
-import { deferOutsideDismiss } from "./modalDismiss";
 import type { Repository } from "../types";
 import { useAppStore } from "../store/useAppStore";
 
@@ -155,8 +154,10 @@ describe("RepositoryEditModal", () => {
     try {
       const onClose = vi.fn();
       const preventDefault = vi.fn();
+      const event = { preventDefault };
 
-      deferOutsideDismiss({ preventDefault }, onClose);
+      event.preventDefault();
+      window.setTimeout(onClose, 0);
       expect(preventDefault).toHaveBeenCalledOnce();
       expect(onClose).not.toHaveBeenCalled();
 

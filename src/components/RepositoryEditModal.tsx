@@ -11,7 +11,6 @@ import { useAppStore, getAllCategories } from '../store/useAppStore';
 import { useShallow } from 'zustand/react/shallow';
 import { useCategorySyncActions } from '../features/repositories/hooks/useCategorySyncActions';
 import { computeCustomCategory, getAICategory, getDefaultCategory } from '../utils/categoryUtils';
-import { deferOutsideDismiss } from './modalDismiss';
 
 interface RepositoryEditModalProps {
   isOpen: boolean;
@@ -635,7 +634,8 @@ export const RepositoryEditModal: React.FC<RepositoryEditModalProps> = ({
         // Keep the overlay mounted through this click sequence. Otherwise the
         // follow-up click can be retargeted to the repository card and open README.
         onOutsideDismiss?.();
-        deferOutsideDismiss(event, handleClose);
+        event.preventDefault();
+        window.setTimeout(handleClose, 0);
       }}
       footer={(
         <div className="flex justify-end space-x-3">

@@ -102,6 +102,10 @@ describe('RepositoryCard README lazy boundary', () => {
     ));
   });
 
+  afterEach(() => {
+    cleanup();
+  });
+
   it('restores focus to the keyboard trigger after the README modal closes', async () => {
     vi.doMock('./ReadmeModal', () => ({
       ReadmeModal: ({ onClose, onCloseAutoFocus }: ReadmeModalMockProps) => (

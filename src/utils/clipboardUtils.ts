@@ -3,26 +3,6 @@
  * 提供兼容性检查和降级方案
  */
 
-export interface ClipboardSupport {
-  writeText: boolean;
-  readText: boolean;
-  isSecureContext: boolean;
-}
-
-/**
- * 检查剪贴板 API 支持情况
- */
-export const checkClipboardSupport = (): ClipboardSupport => {
-  const isSecureContext = typeof window !== 'undefined' && window.isSecureContext;
-  const clipboard = typeof navigator !== 'undefined' ? navigator.clipboard : undefined;
-
-  return {
-    writeText: isSecureContext && !!clipboard && typeof clipboard.writeText === 'function',
-    readText: isSecureContext && !!clipboard && typeof clipboard.readText === 'function',
-    isSecureContext,
-  };
-};
-
 /**
  * 获取剪贴板不支持时的错误信息
  */
@@ -30,21 +10,23 @@ export const getClipboardErrorMessage = (
   operation: 'read' | 'write',
   language: 'zh' | 'en' = 'zh'
 ): string => {
-  const support = checkClipboardSupport();
+  const isSecureContext = typeof window !== 'undefined' && window.isSecureContext;
 
-  if (!support.isSecureContext) {
+  if (!isSecureContext) {
     return language === 'zh'
       ? '剪贴板功能需要使用 HTTPS 协议访问'
       : 'Clipboard requires HTTPS protocol';
   }
 
-  if (operation === 'write' && !support.writeText) {
+  const clipboard = typeof navigator !== 'undefined' ? navigator.clipboard : undefined;
+
+  if (operation === 'write' && !(isSecureContext && !!clipboard && typeof clipboard.writeText === 'function')) {
     return language === 'zh'
       ? '您的浏览器不支持剪贴板写入功能，请升级浏览器'
       : 'Your browser does not support clipboard write. Please upgrade your browser';
   }
 
-  if (operation === 'read' && !support.readText) {
+  if (operation === 'read' && !(isSecureContext && !!clipboard && typeof clipboard.readText === 'function')) {
     return language === 'zh'
       ? '您的浏览器不支持剪贴板读取功能，请升级浏览器'
       : 'Your browser does not support clipboard read. Please upgrade your browser';
@@ -55,14 +37,26 @@ export const getClipboardErrorMessage = (
     : 'Clipboard operation failed. Please check browser permissions';
 };
 
+/** 检查是否支持写入剪贴板 */
+const canWriteText = (): boolean => {
+  const isSecureContext = typeof window !== 'undefined' && window.isSecureContext;
+  const clipboard = typeof navigator !== 'undefined' ? navigator.clipboard : undefined;
+  return isSecureContext && !!clipboard && typeof clipboard.writeText === 'function';
+};
+
+/** 检查是否支持读取剪贴板 */
+const canReadText = (): boolean => {
+  const isSecureContext = typeof window !== 'undefined' && window.isSecureContext;
+  const clipboard = typeof navigator !== 'undefined' ? navigator.clipboard : undefined;
+  return isSecureContext && !!clipboard && typeof clipboard.readText === 'function';
+};
+
 /**
  * 安全的剪贴板写入函数
  * 带有兼容性检查和降级方案
  */
 export const safeWriteText = async (text: string): Promise<{ success: boolean; error?: string }> => {
-  const support = checkClipboardSupport();
-
-  if (!support.writeText) {
+  if (!canWriteText()) {
     // 尝试使用降级方案（execCommand）
     try {
       const textarea = document.createElement('textarea');
@@ -106,9 +100,7 @@ export const safeWriteText = async (text: string): Promise<{ success: boolean; e
  * 带有兼容性检查
  */
 export const safeReadText = async (): Promise<{ success: boolean; text?: string; error?: string }> => {
-  const support = checkClipboardSupport();
-
-  if (!support.readText) {
+  if (!canReadText()) {
     return {
       success: false,
       error: getClipboardErrorMessage('read'),
