@@ -3,6 +3,7 @@ import { isToolCallCapableApiType } from '../constants/aiCapabilities';
 import { backend } from './backendAdapter';
 import { buildApiUrl, buildFinalApiUrl } from '../utils/apiUrlBuilder';
 import { NO_LICENSE_SENTINEL, normalizeLicense } from '../utils/licenseFilter';
+import { isLocalOrLanHost } from '../utils/lanAddress';
 import { logger } from './logger';
 
 interface OpenAIResponseContentPart {
@@ -398,8 +399,8 @@ export class AIService {
 
   /**
    * 直连模式安全守卫：禁止把 Authorization / x-api-key / URL key 通过明文
-   * HTTP 发往远端。仅 localhost / 127.0.0.1 / [::1] / 0.0.0.0 等本机地址豁免
-   * （本地推理服务场景）。走后端代理时由代理负责，不在此检查。
+   * HTTP 发往远端。仅本机或局域网地址（如 localhost、127.0.0.1、192.168.x.x 等）豁免
+   * （本地推理/局域网设备服务场景）。走后端代理时由代理负责，不在此检查。
    */
   private requireSecureDirectEndpoint(): void {
     if (backend.isAvailable) return;
@@ -411,11 +412,10 @@ export class AIService {
     } catch {
       // 保留字符串解析结果
     }
-    const isLocal = /^(localhost|127\.0\.0\.1|0\.0\.0\.0|::1|\[::1\])$/i.test(host);
-    if (!isLocal) {
+    if (!isLocalOrLanHost(host)) {
       throw new Error(this.language === 'zh'
-        ? 'AI 服务地址必须使用 HTTPS：为保护 API Key，仅 localhost / 127.0.0.1 等本机地址允许 HTTP。'
-        : 'The AI endpoint must use HTTPS: to protect your API key, plain HTTP is only allowed for local addresses (localhost / 127.0.0.1).');
+        ? 'AI 服务地址必须使用 HTTPS：为保护 API Key，仅 localhost / 127.0.0.1 等本机或局域网地址允许 HTTP。'
+        : 'The AI endpoint must use HTTPS: to protect your API key, plain HTTP is only allowed for local or LAN addresses (localhost / 127.0.0.1).');
     }
   }
 

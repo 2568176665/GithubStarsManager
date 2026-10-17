@@ -47,7 +47,7 @@
     "date-fns": "^3.3.1",
     "github-markdown-css": "^5.9.0",
     "highlight.js": "^11.11.1",
-    "katex": "^0.16.0",
+    "katex": "^0.18.2",
     "lucide-react": "^0.344.0",
     "mermaid": "^11.17.0",
     "react": "^18.3.1",
@@ -94,6 +94,8 @@
     "xml2js": "^0.6.2"
   },
   "overrides": {
-    "decode-uri-component": "^0.5.0"
+    "decode-uri-component": "^0.5.0",
+    "katex": "$katex",
+    "postcss-selector-parser": "^7.1.6"
   }
 }
