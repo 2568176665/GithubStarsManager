@@ -8,6 +8,7 @@ import { Modal } from './Modal';
 import type { Gist } from '../types';
 import type { GistCreateInput, GistUpdateInput } from '../features/gists/hooks/useGistActions';
 import { useAppStore } from '../store/useAppStore';
+import { createSecureId } from '../utils/cryptoRandom';
 
 interface EditableFile {
   id: string;
@@ -24,13 +25,7 @@ interface GistEditorModalProps {
   onSubmit: (input: GistCreateInput | GistUpdateInput) => Promise<void>;
 }
 
-const generateFileId = (): string => {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-  // 非安全上下文或旧浏览器降级
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-};
+const generateFileId = (): string => createSecureId();
 
 const createEmptyFile = (): EditableFile => ({
   id: generateFileId(),

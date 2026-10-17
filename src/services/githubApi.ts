@@ -24,6 +24,7 @@ import {
 import { logger } from './logger';
 import { backend } from './backendAdapter';
 import { isReadmeCandidateItem, type GitHubReadmeCandidateItem } from '../utils/readmeVariants';
+import { secureRandomString } from '../utils/cryptoRandom';
 
 interface GitHubContentResponse {
   content?: string;
@@ -2009,7 +2010,7 @@ export const createGitHubOAuthUrl = (clientId: string, redirectUri: string): str
     // `gist` scope 是读写用户 gist（含 secret/私有 gist）所必需的，
     // 否则只能列出公共 gist，且无法创建/编辑/删除 gist。
     scope: 'read:user user:email repo gist',
-    state: Math.random().toString(36).substring(7),
+    state: secureRandomString(12),
   });
 
   return `https://github.com/login/oauth/authorize?${params.toString()}`;

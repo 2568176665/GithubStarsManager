@@ -4,11 +4,9 @@ import { useAppStore } from '../../../store/useAppStore';
 import { resolveRepositoryChatHeadSha } from '../../../services/repositoryChatService';
 import type { RepositoryChatMessage, RepositoryChatSession } from '../../../types/repositoryChat';
 import { repositoryChatSessionRepository } from '../repositories/sessionRepository';
+import { createSecureId } from '../../../utils/cryptoRandom';
 
-const createId = (): string => {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
-  return `repository-chat-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-};
+const createId = (): string => createSecureId('repository-chat');
 
 const defaultTitle = (language: 'zh' | 'en') => language === 'zh' ? '新对话' : 'New conversation';
 

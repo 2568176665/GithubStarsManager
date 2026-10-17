@@ -11,6 +11,7 @@ import type {
 import { TASK_DEPTH_PRESETS, DEFAULT_ANSWER_MAX_TOKENS } from '../types/repositoryChat';
 import { AIService, isAIStreamUnsupportedError } from './aiService';
 import { createGitHubApiService } from './githubApiFactory';
+import { createSecureId } from '../utils/cryptoRandom';
 import {
   buildIssuesEvidence,
   buildNoIssuesEvidence,
@@ -41,10 +42,7 @@ const DOCUMENTATION_MARKDOWN_PATH = /(?:^|\/)(?:docs?|guides?|examples?|architec
 const LOW_SIGNAL_TEST_PATH = /(^|\/)(?:__tests__|__snapshots__|test|tests|fixtures)(?:\/|$)|\.(?:test|spec)\.[^.]+$|\.snap$/i;
 const COMMON_QUERY_TERMS = new Set(['this', 'that', 'with', 'from', 'what', 'how', 'the', 'and', 'for', 'are', 'is', 'repo', 'repository', 'project', 'readme', '实现', '项目', '仓库', '如何', '怎么', '这个', '那个', '一下', '详细']);
 const isCreativeRequest = (question: string): boolean => /(?:公众号|推文|文章|文案|宣传稿|新闻稿|博客|写(?:一篇|个)?(?:文章|推文|文案|宣传稿|新闻稿|博客)|write\s+(?:an?\s+)?(?:article|post|blog)|draft\s+(?:an?\s+)?(?:article|post))/i.test(question);
-const createId = (prefix: string): string => {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return `${prefix}-${crypto.randomUUID()}`;
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-};
+const createId = (prefix: string): string => createSecureId(prefix);
 
 type ChatToolName =
   | 'read_repo_tree'

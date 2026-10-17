@@ -10,11 +10,9 @@ import type {
 } from '../../../types/repositoryChat';
 import { runRepositoryChatTurn } from '../../../services/repositoryChatRunner';
 import { repositoryChatSessionRepository } from '../repositories/sessionRepository';
+import { createSecureId } from '../../../utils/cryptoRandom';
 
-const createId = (prefix: string): string => {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return `${prefix}-${crypto.randomUUID()}`;
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-};
+const createId = (prefix: string): string => createSecureId(prefix);
 
 export const repositoryChatErrorMessage = (unknownError: unknown, language: 'zh' | 'en'): string => {
   const rawMessage = unknownError instanceof Error ? unknownError.message : String(unknownError ?? '');
