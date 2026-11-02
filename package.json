@@ -94,7 +94,7 @@
     "xml2js": "^0.6.2"
   },
   "overrides": {
-    "decode-uri-component": "^0.5.0",
+    "decode-uri-component": "^0.5.1",
     "katex": "$katex",
     "postcss-selector-parser": "^7.1.6"
   }
