@@ -13,6 +13,52 @@ import {
   shouldShowAssetsUpdatedIndicator,
 } from '../utils/releaseAssets';
 import { Button } from './ui/button';
+import { Badge } from './ui/badge';
+import type { InstallablePlatform } from '../types/installableAsset';
+
+type AssetBadgeKind = 'recommended' | 'emulated' | 'unverified';
+
+/** 资产与当前系统的兼容度徒标：推荐 / 需转译 / 平台未确认。 */
+const AssetCompatibilityBadge: React.FC<{
+  kind: AssetBadgeKind;
+  platform?: InstallablePlatform;
+  language: 'zh' | 'en';
+}> = ({ kind, platform, language }) => {
+  const t = (zh: string, en: string) => language === 'zh' ? zh : en;
+  if (kind === 'recommended') {
+    return (
+      <Badge
+        variant="secondary"
+        className="h-5 shrink-0 border-success/30 bg-success/10 px-1.5 text-[10px] font-medium text-success"
+        title={t('与当前系统和架构精确匹配', 'Exact match for this OS and architecture')}
+      >
+        {t('推荐', 'Recommended')}
+      </Badge>
+    );
+  }
+  if (kind === 'emulated') {
+    return (
+      <Badge
+        variant="outline"
+        className="h-5 shrink-0 border-amber-500/40 bg-amber-500/10 px-1.5 text-[10px] font-medium text-amber-700 dark:text-amber-400"
+        title={platform === 'macos'
+          ? t('将通过 Rosetta 2 运行', 'Runs via Rosetta 2')
+          : t('将通过仿真运行', 'Runs via emulation')}
+      >
+        {t('需转译', 'Emulated')}
+      </Badge>
+    );
+  }
+  return (
+    <Badge
+      variant="outline"
+      className="h-5 shrink-0 px-1.5 text-[10px] font-normal text-muted-foreground"
+      title={t('文件名未声明平台，也无法根据同版本资产或仓库信息推断', 'Platform not in file name and could not be inferred from sibling assets or repository info')}
+    >
+      {t('平台未确认', 'Unverified platform')}
+    </Badge>
+  );
+};
 
 interface DownloadLink {
   name: string;
@@ -44,6 +90,9 @@ interface ReleaseCardProps {
   release: Release;
   downloadLinks: DownloadLink[];
   allDownloadLinks?: DownloadLink[];
+  /** 按 URL 索引：卡片内链接顺序可能与过滤输入顺序不同。 */
+  assetBadges?: Map<string, AssetBadgeKind>;
+  currentPlatform?: InstallablePlatform;
   showAllAssets?: boolean;
   isUnread: boolean;
   isAssetsExpanded: boolean;
@@ -67,6 +116,8 @@ const ReleaseCard: React.FC<ReleaseCardProps> = memo(({
   release,
   downloadLinks,
   allDownloadLinks,
+  assetBadges,
+  currentPlatform,
   showAllAssets = false,
   isUnread,
   isAssetsExpanded,
@@ -364,6 +415,13 @@ const ReleaseCard: React.FC<ReleaseCardProps> = memo(({
                           <span className={`text-sm truncate ${link.isSourceCode ? 'text-muted-foreground dark:text-muted-foreground font-medium' : 'text-foreground dark:text-muted-foreground'}`}>
                             {link.name}
                           </span>
+                          {assetBadges?.get(link.url) && (
+                            <AssetCompatibilityBadge
+                              kind={assetBadges.get(link.url)!}
+                              platform={currentPlatform}
+                              language={language}
+                            />
+                          )}
                         </div>
                         <div className="flex items-center space-x-2 text-xs text-muted-foreground dark:text-muted-foreground flex-shrink-0">
                           {isAssetUpdated && (
@@ -406,6 +464,13 @@ const ReleaseCard: React.FC<ReleaseCardProps> = memo(({
                         <span className={`text-sm truncate ${link.isSourceCode ? 'text-muted-foreground dark:text-muted-foreground font-medium' : 'text-foreground dark:text-muted-foreground'}`}>
                           {link.name}
                         </span>
+                        {assetBadges?.get(link.url) && (
+                          <AssetCompatibilityBadge
+                            kind={assetBadges.get(link.url)!}
+                            platform={currentPlatform}
+                            language={language}
+                          />
+                        )}
                       </div>
                       <div className="flex items-center space-x-2 text-xs text-muted-foreground dark:text-muted-foreground flex-shrink-0">
                         {isAssetUpdated && (

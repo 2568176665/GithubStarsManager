@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Plus, Edit3, Trash2, Filter, ChevronDown, ChevronUp, X, Package } from 'lucide-react';
+import { Plus, Edit3, Trash2, Filter, ChevronDown, ChevronUp, X, Package, Lock, MonitorSmartphone } from 'lucide-react';
 import { SiAndroid, SiApple, SiLinux } from '@icons-pack/react-simple-icons';
 import { SiWindows } from './SiWindows';
 import { useAppStore } from '../store/useAppStore';
@@ -8,6 +8,10 @@ import { FilterModal } from './FilterModal';
 import { AssetFilter } from '../types';
 import { useDialog } from '../hooks/useDialog';
 import { Button } from './ui/button';
+import { Badge } from './ui/badge';
+import { getPlatformIcon } from './platformMeta';
+import type { InstallablePlatform } from '../types/installableAsset';
+import { BUILTIN_CURRENT_SYSTEM_FILTER_ID } from '../constants/builtinFilters';
 
 // 图标映射。
 // 存量数据里持久化的是 lucide 图标名（见 store/schema.ts PRESET_FILTER_ICONS），
@@ -40,12 +44,20 @@ interface AssetFilterManagerProps {
   selectedFilters: string[];
   onFilterToggle: (filterId: string) => void;
   onClearFilters: () => void;
+  currentSystemFilter?: {
+    id: typeof BUILTIN_CURRENT_SYSTEM_FILTER_ID;
+    status: 'ready' | 'detecting-arch' | 'arch-unknown' | 'unsupported';
+    platform: InstallablePlatform | null;
+    label: string;
+    matchCount?: number;
+  };
 }
 
 export const AssetFilterManager: React.FC<AssetFilterManagerProps> = ({
   selectedFilters,
   onFilterToggle,
-  onClearFilters
+  onClearFilters,
+  currentSystemFilter,
 }) => {
   const { assetFilters, addAssetFilter, updateAssetFilter, deleteAssetFilter, language } = useAppStore(useShallow((state) => ({
     assetFilters: state.assetFilters,
@@ -112,6 +124,12 @@ export const AssetFilterManager: React.FC<AssetFilterManagerProps> = ({
   };
 
   const t = (zh: string, en: string) => language === 'zh' ? zh : en;
+  const CurrentSystemIcon = currentSystemFilter?.platform
+    ? getPlatformIcon(currentSystemFilter.platform)
+    : MonitorSmartphone;
+  const currentSystemSelected = !!currentSystemFilter
+    && selectedFilters.includes(currentSystemFilter.id);
+  const currentSystemUnsupported = currentSystemFilter?.status === 'unsupported';
 
   return (
     <div className="space-y-3">
@@ -178,6 +196,49 @@ export const AssetFilterManager: React.FC<AssetFilterManagerProps> = ({
       >
         <div className="overflow-hidden min-h-0">
           <div id="asset-filter-panel" className="space-y-3">
+          {/* 内置「当前系统」筛选：不可编辑，仅按检测结果过滤 */}
+          {currentSystemFilter && (
+            <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2">
+              <Button
+                variant="ghost"
+                onClick={() => onFilterToggle(currentSystemFilter.id)}
+                disabled={currentSystemUnsupported}
+                className="h-auto min-h-0 flex-1 items-center justify-start gap-2 p-0 text-left"
+                title={currentSystemUnsupported
+                  ? t('当前设备不支持，已忽略', 'Not supported on this device; ignored')
+                  : t(
+                      `显示能在 ${currentSystemFilter.label} 上运行的资产，以及平台未确认的资产。依据文件名、同版本资产和仓库信息识别；卡片中可点「显示全部」查看其余资产。`,
+                      `Shows assets that run on ${currentSystemFilter.label} plus assets whose platform is unverified, based on file names, sibling assets and repository info. Use "Show all" on a card to see the rest.`,
+                    )}
+                type="button"
+                aria-pressed={currentSystemSelected}
+              >
+                <CurrentSystemIcon className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
+                <span className="flex min-w-0 flex-col items-start">
+                  <span className="flex items-center gap-1.5">
+                    <span className="truncate text-sm font-medium">{t('当前系统', 'This device')}</span>
+                    <Badge variant="secondary" className="h-4 px-1 text-[9px] font-medium">
+                      {t('内置', 'Built-in')}
+                    </Badge>
+                  </span>
+                  <span className={`truncate text-xs ${currentSystemUnsupported ? 'text-destructive' : 'text-muted-foreground'}`}>
+                    {currentSystemUnsupported && currentSystemSelected
+                      ? t('当前设备不支持，已忽略', 'Not supported on this device; ignored')
+                      : currentSystemFilter.label}
+                  </span>
+                </span>
+              </Button>
+              {typeof currentSystemFilter.matchCount === 'number' && (
+                <span className="flex-shrink-0 rounded-full bg-primary px-2 py-0.5 text-xs text-primary-foreground">
+                  {currentSystemFilter.matchCount}
+                </span>
+              )}
+              <span title={t('内置过滤器不可编辑', "Built-in filter can't be edited")}>
+                <Lock className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" aria-hidden="true" />
+              </span>
+            </div>
+          )}
+
           {/* Preset Filters */}
           {presetFilters.length > 0 && (
             <div>
