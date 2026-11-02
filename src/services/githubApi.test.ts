@@ -480,3 +480,85 @@ describe('GitHubApiService batch Star import', () => {
     await expect(service.isRepositoryStarred('owner', 'repo')).rejects.toThrow('GitHub API error: 403');
   });
 });
+
+describe('GitHubApiService 请求超时与重试范围', () => {
+  const makeJsonResponse = (status: number, body: unknown): Response => ({
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: '',
+    headers: { get: () => null },
+    json: async () => body,
+  } as unknown as Response);
+
+  afterEach(() => {
+    vi.mocked(window.fetch).mockReset();
+    vi.useRealTimers();
+  });
+
+  it('幂等 GET 超时后按指数退避重试，最终成功返回', async () => {
+    vi.useFakeTimers();
+    const abortError = Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
+    const service = new GitHubApiService('token');
+
+    vi.mocked(window.fetch)
+      .mockRejectedValueOnce(abortError)
+      .mockResolvedValueOnce(makeJsonResponse(200, { login: 'octocat' }));
+
+    const pending = service.getCurrentUser();
+    // 退避首轮 1s，超时本身由 fake timer 推进触发。
+    await vi.advanceTimersByTimeAsync(31_000);
+    await vi.advanceTimersByTimeAsync(1_500);
+
+    await expect(pending).resolves.toEqual({ login: 'octocat' });
+    expect(window.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('非幂等 POST 超时立即抛错，不重试以免重复副作用', async () => {
+    vi.useFakeTimers();
+    const abortError = Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
+    const service = new GitHubApiService('token');
+
+    vi.mocked(window.fetch).mockRejectedValue(abortError);
+
+    const pending = service.createGist({ description: 'x', public: false, files: [{ filename: 'a.txt', content: 'x' }] });
+    const assertion = expect(pending).rejects.toThrow(/timed out/);
+    await vi.advanceTimersByTimeAsync(31_000);
+    await assertion;
+
+    expect(window.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('用户主动取消沿用 Aborted 语义，不转成超时错误', async () => {
+    vi.useFakeTimers();
+    const service = new GitHubApiService('token');
+    const controller = new AbortController();
+    controller.abort();
+
+    vi.mocked(window.fetch).mockRejectedValue(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+
+    await expect(service.getRepositoryMeta('owner', 'repo', controller.signal)).rejects.toThrow(/Aborted|aborted/);
+    expect(window.fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('GitHubApiService 发布刷新批次预算', () => {
+  it('超出批次预算后跳过剩余仓库并计入 failedRepos', async () => {
+    const service = new GitHubApiService('token');
+    const repos = [makeRepository(1, 'o/one'), makeRepository(2, 'o/two')];
+
+    // 第一个仓库的刷新把单调时钟推进到批次预算之外。
+    let call = 0;
+    vi.spyOn(service, 'getRepositoryReleasesPage').mockImplementation((async () => {
+      call += 1;
+      vi.spyOn(performance, 'now').mockReturnValue(11 * 60_000);
+      return releasePage([], false);
+    }) as never);
+
+    const result = await service.getMultipleRepositoryReleases(repos);
+    expect(call).toBe(1);
+    expect(result.failedRepos).toHaveLength(1);
+    expect(result.failedRepos[0].repoId).toBe(2);
+    expect(result.failedRepos[0].error).toContain('10 分钟上限');
+    vi.restoreAllMocks();
+  });
+});
