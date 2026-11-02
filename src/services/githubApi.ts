@@ -1175,7 +1175,11 @@ export class GitHubApiService {
     const concurrency = 3;
     let index = 0;
 
-    const workers = Array.from({ length: Math.min(concurrency, repositories.length) }, async () => {
+    // 用普通循环建 worker 而不是 Array.from 的回调：worker 是 async 的
+    // while(true) 循环，永远不 return，写成数组回调会触发 array-callback-return。
+    const workers: Array<Promise<void>> = [];
+    for (let workerIndex = 0; workerIndex < Math.min(concurrency, repositories.length); workerIndex++) {
+      workers.push((async () => {
       while (true) {
         const currentIndex = index++;
         if (currentIndex >= repositories.length) break;
@@ -1273,7 +1277,8 @@ export class GitHubApiService {
         // Rate limiting protection between repos
         await new Promise(resolve => setTimeout(resolve, 150));
       }
-    });
+      })());
+    }
 
     await Promise.all(workers);
 
