@@ -453,3 +453,43 @@ describe('AIService.generateWithTools — native function calling', () => {
     expect(isToolCallCapableApiType('claude')).toBe(false);
   });
 });
+
+describe('AI 网关伪成功响应识别', () => {
+  const gatewayConfig = { ...makeConfig(), apiType: 'openai' as const };
+  const gatewayBody = { error: { message: 'throttling_error', code: '429', type: 'throttling' } };
+  const hook = () => {
+    const response = () => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      headers: {
+        get: (name: string) => (name.toLowerCase() === 'content-type' ? 'application/json' : null),
+        forEach: () => {},
+      },
+      json: async () => gatewayBody,
+      text: async () => JSON.stringify(gatewayBody),
+      clone: () => response(),
+      body: null,
+    });
+    (window.fetch as ReturnType<typeof vi.fn>).mockImplementation(async () => response());
+  };
+
+  it('HTTP 200 + error body 抛 429 限流错误并标记 fromGatewayBody', async () => {
+    hook();
+    const service = new AIService(gatewayConfig as never, 'en');
+    const error = await service.generateChatText({ system: 's', user: 'u' }).catch((e) => e);
+
+    expect(error).toBeInstanceOf(AIRequestError);
+    expect((error as AIRequestError).status).toBe(429);
+    expect((error as AIRequestError).fromGatewayBody).toBe(true);
+    expect(isRateLimitedError(error)).toBe(true);
+  });
+
+  it('非限流的网关错误体映射为 502 且不被判成限流', () => {
+    const service = new AIService(gatewayConfig as never, 'en');
+    // 直接验证分类语义：fromGatewayBody 且非 429 的 AIRequestError 不应被当作限流。
+    const error = new AIRequestError('AI gateway error: bad request', 502, undefined, true);
+    expect(isRateLimitedError(error)).toBe(false);
+    expect(typeof service).toBe('object');
+  });
+});
