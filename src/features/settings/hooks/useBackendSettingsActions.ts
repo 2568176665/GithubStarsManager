@@ -1,30 +1,222 @@
+
+import { useT } from '../../../i18n/useT';
 import { useCallback, useEffect, useState } from 'react';
-import { syncFromBackend, syncToBackend } from '../../../services/autoSync';
+import { useShallow } from 'zustand/react/shallow';
+import type { Category } from '../../../types';
+import { useAppStore } from '../../../store/useAppStore';
+import { useDialog } from '../../../hooks/useDialog';
 import { backend } from '../../../services/backendAdapter';
+import { normalizeBackendUrl } from '../../../utils/backendUrl';
+import { syncLocalGitHubTokenToBackend, tryRestoreAuthFromBackend } from '../../../services/autoSync';
 
-export const useBackendSettingsActions = () => {
-  const [checking, setChecking] = useState(true);
-  const [health, setHealth] = useState<{ version?: string } | null>(null);
-  const [syncing, setSyncing] = useState(false);
+type BackendStatus = 'connected' | 'disconnected' | 'checking';
 
-  const check = useCallback(async () => {
-    setChecking(true);
-    await backend.init();
-    setHealth(await backend.checkHealth());
-    setChecking(false);
-  }, []);
+export interface BackendSettingsActions {
+  status: BackendStatus;
+  health: { version: string; timestamp: string } | null;
+  urlInput: string;
+  secretInput: string;
+  backendAvailable: boolean;
+  isSyncingToBackend: boolean;
+  isSyncingFromBackend: boolean;
+  setUrlInput: (value: string) => void;
+  setSecretInput: (value: string) => void;
+  testConnection: () => Promise<void>;
+  syncToBackend: () => Promise<void>;
+  syncFromBackend: () => Promise<void>;
+}
 
-  useEffect(() => { void check(); }, [check]);
+/**
+ * Encapsulates manual settings-panel backend operations. Application-start auth
+ * lifecycle remains outside this hook for the later lifecycle extraction work.
+ */
+export const useBackendSettingsActions = (): BackendSettingsActions => {
+  const t = useT('settings');
+  const state = useAppStore(useShallow((store) => ({
+    repositories: store.repositories,
+    releases: store.releases,
+    aiConfigs: store.aiConfigs,
+    webdavConfigs: store.webdavConfigs,
+    activeAIConfig: store.activeAIConfig,
+    activeWebDAVConfig: store.activeWebDAVConfig,
+    hiddenDefaultCategoryIds: store.hiddenDefaultCategoryIds,
+    categoryOrder: store.categoryOrder,
+    customCategories: store.customCategories,
+    assetFilters: store.assetFilters,
+    defaultCategoryOverrides: store.defaultCategoryOverrides,
+    collapsedSidebarCategoryCount: store.collapsedSidebarCategoryCount,
+    backendApiSecret: store.backendApiSecret,
+    setBackendApiSecret: store.setBackendApiSecret,
+    setRepositories: store.setRepositories,
+    setReleases: store.setReleases,
+    setAIConfigs: store.setAIConfigs,
+    setWebDAVConfigs: store.setWebDAVConfigs,
+    showDefaultCategory: store.showDefaultCategory,
+    hideDefaultCategory: store.hideDefaultCategory,
+  })));
+  const { toast, confirm } = useDialog();
+  const [status, setStatus] = useState<BackendStatus>('disconnected');
+  const [health, setHealth] = useState<{ version: string; timestamp: string } | null>(null);
+  const [isSyncingToBackend, setIsSyncingToBackend] = useState(false);
+  const [isSyncingFromBackend, setIsSyncingFromBackend] = useState(false);
+  const [urlInput, setUrlInput] = useState(() => backend.configuredUrl?.replace(/\/api$/, '') || '');
+  const [secretInput, setSecretInput] = useState(state.backendApiSecret || '');
 
-  const sync = useCallback(async (direction: 'up' | 'down') => {
-    setSyncing(true);
+  const checkConnection = useCallback(async (syncToken: boolean, preferredUrl?: string) => {
+    setStatus('checking');
     try {
-      if (direction === 'up') await syncToBackend();
-      else await syncFromBackend();
-    } finally {
-      setSyncing(false);
+      await backend.init(preferredUrl);
+      const healthData = await backend.checkHealth();
+      if (healthData) {
+        setStatus('connected');
+        setHealth({ version: healthData.version, timestamp: healthData.timestamp });
+        if (syncToken) void syncLocalGitHubTokenToBackend();
+        return true;
+      }
+    } catch {
+      // A disconnected backend must leave the settings screen usable.
     }
+    setStatus('disconnected');
+    setHealth(null);
+    return false;
   }, []);
 
-  return { checking, health, syncing, check, sync };
+  useEffect(() => {
+    void checkConnection(true);
+  }, [checkConnection]);
+
+  const testConnection = useCallback(async () => {
+    const trimmedUrl = urlInput.trim();
+    if (trimmedUrl && !normalizeBackendUrl(trimmedUrl)) {
+      toast(t('useBackendSettingsActions.invalid-backend-url-remote-backends-must-use-htt'), 'error');
+      return;
+    }
+    const previousUrl = backend.backendUrl;
+    state.setBackendApiSecret(secretInput || null);
+    // With an address entered, probe exactly that URL; empty keeps the
+    // previous auto-detect behavior (remembered URL, else same-origin).
+    const connected = await checkConnection(false, trimmedUrl || undefined);
+    if (!connected) {
+      await backend.init(previousUrl ?? undefined);
+      toast(t('useBackendSettingsActions.backend-connection-failed-please-check-the-serve'), 'error');
+      return;
+    }
+    try {
+      const authOk = secretInput ? await backend.verifyAuth() : true;
+      if (!authOk) throw new Error('Authentication failed');
+      // Health and auth both passed — remember the address (shared with the
+      // login screen prefill).
+      backend.rememberActiveUrl();
+      toast(t('useBackendSettingsActions.backend-connection-successful'), 'success');
+      // These are deliberate manual settings actions; app-start restoration is not moved here.
+      void tryRestoreAuthFromBackend();
+      void syncLocalGitHubTokenToBackend();
+    } catch {
+      await backend.init(previousUrl ?? undefined);
+      setStatus('disconnected');
+      setHealth(null);
+      toast(t('useBackendSettingsActions.backend-connection-failed-please-check-the-serve'), 'error');
+    }
+  }, [checkConnection, secretInput, state, t, toast, urlInput]);
+
+  const syncToBackend = useCallback(async () => {
+    if (!backend.isAvailable) {
+      toast(t('useBackendSettingsActions.backend-not-available'), 'error');
+      return;
+    }
+    setIsSyncingToBackend(true);
+    try {
+      const results = await Promise.allSettled([
+        backend.syncRepositories(state.repositories),
+        backend.syncReleases(state.releases),
+        backend.syncAIConfigs(state.aiConfigs),
+        backend.syncWebDAVConfigs(state.webdavConfigs),
+        backend.syncSettings({
+          activeAIConfig: state.activeAIConfig,
+          activeWebDAVConfig: state.activeWebDAVConfig,
+          hiddenDefaultCategoryIds: state.hiddenDefaultCategoryIds,
+          categoryOrder: state.categoryOrder,
+          customCategories: state.customCategories,
+          assetFilters: state.assetFilters,
+          defaultCategoryOverrides: state.defaultCategoryOverrides,
+          collapsedSidebarCategoryCount: state.collapsedSidebarCategoryCount,
+        }),
+      ]);
+      const failures = results.filter((result) => result.status === 'rejected');
+      const successes = results.filter((result) => result.status === 'fulfilled');
+      if (failures.length) {
+        console.warn('Some syncs failed:', failures.map((failure) => (failure as PromiseRejectedResult).reason));
+        toast(t('useBackendSettingsActions.partial-sync-failure-v1-failed-v2-succeeded', { v1: failures.length, v2: successes.length }), 'error');
+      } else {
+        toast(t('useBackendSettingsActions.synced-to-backend-repos-v1-releases-v2-ai-config', { v1: state.repositories.length, v2: state.releases.length, v3: state.aiConfigs.length, v4: state.webdavConfigs.length }), 'success');
+      }
+    } catch (error) {
+      console.error('Sync to backend failed:', error);
+      toast(`${t('useBackendSettingsActions.sync-failed')}: ${(error as Error).message}`, 'error');
+    } finally {
+      setIsSyncingToBackend(false);
+    }
+  }, [state, t, toast]);
+
+  const syncFromBackend = useCallback(async () => {
+    if (!backend.isAvailable) {
+      toast(t('useBackendSettingsActions.backend-not-available'), 'error');
+      return;
+    }
+    const confirmed = await confirm(
+      t('useBackendSettingsActions.sync-from-backend'),
+      t('useBackendSettingsActions.syncing-from-backend-will-overwrite-local-data-c'),
+      { type: 'warning' },
+    );
+    if (!confirmed) return;
+    setIsSyncingFromBackend(true);
+    try {
+      const [repoData, releaseData, aiConfigData, webdavConfigData, settingsData] = await Promise.all([
+        backend.fetchRepositories(),
+        backend.fetchReleases(),
+        backend.fetchAIConfigs(),
+        backend.fetchWebDAVConfigs(),
+        backend.fetchSettings(),
+      ]);
+      state.setRepositories(repoData.repositories, { allowEmpty: true });
+      state.setReleases(releaseData.releases, { allowEmpty: true });
+      state.setAIConfigs(aiConfigData);
+      state.setWebDAVConfigs(webdavConfigData);
+      const serverHidden = Array.isArray(settingsData.hiddenDefaultCategoryIds) ? settingsData.hiddenDefaultCategoryIds : [];
+      for (const categoryId of serverHidden) if (typeof categoryId === 'string') state.hideDefaultCategory(categoryId);
+      for (const categoryId of state.hiddenDefaultCategoryIds) {
+        if (typeof categoryId === 'string' && !serverHidden.includes(categoryId)) state.showDefaultCategory(categoryId);
+      }
+      if (
+        settingsData.defaultCategoryOverrides !== null
+        && typeof settingsData.defaultCategoryOverrides === 'object'
+        && !Array.isArray(settingsData.defaultCategoryOverrides)
+      ) {
+        useAppStore.setState({
+          defaultCategoryOverrides: settingsData.defaultCategoryOverrides as Record<string, Partial<Category>>,
+        });
+      }
+      toast(t('useBackendSettingsActions.synced-from-backend-repos-v1-releases-v2-ai-conf', { v1: repoData.repositories.length, v2: releaseData.releases.length, v3: aiConfigData.length, v4: webdavConfigData.length }), 'success');
+    } catch (error) {
+      console.error('Sync from backend failed:', error);
+      toast(`${t('useBackendSettingsActions.sync-failed')}: ${(error as Error).message}`, 'error');
+    } finally {
+      setIsSyncingFromBackend(false);
+    }
+  }, [confirm, state, t, toast]);
+
+  return {
+    status,
+    health,
+    urlInput,
+    secretInput,
+    backendAvailable: backend.isAvailable,
+    isSyncingToBackend,
+    isSyncingFromBackend,
+    setUrlInput,
+    setSecretInput,
+    testConnection,
+    syncToBackend,
+    syncFromBackend,
+  };
 };

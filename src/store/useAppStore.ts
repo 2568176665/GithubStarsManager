@@ -17,6 +17,7 @@ export { getAllCategories, sortCategoriesByOrder } from './helpers/categoryHelpe
 export { normalizePersistedState } from './normalizers/persistedState';
 export {
   defaultCategories,
+  defaultMcpConfig,
   isKnownEmbeddingFormatVersion,
   LEGACY_EMBEDDING_FORMAT_VERSION,
 } from './schema';

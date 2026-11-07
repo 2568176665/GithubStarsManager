@@ -1,28 +1,50 @@
+import { getDateFnsLocale } from '../i18n/format';
+import { useT } from "../i18n/useT";
 import { Input } from './ui/input';
 import { Button } from './ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Switch } from './ui/switch';
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
-import { Package, Bell, Search, X, RefreshCw, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, LayoutGrid, ChevronDown, CheckCircle, Settings } from 'lucide-react';
-import { Release, Repository } from '../types';
+import {
+  Package,
+  Search,
+  X,
+  RefreshCw,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  LayoutGrid,
+  ChevronDown,
+  CheckCircle,
+  Inbox,
+  Mail,
+  BadgeCheck,
+  PackageOpen,
+  SlidersHorizontal,
+  CheckCircle2,
+} from 'lucide-react';
+import { AssetFilter, Release, Repository } from '../types';
 import { useReleaseTimelineActions } from '../features/releases/hooks/useReleaseTimelineActions';
 import { useAppStore } from '../store/useAppStore';
 import { formatDistanceToNow } from 'date-fns';
-import { zhCN } from 'date-fns/locale';
 import { AssetFilterManager } from './AssetFilterManager';
 import { PRESET_FILTERS } from '../constants/presetFilters';
 import ReleaseCard from './ReleaseCard';
 import { ReleaseSourceSettingsModal } from './ReleaseSourceSettingsModal';
+import { WorkspacePageHeader } from './WorkspacePageHeader';
+import { ContextSidebarBody } from './ContextSidebarBody';
 import {
   releaseBelongsToResolvedSources,
   resolveReleaseSources,
+  normalizeRepoKey,
 } from '../utils/releaseSources';
 import {
   effectiveReleaseTime,
   latestEffectiveRelease,
   shouldShowAssetsUpdatedIndicator,
 } from '../utils/releaseAssets';
-import { matchesAssetLinkFilter, matchesReleaseAssetFilters } from '../utils/assetFilters';
+import { evaluateAssetFilter, normalizeMatchedLinkName } from '../utils/assetFilters';
 import {
   BUILTIN_CURRENT_SYSTEM_FILTER_ID,
   isBuiltinFilterId,
@@ -118,11 +140,13 @@ export const ReleaseTimeline: React.FC = () => {
   const [itemsPerPage, setItemsPerPage] = useState(20);
   // 独立的展开状态：下载资产和更新日志分开控制（本地状态，不持久化）
   const [expandedAssets, setExpandedAssets] = useState<Set<number>>(new Set());
-  const [showAllAssets, setShowAllAssets] = useState<Set<number>>(new Set());
   const [expandedReleaseNotes, setExpandedReleaseNotes] = useState<Set<number>>(new Set());
   const [fullContentReleases, setFullContentReleases] = useState<Set<number>>(new Set());
   const [isReleaseSourceSettingsOpen, setIsReleaseSourceSettingsOpen] = useState(false);
+  const [releaseSourceRepoFilter, setReleaseSourceRepoFilter] = useState<string | null>(null);
+  const [releaseSourcesExpanded, setReleaseSourcesExpanded] = useState(true);
   const device = useDeviceTarget();
+  const tApp = useT('app');
   const hintsCacheRef = useRef<HintsCache | null>(null);
   const systemEvaluationCacheRef = useRef(new Map<number, SystemEvaluationCacheEntry>());
 
@@ -139,6 +163,17 @@ export const ReleaseTimeline: React.FC = () => {
   }), [repositories, releaseSubscriptions, releaseSourceSettings]);
   const activeReleaseRepoCount = resolvedReleaseSources.repositories.length;
 
+  useEffect(() => {
+    if (!releaseSourceRepoFilter) return;
+    const sourceKey = normalizeRepoKey(releaseSourceRepoFilter);
+    const sourceStillAvailable = resolvedReleaseSources.entries.some(
+      entry => normalizeRepoKey(entry.repository.full_name) === sourceKey,
+    );
+    if (sourceStillAvailable) return;
+    setReleaseSourceRepoFilter(null);
+    setCurrentPage(1);
+  }, [releaseSourceRepoFilter, resolvedReleaseSources.entries]);
+
   // Format file size helper function
   const formatFileSize = (bytes: number): string => {
     if (bytes === 0) return '0 B';
@@ -148,30 +183,12 @@ export const ReleaseTimeline: React.FC = () => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   };
 
-  const activeAssetFilters = useMemo(() => [
-    ...assetFilters,
-    ...PRESET_FILTERS.map(filter => ({ ...filter, isPreset: true })),
-  ].filter(filter => selectedFilters.includes(filter.id)), [assetFilters, selectedFilters]);
-
-  // Release filters decide visibility and the matching links shown in each card.
-  const matchesActiveFilters = useCallback((release: Release, allLinkNames: string[]): boolean => {
-    if (selectedFilters.length === 0) return true;
-    const uploaded = (release.assets ?? []).map(asset => asset.name);
-    return matchesReleaseAssetFilters(activeAssetFilters, release.repository.full_name, {
-      uploaded,
-      all: allLinkNames,
-    });
-  }, [activeAssetFilters, selectedFilters]);
-
-  const matchesLinkForCard = useCallback((release: Release, name: string, isSourceCode = false): boolean => {
-    if (selectedFilters.length === 0) return true;
-    return activeAssetFilters.some(filter => matchesAssetLinkFilter(
-      filter,
-      release.repository.full_name,
-      name,
-      isSourceCode,
-    ));
-  }, [activeAssetFilters, selectedFilters]);
+  // 解析激活的过滤器。预设过滤器可被编辑并持久化在 assetFilters 中，优先生效；
+  // 常量表仅兜底状态里缺失的预设 id，避免编辑被旧常量绕过。
+  const resolveActiveFilter = useCallback((filterId: string): (Pick<AssetFilter, 'id' | 'keywords'> & Partial<AssetFilter>) | undefined =>
+    assetFilters.find(filter => filter.id === filterId) ??
+    PRESET_FILTERS.find(preset => preset.id === filterId),
+  [assetFilters]);
 
   // Toggle assets expansion for a specific release
   const toggleAssets = (releaseId: number) => {
@@ -185,15 +202,6 @@ export const ReleaseTimeline: React.FC = () => {
         markReleaseAsRead(releaseId);
       }
       return newSet;
-    });
-  };
-
-  const toggleShowAllAssets = (releaseId: number) => {
-    setShowAllAssets(prev => {
-      const next = new Set(prev);
-      if (next.has(releaseId)) next.delete(releaseId);
-      else next.add(releaseId);
-      return next;
     });
   };
 
@@ -303,6 +311,15 @@ export const ReleaseTimeline: React.FC = () => {
       list.push(release);
       releasesByRepo.set(release.repository.id, list);
     }
+    // Platform inference only reads the 10 newest releases, so keep 11 per repo
+    // (the extra one covers the release being evaluated) instead of copying N-1
+    // siblings into every release's hints.
+    for (const [repoId, list] of releasesByRepo) {
+      releasesByRepo.set(repoId, [...list]
+        .sort((left, right) =>
+          new Date(right.published_at).getTime() - new Date(left.published_at).getTime())
+        .slice(0, 11));
+    }
     const repositoriesById = new Map(repositories.map((repository) => [repository.id, repository]));
     const hints = new Map<number, RepositoryHints>();
     for (const release of releases) {
@@ -326,6 +343,105 @@ export const ReleaseTimeline: React.FC = () => {
     hintsCacheRef.current = { releases, repositories, hints };
     return hints;
   }, [releases, repositories]);
+
+  const systemEvaluations = useMemo(() => {
+    const evaluations = new Map<number, CurrentSystemEvaluation>();
+    if (!device.platform) return evaluations;
+    const cache = systemEvaluationCacheRef.current;
+    const deviceKey = `${device.platform}:${device.architecture ?? 'unknown'}`;
+    for (const release of subscribedReleases) {
+      const hints = hintsByReleaseId.get(release.id);
+      const cached = cache.get(release.id);
+      if (cached
+        && cached.release === release
+        && cached.deviceKey === deviceKey
+        && cached.hints === hints) {
+        evaluations.set(release.id, cached.evaluation);
+        continue;
+      }
+      const allLinks = getDownloadLinks(release);
+      const inputs: AssetLinkInput[] = allLinks.map((link, index) => ({
+        index,
+        name: link.name,
+        url: link.url,
+        contentType: link.contentType,
+        isSourceCode: link.isSourceCode,
+        downloadCount: link.downloadCount,
+        assetId: link.assetId,
+      }));
+      const evaluation = evaluateCurrentSystem(
+        inputs,
+        device,
+        hints,
+      );
+      cache.set(release.id, { release, deviceKey, hints, evaluation });
+      evaluations.set(release.id, evaluation);
+    }
+    for (const releaseId of cache.keys()) {
+      if (!evaluations.has(releaseId)) cache.delete(releaseId);
+    }
+    return evaluations;
+  }, [subscribedReleases, getDownloadLinks, device, hintsByReleaseId]);
+
+  const currentSystemSelected = selectedFilters.includes(BUILTIN_CURRENT_SYSTEM_FILTER_ID);
+  const currentSystemActive = currentSystemSelected && device.platform !== null;
+  const effectiveFilterIds = useMemo(
+    () => selectedFilters.filter((filterId) =>
+      isBuiltinFilterId(filterId)
+        ? filterId === BUILTIN_CURRENT_SYSTEM_FILTER_ID && currentSystemActive
+        : true,
+    ),
+    [selectedFilters, currentSystemActive],
+  );
+  const regularFilterIds = useMemo(
+    () => effectiveFilterIds.filter((filterId) => !isBuiltinFilterId(filterId)),
+    [effectiveFilterIds],
+  );
+  const currentSystemMatchCount = useMemo(
+    () => [...systemEvaluations.values()].filter((evaluation) => evaluation.matchesRelease).length,
+    [systemEvaluations],
+  );
+  // Only blame the device filter for an empty list when nothing else narrowed it.
+  const deviceEmptyState = currentSystemActive
+    && currentSystemMatchCount === 0
+    && regularFilterIds.length === 0
+    && !searchQuery.trim()
+    && !releaseSourceRepoFilter;
+  const currentSystemFilter = useMemo(() => {
+    const platformName = device.platform ? getPlatformDisplayName(device.platform) : '';
+    const label = !device.platform
+      ? tApp('assetFilterManager.builtin-unsupported')
+      : !device.architectureSettled
+        ? tApp('assetFilterManager.builtin-detecting', { platform: platformName })
+        : !device.architecture
+          ? tApp('assetFilterManager.builtin-arch-unknown', { platform: platformName })
+          : device.platform === 'macos' && device.architecture === 'arm64'
+            ? `${platformName} · ${tApp('assetFilterManager.arch-apple-silicon')}`
+            : device.platform === 'macos' && device.architecture === 'x64'
+              ? `${platformName} · ${tApp('assetFilterManager.arch-intel')}`
+              : `${platformName} · ${device.architecture}`;
+    return {
+      id: BUILTIN_CURRENT_SYSTEM_FILTER_ID as typeof BUILTIN_CURRENT_SYSTEM_FILTER_ID,
+      status: !device.platform
+        ? 'unsupported' as const
+        : !device.architectureSettled
+          ? 'detecting-arch' as const
+          : !device.architecture
+            ? 'arch-unknown' as const
+            : 'ready' as const,
+      platform: device.platform,
+      label,
+    };
+  }, [device, tApp]);
+
+  const releaseCountByRepoName = useMemo(() => {
+    const counts = new Map<string, number>();
+    subscribedReleases.forEach((release) => {
+      const key = normalizeRepoKey(release.repository.full_name);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    });
+    return counts;
+  }, [subscribedReleases]);
 
   // 未读模式下，快照当前未读 release ID，避免标记已读后立即消失
   // 不依赖 readReleases，避免标记已读时重建快照导致列表项立即消失
@@ -360,83 +476,91 @@ export const ReleaseTimeline: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subscribedReleaseKey, releaseShowMode, releaseLatestMode]);
 
-  // 预计算每个 release 的下载链接和过滤后的链接
-  const systemEvaluations = useMemo(() => {
-    const evaluations = new Map<number, CurrentSystemEvaluation>();
-    if (!device.platform) return evaluations;
-    const cache = systemEvaluationCacheRef.current;
-    const deviceKey = `${device.platform}:${device.architecture ?? 'unknown'}`;
-    for (const release of subscribedReleases) {
-      const hints = hintsByReleaseId.get(release.id);
-      const cached = cache.get(release.id);
-      if (cached
-        && cached.release === release
-        && cached.deviceKey === deviceKey
-        && cached.hints === hints) {
-        evaluations.set(release.id, cached.evaluation);
-        continue;
-      }
-      const allLinks = getDownloadLinks(release);
-      const inputs: AssetLinkInput[] = allLinks.map((link, index) => ({
-        index,
-        name: link.name,
-        url: link.url,
-        contentType: link.contentType,
-        isSourceCode: link.isSourceCode,
-        downloadCount: link.downloadCount,
-        assetId: link.assetId,
-      }));
-      const evaluation = evaluateCurrentSystem(inputs, device, hints);
-      cache.set(release.id, { release, deviceKey, hints, evaluation });
-      evaluations.set(release.id, evaluation);
-    }
-    for (const releaseId of cache.keys()) {
-      if (!evaluations.has(releaseId)) cache.delete(releaseId);
-    }
-    return evaluations;
-  }, [subscribedReleases, getDownloadLinks, device, hintsByReleaseId]);
-
-  const currentSystemSelected = selectedFilters.includes(BUILTIN_CURRENT_SYSTEM_FILTER_ID);
-  const currentSystemActive = currentSystemSelected && device.platform !== null;
-  const effectiveFilterIds = useMemo(
-    () => selectedFilters.filter((filterId) =>
-      isBuiltinFilterId(filterId)
-        ? filterId === BUILTIN_CURRENT_SYSTEM_FILTER_ID && currentSystemActive
-        : true,
-    ),
-    [selectedFilters, currentSystemActive],
-  );
-  const regularFilterIds = useMemo(
-    () => effectiveFilterIds.filter((filterId) => !isBuiltinFilterId(filterId)),
-    [effectiveFilterIds],
-  );
-  const currentSystemMatchCount = useMemo(
-    () => [...systemEvaluations.values()].filter((evaluation) => evaluation.matchesRelease).length,
-    [systemEvaluations],
-  );
-
+  // 预计算每个 release 的下载链接、真实上传资产名和过滤器求值结果。
+  // 过滤器分两层生效（由 evaluateAssetFilter 一次性返回，两层共用同一份规则实现）：
+  // - Release 级：决定 Release 是否出现在列表中；
+  // - 资产级：决定卡片默认列出哪些资产——只有命中已启用过滤器关键词的资产才默认展示，
+  //   其余资产由卡片内的「显示全部」按钮按需展开；命中「始终包含」的仓库不做资产级
+  //   裁剪（该仓库的 Release 展示全部资产）。
+  // 两层共用同一套链接名匹配范围：包含关键词非空时匹配全部下载链接名（含源码归档
+  // 伪资产与正文提取链接），为空时 Release 级只匹配真实上传资产名。
+  // 源码归档伪资产的自动生成后缀由 normalizeMatchedLinkName 剥掉：否则 `zip` /
+  // `tar.gz` 会命中每个 Release 上都存在的伪资产，过滤器变相匹配所有 Release。
   const releasesWithLinks = useMemo(() => {
     return subscribedReleases.map(release => {
       const allLinks = getDownloadLinks(release);
-      // 内置「当前系统」不参与这里的普通过滤器判定，由下方映射按
-      // evaluateCurrentSystem 的评估结果单独拼入。
-      const hasMatchingAssets = regularFilterIds.length === 0
-        ? true
-        : matchesActiveFilters(release, allLinks.map(link => link.name));
-      const filteredLinks = regularFilterIds.length === 0
-        ? allLinks
-        : allLinks.filter(link => matchesLinkForCard(release, link.name, link.isSourceCode));
+      const lowerLinkNames = allLinks.map(link =>
+        normalizeMatchedLinkName(link.name.toLowerCase(), link.isSourceCode === true)
+      );
+      const lowerRealAssetNames = (release.assets ?? []).map(asset => asset.name.toLowerCase());
+      const lowerRepoKey = normalizeRepoKey(release.repository.full_name);
+      // 每个已启用过滤器只求值一次：Release 级取 OR，资产索引取并集
+      // （未命中本 Release 的过滤器不贡献任何资产）
+      const evaluations = regularFilterIds
+        .map(filterId => resolveActiveFilter(filterId))
+        .filter((active): active is NonNullable<typeof active> => !!active)
+        .map(active => evaluateAssetFilter(active, lowerRepoKey, lowerLinkNames, lowerRealAssetNames));
+      const systemEvaluation = systemEvaluations.get(release.id);
+      const hasFilters = effectiveFilterIds.length > 0;
+      const matchesFilters = !hasFilters
+        || evaluations.some(({ matchesRelease }) => matchesRelease)
+        || (currentSystemActive && systemEvaluation?.matchesRelease === true);
+      const matchedLinkIndexes = new Set<number>();
+      if (currentSystemActive && systemEvaluation) {
+        systemEvaluation.orderedIndexes.forEach(index => matchedLinkIndexes.add(index));
+      }
+      evaluations.forEach(({ matchedLinkIndexes: indexes }) =>
+        indexes.forEach(index => matchedLinkIndexes.add(index))
+      );
+      const orderedMatchedIndexes: number[] = [];
+      if (currentSystemActive && systemEvaluation) {
+        systemEvaluation.orderedIndexes.forEach(index => {
+          if (!orderedMatchedIndexes.includes(index)) orderedMatchedIndexes.push(index);
+        });
+      }
+      allLinks.forEach((_, index) => {
+        if (matchedLinkIndexes.has(index) && !orderedMatchedIndexes.includes(index)) {
+          orderedMatchedIndexes.push(index);
+        }
+      });
+      const assetBadges = new Map<string, 'recommended' | 'emulated' | 'unverified'>();
+      if (currentSystemActive && systemEvaluation) {
+        systemEvaluation.badges.forEach((badge, index) => {
+          const link = allLinks[index];
+          if (link) assetBadges.set(link.url, badge);
+        });
+      }
       return {
         release,
         allLinks,
-        filteredLinks: hasMatchingAssets ? filteredLinks : [],
-        hasMatchingAssets,
+        assetBadges,
+        // 无已启用过滤器时不做资产级裁剪，并复用同一数组引用，
+        // 避免卡片把「未裁剪」误判成「被过滤后仍显示全部」
+        matchedLinks: !hasFilters
+          ? allLinks
+          : orderedMatchedIndexes.map(index => allLinks[index]).filter(Boolean),
+        matchesFilters,
       };
     });
-  }, [subscribedReleases, getDownloadLinks, matchesActiveFilters, matchesLinkForCard, regularFilterIds.length]);
+  }, [
+    subscribedReleases,
+    getDownloadLinks,
+    effectiveFilterIds,
+    regularFilterIds,
+    resolveActiveFilter,
+    systemEvaluations,
+    currentSystemActive,
+  ]);
 
   const preUnreadFilteredReleases = useMemo(() => {
     let filtered = releasesWithLinks;
+
+    if (releaseSourceRepoFilter) {
+      const sourceKey = normalizeRepoKey(releaseSourceRepoFilter);
+      filtered = filtered.filter(({ release }) =>
+        normalizeRepoKey(release.repository.full_name) === sourceKey
+      );
+    }
 
     // 搜索过滤
     if (searchQuery.trim()) {
@@ -450,69 +574,24 @@ export const ReleaseTimeline: React.FC = () => {
       );
     }
 
-    // 资产类型过滤 - 只显示包含匹配资产的 release；普通过滤器与内置「当前系统」
-    // 在 Release 级取 OR（命中任意一个即保留）。
+    // 资产类型过滤 - 只显示命中任一已启用过滤器的 release（仓库排除 → 仓库包含
+    // → 资产规则，多过滤器取 OR）；命中的 Release 默认只列出命中过滤器的资产，
+    // 未命中的资产由卡片《显示全部》按钮按需展开（allLinks 一并透传给卡片）
     if (effectiveFilterIds.length > 0) {
-      filtered = filtered.filter(({ release, hasMatchingAssets }) => {
-        const regularMatched = regularFilterIds.length > 0 && hasMatchingAssets;
-        const systemMatched = currentSystemActive
-          && systemEvaluations.get(release.id)?.matchesRelease === true;
-        return regularMatched || systemMatched;
-      });
+      filtered = filtered.filter(({ matchesFilters }) => matchesFilters);
     }
 
     return filtered
       .sort((a, b) =>
         new Date(b.release.published_at).getTime() - new Date(a.release.published_at).getTime()
       )
-      .map(({ release, allLinks, filteredLinks }) => {
-        const systemEvaluation = systemEvaluations.get(release.id);
-        const hasFilters = effectiveFilterIds.length > 0;
-        // 「当前系统」与普通过滤器在资产层取并集：当前系统评估已排好推荐顺序。
-        const orderedMatchedIndexes: number[] = [];
-        if (currentSystemActive && systemEvaluation) {
-          systemEvaluation.orderedIndexes.forEach(index => {
-            if (!orderedMatchedIndexes.includes(index)) orderedMatchedIndexes.push(index);
-          });
-        }
-        // 仅在存在普通过滤器时才并入其命中资产；否则会把全部资产重新加回并集，
-        // 使内置的「当前系统」过滤失效。
-        if (regularFilterIds.length > 0) {
-          filteredLinks.forEach(link => {
-            const index = allLinks.indexOf(link);
-            if (index >= 0 && !orderedMatchedIndexes.includes(index)) orderedMatchedIndexes.push(index);
-          });
-        }
-        const assetBadges = new Map<string, 'recommended' | 'emulated' | 'unverified'>();
-        if (currentSystemActive && systemEvaluation) {
-          systemEvaluation.badges.forEach((badge, index) => {
-            const link = allLinks[index];
-            if (link) assetBadges.set(link.url, badge);
-          });
-        }
-        return {
-          release,
-          // 无已启用过滤器时不做资产级裁剪，并复用同一数组引用，
-          // 避免卡片把「未裁剪」误判成「被过滤后仍显示全部」
-          displayLinks: !hasFilters
-            ? allLinks
-            : orderedMatchedIndexes.map(index => allLinks[index]).filter(Boolean),
-          allLinks,
-          assetBadges,
-          hasMatchingAssets: !hasFilters
-            ? true
-            : (currentSystemActive && systemEvaluation?.matchesRelease === true)
-              || (regularFilterIds.length > 0 && filteredLinks.length > 0),
-        };
-      });
-  }, [
-    releasesWithLinks,
-    searchQuery,
-    effectiveFilterIds,
-    regularFilterIds,
-    systemEvaluations,
-    currentSystemActive,
-  ]);
+      .map(({ release, allLinks, matchedLinks, assetBadges }) => ({
+        release,
+        displayLinks: matchedLinks,
+        allLinks,
+        assetBadges,
+      }));
+  }, [releasesWithLinks, releaseSourceRepoFilter, searchQuery, effectiveFilterIds]);
 
   // 仅最新模式过滤：每个仓库只保留最新的 release
   const latestModeReleases = useMemo(() => {
@@ -528,6 +607,12 @@ export const ReleaseTimeline: React.FC = () => {
     }
     return Array.from(repoMap.values());
   }, [preUnreadFilteredReleases, releaseLatestMode]);
+  // 「仅显示最新版本」徽标应反映切换后实际会展示的数量：同一筛选范围内
+  // 每个仓库只保留一条最新 release，因此计数等于其中的去重仓库数
+  const latestOnlyRepoCount = useMemo(
+    () => new Set(preUnreadFilteredReleases.map(({ release }) => release.repository.id)).size,
+    [preUnreadFilteredReleases],
+  );
 
   // 未读模式过滤（使用快照，标记已读后不会立即消失，刷新页面后才更新）
   const filteredReleases = useMemo(() => {
@@ -547,9 +632,10 @@ export const ReleaseTimeline: React.FC = () => {
   const repositoryGroups = useMemo(() => {
     const groups = new Map<number, {
       repository: Release['repository'];
-      releases: Array<Omit<(typeof filteredReleases)[number], 'hasMatchingAssets'>>;
+      releases: typeof filteredReleases;
       latestRelease: Release;
     }>();
+
     filteredReleases.forEach(({ release, displayLinks, allLinks, assetBadges }) => {
       const repoId = release.repository.id;
       if (!groups.has(repoId)) {
@@ -591,6 +677,9 @@ export const ReleaseTimeline: React.FC = () => {
   const totalPages = viewMode === 'timeline'
     ? Math.ceil(filteredReleases.length / itemsPerPage)
     : Math.ceil(repositoryGroups.length / itemsPerPage);
+  const visibleResultCount = viewMode === 'timeline'
+    ? filteredReleases.length
+    : repositoryGroups.length;
   const clampedPage = Math.max(1, Math.min(currentPage, totalPages || 1));
   const startIndex = (clampedPage - 1) * itemsPerPage;
   const paginatedReleases = filteredReleases.slice(startIndex, startIndex + itemsPerPage);
@@ -658,35 +747,7 @@ export const ReleaseTimeline: React.FC = () => {
     return rangeWithDots;
   };
 
-  const t = useCallback((zh: string, en: string) => language === 'zh' ? zh : en, [language]);
-
-  const currentSystemFilter = useMemo(() => {
-    const platformName = device.platform ? getPlatformDisplayName(device.platform) : '';
-    const label = !device.platform
-      ? t('无法识别当前系统', "Can't detect this device")
-      : !device.architectureSettled
-        ? `${platformName} · ${t('识别中…', 'Detecting…')}`
-        : !device.architecture
-          ? `${platformName} · ${t('架构未知', 'Unknown architecture')}`
-          : device.platform === 'macos' && device.architecture === 'arm64'
-            ? `${platformName} · ${t('Apple Silicon', 'Apple Silicon')}`
-            : device.platform === 'macos' && device.architecture === 'x64'
-              ? `${platformName} · ${t('Intel', 'Intel')}`
-              : `${platformName} · ${device.architecture}`;
-    return {
-      id: BUILTIN_CURRENT_SYSTEM_FILTER_ID as typeof BUILTIN_CURRENT_SYSTEM_FILTER_ID,
-      status: !device.platform
-        ? 'unsupported' as const
-        : !device.architectureSettled
-          ? 'detecting-arch' as const
-          : !device.architecture
-            ? 'arch-unknown' as const
-            : 'ready' as const,
-      platform: device.platform,
-      label,
-      matchCount: device.platform ? currentSystemMatchCount : undefined,
-    };
-  }, [device, currentSystemMatchCount, t]);
+  const t = useT('releases');
 
   const isReleaseUnread = useCallback((releaseId: number) => {
     return !readReleases.has(releaseId);
@@ -758,314 +819,373 @@ export const ReleaseTimeline: React.FC = () => {
     return map;
   }, [paginatedReleases, paginatedRepositoryGroups, getTruncatedBody]);
 
+  const releaseHeaderActions = (
+    <div className="app-release-header-actions">
+      {lastRefreshTime && activeReleaseRepoCount > 0 && (
+        <span className="app-workspace-header-note">
+          {t('releaseTimeline.last-refresh-time', {
+            time: formatDistanceToNow(new Date(lastRefreshTime), {
+              addSuffix: true,
+              locale: getDateFnsLocale(language),
+            }),
+          })}
+        </span>
+      )}
+    </div>
+  );
+
+  const releaseToolbarControls = (
+    <div className="app-release-toolbar-controls">
+      <label className="app-release-option">
+        <span>{t('releaseTimeline.include-pre-release')}</span>
+        <Switch
+          checked={includePreRelease}
+          disabled={activeReleaseRepoCount === 0}
+          onCheckedChange={setIncludePreRelease}
+          aria-label={t('releaseTimeline.include-pre-release')}
+        />
+      </label>
+      {activeReleaseRepoCount > 0 && (
+        <Button
+          onClick={handleRefresh}
+          disabled={releaseIsRefreshing}
+          className="ui-button-primary flex items-center gap-2 px-3 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <RefreshCw className={`h-4 w-4 ${releaseIsRefreshing ? 'animate-spin' : ''}`} />
+          <span>{releaseIsRefreshing ? t('releaseTimeline.refreshing') : t('releaseTimeline.refresh')}</span>
+        </Button>
+      )}
+    </div>
+  );
+
+  const releaseToolbar = (
+    <div className="ui-toolbar app-page-toolbar app-release-toolbar">
+      <div className="app-release-search-row">
+        <div className="app-release-search-field">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            type="text"
+            placeholder={t('releaseTimeline.search-releases')}
+            value={searchQuery}
+            onChange={(e) => {
+              setReleaseSearchQuery(e.target.value);
+              setCurrentPage(1);
+            }}
+            className="ui-field app-page-search w-full pl-10 pr-12"
+          />
+          {searchQuery && (
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => {
+                setReleaseSearchQuery('');
+                setCurrentPage(1);
+              }}
+              aria-label={t('releaseTimeline.clear-search')}
+              className="absolute right-2 top-1/2 h-8 w-8 p-0 -translate-y-1/2 text-muted-foreground"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
+        {releaseToolbarControls}
+      </div>
+    </div>
+  );
+
+  const releaseContextSidebar = (
+    <aside
+      data-context-sidebar="releases"
+      aria-label={t('releaseTimeline.release')}
+      className="context-sidebar w-full shrink-0 lg:w-(--app-sidebar-width) lg:self-start"
+    >
+      <div className="context-sidebar-head">
+        <div>
+          <p className="app-side-eyebrow">{t('releaseTimeline.inbox-label')}</p>
+          <h3 className="app-side-title">
+            {t('releaseTimeline.filters')}
+          </h3>
+        </div>
+      </div>
+      <ContextSidebarBody>
+        <section className="app-side-section" aria-label={t('releaseTimeline.inbox-section')}>
+          <p className="app-section-label app-side-group-label">
+            {t('releaseTimeline.inbox-section')}
+          </p>
+          <div className="app-side-list">
+            <Button
+              variant="ghost"
+              onClick={() => handleShowModeChange('all')}
+              disabled={activeReleaseRepoCount === 0}
+              aria-pressed={releaseShowMode === 'all'}
+              className="app-side-item justify-between"
+            >
+              <span className="app-side-item-label">
+                <Inbox className="h-4 w-4" />
+                <span>{t('releaseTimeline.all-releases')}</span>
+              </span>
+              <span className="app-side-count">{subscribedReleases.length}</span>
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => handleShowModeChange('unread')}
+              disabled={activeReleaseRepoCount === 0}
+              aria-pressed={releaseShowMode === 'unread'}
+              className="app-side-item justify-between"
+            >
+              <span className="app-side-item-label">
+                <Mail className="h-4 w-4" />
+                <span>{t('releaseTimeline.unread')}</span>
+              </span>
+              <span className="app-side-count">{unreadCount}</span>
+            </Button>
+          </div>
+        </section>
+
+        <section className="app-side-section" aria-label={t('releaseTimeline.version-range')}>
+          <p className="app-section-label app-side-group-label">
+            {t('releaseTimeline.version-range')}
+          </p>
+          <div className="app-side-list">
+            <Button
+              variant="ghost"
+              onClick={() => handleLatestModeChange('all')}
+              disabled={activeReleaseRepoCount === 0}
+              aria-pressed={releaseLatestMode === 'all'}
+              className="app-side-item justify-between"
+            >
+              <span className="app-side-item-label">
+                <Package className="h-4 w-4" />
+                <span>{t('releaseTimeline.show-all-versions')}</span>
+              </span>
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => handleLatestModeChange('latest')}
+              disabled={activeReleaseRepoCount === 0}
+              aria-pressed={releaseLatestMode === 'latest'}
+              className="app-side-item justify-between"
+            >
+              <span className="app-side-item-label">
+                <BadgeCheck className="h-4 w-4" />
+                <span>{t('releaseTimeline.latest-version-only')}</span>
+              </span>
+              <span className="app-side-count">{latestOnlyRepoCount}</span>
+            </Button>
+          </div>
+        </section>
+
+        <section className="app-side-section app-release-asset-filters" aria-label={t('app:assetFilterManager.filters')}>
+          <AssetFilterManager
+            selectedFilters={selectedFilters}
+            onFilterToggle={handleFilterToggle}
+            onClearFilters={handleClearFilters}
+            currentSystemFilter={currentSystemFilter}
+          />
+        </section>
+
+        <section className="app-side-section" aria-label={t('releaseTimeline.sources')}>
+          <div className="app-collection-row">
+            <p className="app-section-label">{t('releaseTimeline.sources')}</p>
+            <div className="flex items-center gap-1">
+              <Button
+                onClick={() => setIsReleaseSourceSettingsOpen(true)}
+                variant="ghost"
+                size="icon"
+                className="linear-icon-button"
+                title={t('releaseTimeline.release-source-settings')}
+                aria-label={t('releaseTimeline.release-source-settings')}
+              >
+                <SlidersHorizontal className="h-4 w-4" />
+              </Button>
+              <Button
+                onClick={() => setReleaseSourcesExpanded((expanded) => !expanded)}
+                variant="ghost"
+                size="icon"
+                className="linear-icon-button"
+                title={releaseSourcesExpanded
+                  ? t('releaseTimeline.collapse-sources')
+                  : t('releaseTimeline.expand-sources')}
+                aria-label={releaseSourcesExpanded
+                  ? t('releaseTimeline.collapse-sources')
+                  : t('releaseTimeline.expand-sources')}
+                aria-expanded={releaseSourcesExpanded}
+                aria-controls="release-source-list"
+              >
+                <ChevronDown className={`h-4 w-4 transition-transform ${releaseSourcesExpanded ? '' : '-rotate-90'}`} />
+              </Button>
+            </div>
+          </div>
+          {releaseSourcesExpanded && (
+            <div id="release-source-list" className="app-side-list">
+              {resolvedReleaseSources.entries.length === 0 ? (
+                <p className="app-side-empty">{t('releaseTimeline.sources-2')}</p>
+              ) : resolvedReleaseSources.entries.map((entry) => {
+                const repoName = entry.repository.full_name;
+                const count = releaseCountByRepoName.get(normalizeRepoKey(repoName)) ?? 0;
+                return (
+                  <Button
+                    key={repoName}
+                    variant="ghost"
+                    onClick={() => {
+                      setReleaseSourceRepoFilter((current) =>
+                        current && normalizeRepoKey(current) === normalizeRepoKey(repoName)
+                          ? null
+                          : repoName
+                      );
+                      setCurrentPage(1);
+                    }}
+                    aria-pressed={
+                      !!releaseSourceRepoFilter &&
+                      normalizeRepoKey(releaseSourceRepoFilter) === normalizeRepoKey(repoName)
+                    }
+                    className="app-side-item justify-between"
+                    title={repoName}
+                  >
+                    <span className="app-side-item-label">
+                      <PackageOpen className="h-4 w-4" />
+                      <span className="truncate">{repoName}</span>
+                    </span>
+                    <span className="app-side-count">{count}</span>
+                  </Button>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      </ContextSidebarBody>
+      <div className="context-sidebar-foot">
+        <div className="app-side-foot-status">
+          <span className="app-status-dot" aria-hidden="true" />
+          <span>{t('releaseTimeline.release')}</span>
+        </div>
+        <div className="app-side-foot-meta">
+          <span>{t('releaseTimeline.release-count', { count: subscribedReleases.length })}</span>
+          {lastRefreshTime && <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />}
+        </div>
+      </div>
+    </aside>
+  );
+
   if (subscribedReleases.length === 0) {
     const subscribedRepoCount = activeReleaseRepoCount;
 
     return (
       <>
-      <div className="text-center py-12">
-               <Package className="w-16 h-16 text-muted-foreground dark:text-quaternary mx-auto mb-4" />
-         <h3 className="text-lg font-medium text-foreground dark:text-foreground mb-2">
-          {subscribedRepoCount === 0 ? t('没有Release订阅', 'No Release Subscriptions') : t('没有最近的Release', 'No Recent Releases')}
-        </h3>
-             <p className="text-muted-foreground dark:text-muted-foreground mb-6 max-w-md mx-auto">
-               {subscribedRepoCount === 0
-                 ? t('从仓库页面订阅仓库Release以在此查看更新。', 'Subscribe to repository releases from the Repositories tab to see updates here.')
-                 : t(`您已订阅 ${subscribedRepoCount} 个仓库，但没有找到最近的Release。点击下方刷新按钮获取最新更新。`, `You're subscribed to ${subscribedRepoCount} repositories, but no recent releases were found. Click the refresh button below to get the latest updates.`)
-               }
-             </p>
-        
-        {/* Pre-release toggle + Refresh button */}
-        {subscribedRepoCount > 0 && (
-           <div className="mb-6 flex flex-col items-center gap-3">
-             {/* Pre-release toggle */}
-             <div className="flex items-center gap-2 select-none">
-               <Switch
-                 checked={includePreRelease}
-                 onCheckedChange={setIncludePreRelease}
-                 aria-label={t('包含 Pre-release', 'Include Pre-release')}
-               />
-               <span className="text-sm text-muted-foreground dark:text-muted-foreground">
-                 {t('包含 Pre-release', 'Include Pre-release')}
-               </span>
-             </div>
-
-             <div className="flex flex-wrap items-center justify-center gap-2">
-               {/* Refresh button */}
-               <Button
-                 onClick={handleRefresh}
-                 disabled={releaseIsRefreshing}
-                 className="flex items-center space-x-2 px-6 py-3 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-               >
-                 <RefreshCw className={`w-5 h-5 ${releaseIsRefreshing ? 'animate-spin' : ''}`} />
-                 <span>{releaseIsRefreshing ? t('刷新中…', 'Refreshing…') : t('刷新Release', 'Refresh Releases')}</span>
-               </Button>
-               <Button
-                 onClick={() => setIsReleaseSourceSettingsOpen(true)}
-                 className="flex items-center space-x-2 px-4 py-3 bg-muted text-muted-foreground dark:bg-muted/40 dark:text-muted-foreground rounded-lg hover:bg-accent dark:hover:bg-accent transition-colors"
-                 title={t('Release 来源设置', 'Release Source Settings')}
-               >
-                 <Settings className="w-5 h-5" />
-                 <span>{t('来源设置', 'Sources')}</span>
-               </Button>
-             </div>
-            {lastRefreshTime && (
-              <p className="text-sm text-muted-foreground dark:text-muted-foreground">
-                {t('上次刷新:', 'Last refresh:')} {formatDistanceToNow(new Date(lastRefreshTime), { addSuffix: true, locale: language === 'zh' ? zhCN : undefined })}
-              </p>
-            )}
-          </div>
-        )}
-
-        {subscribedRepoCount === 0 && (
-          <div className="bg-muted dark:bg-muted/20 border border-border dark:border-border rounded-xl p-6 max-w-lg mx-auto">
-            <div className="flex items-start space-x-4">
-              <div className="flex-shrink-0 w-12 h-12 bg-primary/20 rounded-full flex items-center justify-center">
-                <Bell className="w-6 h-6 text-primary " />
+        <div className="route-workspace">
+          {releaseContextSidebar}
+          <div className="workspace-content app-workspace-content">
+            <WorkspacePageHeader
+              eyebrow={t('releaseTimeline.inbox-label')}
+              section={t('app:header.menu-releases')}
+              title={t('releaseTimeline.release-timeline')}
+              description={t('releaseTimeline.latest-releases-from-your-activereleaserepocount', {
+                activeReleaseRepoCount: subscribedRepoCount,
+              })}
+              actions={releaseHeaderActions}
+            />
+            {releaseToolbar}
+            <div className="ui-empty-state app-empty-state">
+              <div className="app-empty-visual">
+                <Package className="h-6 w-6" aria-hidden="true" />
               </div>
-              <div className="flex-1">
-                <h3 className="font-semibold text-muted-foreground dark:text-muted-foreground mb-2">
-                  {t('订阅仓库Release', 'Subscribe to Repository Releases')}
+              <div className="app-empty-copy">
+                <h3 className="app-empty-title">
+                  {subscribedRepoCount === 0 ? t('releaseTimeline.no-release-subscriptions') : t('releaseTimeline.no-recent-releases')}
                 </h3>
-                <p className="text-sm text-muted-foreground dark:text-muted-foreground mb-3 leading-relaxed">
-                  {t('订阅后，您可以在这里查看所有关注仓库的最新发布版本，第一时间获取更新动态。', 'Subscribe to receive the latest release updates from your favorite repositories in one place.')}
+                <p className="app-empty-description">
+                  {subscribedRepoCount === 0
+                    ? t('releaseTimeline.subscribe-to-repository-releases-from-the-reposi')
+                    : t('releaseTimeline.you-re-subscribed-to-subscribedrepocount-reposit', { subscribedRepoCount: subscribedRepoCount })}
                 </p>
-                <div className="bg-card dark:bg-card/60 rounded-lg p-3 text-sm">
-                  <div className="flex items-center space-x-2 text-muted-foreground dark:text-muted-foreground font-medium mb-2">
-                    <span className="w-5 h-5 bg-primary text-primary-foreground rounded-full flex items-center justify-center text-xs">1</span>
-                    <span>{t('前往仓库页面', 'Go to Repositories')}</span>
-                  </div>
-                  <div className="flex items-center space-x-2 text-muted-foreground dark:text-muted-foreground font-medium">
-                    <span className="w-5 h-5 bg-primary text-primary-foreground rounded-full flex items-center justify-center text-xs">2</span>
-                    <span>{t('点击仓库卡片上的铃铛图标', 'Click the bell icon on any repository card')}</span>
-                  </div>
-                </div>
-                <div className="mt-4 rounded-lg bg-card dark:bg-card/60 p-3 text-sm text-muted-foreground dark:text-muted-foreground">
-                  <p className="mb-3">
-                    {t('也可以通过 Watch 仓库同步或自定义仓库列表作为 Release 来源。', 'You can also use Watch repository sync or a custom repository list as release sources.')}
-                  </p>
-                  <Button
-                    onClick={() => setIsReleaseSourceSettingsOpen(true)}
-                    className="inline-flex items-center space-x-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-                    title={t('Release 来源设置', 'Release Source Settings')}
-                  >
-                    <Settings className="w-4 h-4" />
-                    <span>{t('配置 Release 来源', 'Configure Release Sources')}</span>
-                  </Button>
-                </div>
               </div>
+
+              {subscribedRepoCount === 0 && (
+                <>
+                  <ol className="app-empty-steps">
+                    <li className="app-empty-step">
+                      <span className="app-empty-step-marker" aria-hidden="true">1</span>
+                      <span>{t('releaseTimeline.go-to-repositories')}</span>
+                    </li>
+                    <li className="app-empty-step">
+                      <span className="app-empty-step-marker" aria-hidden="true">2</span>
+                      <span>{t('releaseTimeline.click-the-bell-icon-on-any-repository-card')}</span>
+                    </li>
+                  </ol>
+                  <p className="app-empty-note">
+                    {t('releaseTimeline.you-can-also-use-watch-repository-sync-or-a-cust')}
+                  </p>
+                </>
+              )}
             </div>
           </div>
-        )}
-      </div>
-      <ReleaseSourceSettingsModal
-        isOpen={isReleaseSourceSettingsOpen}
-        onClose={() => setIsReleaseSourceSettingsOpen(false)}
-      />
+        </div>
+        <ReleaseSourceSettingsModal
+          isOpen={isReleaseSourceSettingsOpen}
+          onClose={() => setIsReleaseSourceSettingsOpen(false)}
+        />
       </>
     );
   }
 
   return (
-    <div className="max-w-full mx-auto px-2 sm:px-4">
+    <>
+      <div className="route-workspace">
+        {releaseContextSidebar}
+        <div className="workspace-content app-workspace-content">
+          <div className="w-full">
       {/* Header */}
       <div className="mb-6 sm:mb-8">
-        <div className="flex flex-col gap-4 mb-4 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <h2 className="text-2xl font-bold text-foreground dark:text-foreground mb-2">
-              {t('Release时间线', 'Release Timeline')}
-            </h2>
-            <p className="text-muted-foreground dark:text-muted-foreground">
-              {t(`来自您的 ${activeReleaseRepoCount} 个订阅仓库的最新Release`, `Latest releases from your ${activeReleaseRepoCount} subscribed repositories`)}
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-            {/* Last Refresh Time */}
-            {lastRefreshTime && (
-              <span className="w-full text-sm text-muted-foreground dark:text-muted-foreground lg:w-auto">
-                {t('上次刷新:', 'Last refresh:')} {formatDistanceToNow(new Date(lastRefreshTime), { addSuffix: true, locale: language === 'zh' ? zhCN : undefined })}
-              </span>
-            )}
+        <WorkspacePageHeader
+          eyebrow={t('releaseTimeline.inbox-label')}
+          section={t('app:header.menu-releases')}
+          title={t('releaseTimeline.release-timeline')}
+          description={t('releaseTimeline.latest-releases-from-your-activereleaserepocount', { activeReleaseRepoCount: activeReleaseRepoCount })}
+          actions={(
+            releaseHeaderActions
+          )}
+        />
 
-            {/* Pre-release toggle */}
-            <div className="flex items-center gap-1.5 select-none">
-              <Switch
-                checked={includePreRelease}
-                onCheckedChange={setIncludePreRelease}
-                aria-label={t('包含 Pre-release', 'Include Pre-release')}
-              />
-              <span className="hidden text-xs text-muted-foreground dark:text-muted-foreground sm:inline">
-                {t('Pre', 'Pre')}
-              </span>
-            </div>
-
-            {/* Refresh Button */}
-            <Button
-              onClick={handleRefresh}
-              disabled={releaseIsRefreshing}
-              className="ui-button-primary flex items-center space-x-2 px-4 py-2 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <RefreshCw className={`w-4 h-4 ${releaseIsRefreshing ? 'animate-spin' : ''}`} />
-              <span>{releaseIsRefreshing ? t('刷新中…', 'Refreshing…') : t('刷新', 'Refresh')}</span>
-            </Button>
-            <Button
-              onClick={() => setIsReleaseSourceSettingsOpen(true)}
-              variant="ghost"
-              className="ui-button flex items-center space-x-2 px-3 py-2"
-              title={t('Release 来源设置', 'Release Source Settings')}
-            >
-              <Settings className="w-4 h-4 text-muted-foreground dark:text-muted-foreground" />
-              <span className="text-sm font-medium text-foreground dark:text-muted-foreground">{t('来源', 'Sources')}</span>
-            </Button>
-          </div>
-        </div>
-
-        {/* Search and Filters */}
-        <div className="ui-toolbar p-3 sm:p-4 mb-4">
-          {/* Search Bar */}
-          <div className="relative mb-3">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground dark:text-muted-foreground/70 w-5 h-5" />
-            <Input
-              type="text"
-              placeholder={t('搜索Release…', 'Search releases…')}
-              value={searchQuery}
-              onChange={(e) => {
-                setReleaseSearchQuery(e.target.value);
-                setCurrentPage(1);
-              }}
-              className="ui-field w-full pl-10 pr-12 py-2 text-foreground dark:text-foreground"
-            />
-            {searchQuery && (
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => {
-                  setReleaseSearchQuery('');
-                  setCurrentPage(1);
-                }}
-                aria-label={t('清除搜索', 'Clear search')}
-                className="absolute right-2 top-1/2 h-8 w-8 p-0 transform -translate-y-1/2 text-muted-foreground dark:text-muted-foreground/70 hover:text-muted-foreground dark:text-muted-foreground dark:hover:text-muted-foreground"
-              >
-                <X className="w-4 h-4" />
-              </Button>
-            )}
-          </div>
-
-          {/* Filters and View Toggle Row */}
-          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-            <div className="flex-1">
-              <AssetFilterManager
-                selectedFilters={selectedFilters}
-                onFilterToggle={handleFilterToggle}
-                onClearFilters={handleClearFilters}
-                currentSystemFilter={currentSystemFilter}
-              />
-            </div>
-
-            {/* View Mode Select */}
-            <Select
-              value={viewMode}
-              onValueChange={(value) => {
-                if (value === 'timeline' || value === 'repository') {
-                  setReleaseViewMode(value);
-                  setCurrentPage(1);
-                }
-              }}
-            >
-              <SelectTrigger
-                aria-label={t('视图模式', 'View mode')}
-                className="ui-field h-9 w-48 px-3 py-1 text-sm"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="timeline">{t('按日期排序', 'Timeline View')}</SelectItem>
-                <SelectItem value="repository">{t('仓库分类', 'Repository View')}</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
+        {releaseToolbar}
 
         {/* Results Info and Controls */}
         <div className="flex flex-col gap-2 mb-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-wrap items-center gap-2 sm:gap-4">
-            <span className="text-sm text-muted-foreground dark:text-muted-foreground">
-              {viewMode === 'timeline'
-                ? releaseShowMode === 'unread'
-                  ? t(
-                      `显示 ${startIndex + 1}-${Math.min(startIndex + itemsPerPage, filteredReleases.length)} 共 ${filteredReleases.length} 个未读 (总计 ${preUnreadFilteredReleases.length})`,
-                      `Showing ${startIndex + 1}-${Math.min(startIndex + itemsPerPage, filteredReleases.length)} of ${filteredReleases.length} unread (total: ${preUnreadFilteredReleases.length})`
-                    )
-                  : t(
-                      `显示 ${startIndex + 1}-${Math.min(startIndex + itemsPerPage, filteredReleases.length)} 共 ${filteredReleases.length} 个Release`,
-                      `Showing ${startIndex + 1}-${Math.min(startIndex + itemsPerPage, filteredReleases.length)} of ${filteredReleases.length} releases`
-                    )
-                : releaseShowMode === 'unread'
-                  ? t(
-                      `显示 ${startIndex + 1}-${Math.min(startIndex + itemsPerPage, repositoryGroups.length)} 共 ${repositoryGroups.length} 个未读仓库 (总计 ${preUnreadFilteredReleases.length})`,
-                      `Showing ${startIndex + 1}-${Math.min(startIndex + itemsPerPage, repositoryGroups.length)} of ${repositoryGroups.length} unread repos (total: ${preUnreadFilteredReleases.length})`
-                    )
-                  : t(
-                      `显示 ${startIndex + 1}-${Math.min(startIndex + itemsPerPage, repositoryGroups.length)} 共 ${repositoryGroups.length} 个仓库`,
-                      `Showing ${startIndex + 1}-${Math.min(startIndex + itemsPerPage, repositoryGroups.length)} of ${repositoryGroups.length} repositories`
-                    )
-              }
-            </span>
-            {releaseShowMode === 'all' && unreadCount > 0 && (
-              <span className="text-sm text-primary dark:text-primary">
-                ({unreadCount} {t('未读', 'unread')})
+            {visibleResultCount > 0 && (
+              <span className="text-sm text-muted-foreground dark:text-muted-foreground">
+                {viewMode === 'timeline'
+                  ? releaseShowMode === 'unread'
+                    ? t('releaseTimeline.showing-v1-v2-of-v3-unread-total-v4', { v1: startIndex + 1, v2: Math.min(startIndex + itemsPerPage, filteredReleases.length), v3: filteredReleases.length, v4: preUnreadFilteredReleases.length })
+                    : t('releaseTimeline.showing-v1-v2-of-v3-releases', { v1: startIndex + 1, v2: Math.min(startIndex + itemsPerPage, filteredReleases.length), v3: filteredReleases.length })
+                  : releaseShowMode === 'unread'
+                    ? t('releaseTimeline.showing-v1-v2-of-v3-unread-repos-total-v4', { v1: startIndex + 1, v2: Math.min(startIndex + itemsPerPage, repositoryGroups.length), v3: repositoryGroups.length, v4: preUnreadFilteredReleases.length })
+                    : t('releaseTimeline.showing-v1-v2-of-v3-repositories', { v1: startIndex + 1, v2: Math.min(startIndex + itemsPerPage, repositoryGroups.length), v3: repositoryGroups.length })
+                }
               </span>
             )}
-            {(searchQuery || effectiveFilterIds.length > 0) && (
+            {releaseShowMode === 'all' && unreadCount > 0 && (
               <span className="text-sm text-primary dark:text-primary">
-                ({t('已筛选', 'filtered')})
+                ({unreadCount} {t('releaseTimeline.unread')})
+              </span>
+            )}
+            {(searchQuery || releaseSourceRepoFilter || selectedFilters.length > 0) && (
+              <span className="text-sm text-primary dark:text-primary">
+                ({t('releaseTimeline.filtered')})
               </span>
             )}
             {releaseLatestMode === 'latest' && (
               <span className="text-sm text-primary dark:text-primary">
-                ({t('仅最新', 'latest only')})
+                ({t('releaseTimeline.latest-only')})
               </span>
             )}
           </div>
 
           <div className="flex w-full flex-wrap items-center justify-start gap-3 lg:w-auto lg:justify-end">
-            {/* Show Mode Select */}
-            <Select value={releaseShowMode} onValueChange={(value) => {
-              if (value === 'all' || value === 'unread') handleShowModeChange(value);
-            }}>
-              <SelectTrigger
-                aria-label={t('显示范围', 'Display range')}
-                className="ui-field h-9 w-44 px-3 py-1 text-sm"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">{t('显示全部', 'Show All')}</SelectItem>
-                <SelectItem value="unread">{t('仅显示未读', 'Unread Only')}</SelectItem>
-              </SelectContent>
-            </Select>
-
-            {/* Latest Mode Select */}
-            <Select value={releaseLatestMode} onValueChange={(value) => {
-              if (value === 'all' || value === 'latest') handleLatestModeChange(value);
-            }}>
-              <SelectTrigger
-                aria-label={t('版本范围', 'Version range')}
-                className="ui-field h-9 w-48 px-3 py-1 text-sm"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">{t('显示全部版本', 'Show All Versions')}</SelectItem>
-                <SelectItem value="latest">{t('仅显示最新版本', 'Latest Version Only')}</SelectItem>
-              </SelectContent>
-            </Select>
-
             {/* Items per page selector */}
             <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
-              <span className="whitespace-nowrap text-sm text-muted-foreground dark:text-muted-foreground">{t('每页:', 'Per page:')}</span>
+              <span className="whitespace-nowrap text-sm text-muted-foreground dark:text-muted-foreground">{t('releaseTimeline.per-page')}</span>
               <Select value={String(itemsPerPage)} onValueChange={(value) => { setItemsPerPage(Number(value)); setCurrentPage(1); }}>
-                <SelectTrigger aria-label={t('每页条数', 'Items per page')} className="ui-field h-9 w-20 shrink-0 px-3 py-1 text-sm"><SelectValue /></SelectTrigger>
+                <SelectTrigger aria-label={t('releaseTimeline.items-per-page')} className="ui-field h-9 w-20 shrink-0 px-3 py-1 text-sm"><SelectValue /></SelectTrigger>
                 <SelectContent><SelectItem value="20">20</SelectItem><SelectItem value="50">50</SelectItem><SelectItem value="100">100</SelectItem><SelectItem value="200">200</SelectItem></SelectContent>
               </Select>
             </div>
@@ -1076,59 +1196,80 @@ export const ReleaseTimeline: React.FC = () => {
               onClick={handleMarkAllRead}
               disabled={isMarkingAllRead || unreadCount === 0}
               className="flex shrink-0 items-center space-x-2 rounded-lg bg-muted px-3 py-2 transition-all hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 dark:bg-muted/40 dark:hover:bg-accent"
-              title={t('全部标记为已读', 'Mark all as read')}
+              title={t('releaseTimeline.mark-all-as-read')}
             >
               {isMarkingAllRead ? <RefreshCw className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
-              <span className="text-sm font-medium text-foreground dark:text-muted-foreground">{t('全部已读', 'Mark All Read')}</span>
+              <span className="text-sm font-medium text-foreground dark:text-muted-foreground">{t('releaseTimeline.mark-all-read')}</span>
             </Button>
+            <Select
+              value={viewMode}
+              onValueChange={(value) => {
+                if (value === 'timeline' || value === 'repository') {
+                  setReleaseViewMode(value);
+                  setCurrentPage(1);
+                }
+              }}
+            >
+              <SelectTrigger
+                aria-label={t('releaseTimeline.view-mode')}
+                className="ui-field app-release-view-select"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="timeline">{t('releaseTimeline.timeline-view')}</SelectItem>
+                <SelectItem value="repository">{t('releaseTimeline.repository-view')}</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </div>
       </div>
 
        {/* Releases List */}
-       <div className="space-y-2">
+       <div className="app-flat-list app-release-list">
          {paginatedReleases.length === 0 ? (
-           <div className="ui-empty-state text-center py-12">
-            <Package className="w-12 h-12 text-muted-foreground dark:text-muted-foreground mx-auto mb-3" />
-            <h3 className="text-lg font-medium text-foreground dark:text-muted-foreground mb-1">
-              {releaseShowMode === 'unread'
-                ? t('没有未读的 Release', 'No unread releases')
-                : t('无符合条件的结果', 'No matching results')}
-            </h3>
-            <p className="text-sm text-muted-foreground dark:text-muted-foreground">
-              {releaseShowMode === 'unread'
-                ? t('所有 Release 都已标记为已读', 'All releases have been marked as read')
-                : currentSystemActive
-                  ? t(
-                      `没有找到适用于 ${currentSystemFilter.label} 的资产`,
-                      `No assets found for ${currentSystemFilter.label}`,
-                    )
-                  : effectiveFilterIds.length > 0
-                    ? t('当前过滤器没有匹配到任何资产，请尝试其他过滤条件', 'No assets match the current filters. Try different filter criteria.')
-                    : t('没有找到匹配的 Release', 'No matching releases found.')}
-            </p>
+           <div className="ui-empty-state app-empty-state">
+            <div className="app-empty-visual">
+              <Package className="h-6 w-6" aria-hidden="true" />
+            </div>
+            <div className="app-empty-copy">
+              <h3 className="app-empty-title">
+                {releaseShowMode === 'unread' && unreadCount === 0
+                  ? t('releaseTimeline.no-unread-releases')
+                  : t('releaseTimeline.no-matching-results')}
+              </h3>
+              <p className="app-empty-description">
+                {releaseShowMode === 'unread' && unreadCount === 0
+                  ? t('releaseTimeline.all-releases-have-been-marked-as-read')
+                  : deviceEmptyState
+                    ? t('releaseTimeline.no-assets-for-device', { device: currentSystemFilter.label })
+                    : effectiveFilterIds.length > 0
+                    ? t('releaseTimeline.no-assets-match-the-current-filters-try-differen')
+                    : t('releaseTimeline.no-matching-releases-found')}
+              </p>
+            </div>
             {releaseShowMode === 'unread' && (
               <Button
                 onClick={() => handleShowModeChange('all')}
                 className="ui-button-primary mt-4 px-4 py-2 text-sm"
               >
-                {t('查看全部', 'Show All')}
+                {t('releaseTimeline.show-all-2')}
               </Button>
             )}
-            {currentSystemActive && releaseShowMode !== 'unread' && (
+            {deviceEmptyState && releaseShowMode !== 'unread' && (
               <Button
                 onClick={() => handleFilterToggle(BUILTIN_CURRENT_SYSTEM_FILTER_ID)}
                 className="ui-button-primary mt-4 px-4 py-2 text-sm"
               >
-                {t('关闭「当前系统」过滤器', 'Turn off "This device" filter')}
+                {t('releaseTimeline.disable-current-system-filter')}
               </Button>
             )}
-            {effectiveFilterIds.length > 0 && !currentSystemActive && releaseShowMode !== 'unread' && (
+            {effectiveFilterIds.length > 0 && !deviceEmptyState && releaseShowMode !== 'unread' && (
               <Button
                 onClick={handleClearFilters}
                 className="ui-button-primary mt-4 px-4 py-2 text-sm"
               >
-                {t('清除过滤器', 'Clear Filters')}
+                {t('releaseTimeline.clear-filters')}
               </Button>
             )}
           </div>
@@ -1149,16 +1290,12 @@ export const ReleaseTimeline: React.FC = () => {
                 allDownloadLinks={allLinks}
                 assetBadges={assetBadges}
                 currentPlatform={device.platform ?? undefined}
-                showAllAssets={showAllAssets.has(release.id)}
                 isUnread={isUnread}
                 isAssetsExpanded={isAssetsExpanded}
                 isReleaseNotesExpanded={isReleaseNotesExpanded}
                 isFullContent={isFullContent}
                 truncatedBody={truncatedBody}
-                matchesActiveFilters={(name, isSourceCode) => matchesLinkForCard(release, name, isSourceCode)}
-                selectedFilters={selectedFilters}
                 onToggleAssets={() => toggleAssets(release.id)}
-                onToggleAllAssets={() => toggleShowAllAssets(release.id)}
                 onToggleReleaseNotes={() => toggleReleaseNotes(release.id)}
                 onToggleFullContent={(e) => toggleFullContent(release.id, e)}
                 onUnsubscribe={() => handleUnsubscribeRelease(release.repository.id)}
@@ -1213,19 +1350,19 @@ export const ReleaseTimeline: React.FC = () => {
                   <span className="flex items-center space-x-2 min-w-0 ml-2">
                     <span className="text-right min-w-0">
                       <span className="block text-xs text-muted-foreground dark:text-muted-foreground hidden sm:block">
-                        {releases.length} {t('个版本', 'releases')}
+                        {releases.length} {t('releaseTimeline.releases')}
                       </span>
                       {latestRelease && (
                         <>
                           <span className="block text-xs text-muted-foreground dark:text-muted-foreground truncate">
-                            {t('最新:', 'Latest:')} {latestRelease.tag_name}
+                            {t('releaseTimeline.latest')} {latestRelease.tag_name}
                           </span>
                           {latestEffectiveTime && (
                             <span className="flex items-center justify-end gap-1 text-xs text-muted-foreground dark:text-muted-foreground/70 whitespace-nowrap">
-                              {formatDistanceToNow(new Date(latestEffectiveTime), { addSuffix: true, locale: language === 'zh' ? zhCN : undefined })}
+                              {formatDistanceToNow(new Date(latestEffectiveTime), { addSuffix: true, locale: getDateFnsLocale(language) })}
                               {latestAssetsUpdated && (
                                 <span className="text-xs px-1 py-px rounded bg-primary/10 text-primary font-medium">
-                                  {t('资产已更新', 'Assets updated')}
+                                  {t('releaseTimeline.assets-updated')}
                                 </span>
                               )}
                             </span>
@@ -1266,16 +1403,12 @@ export const ReleaseTimeline: React.FC = () => {
                             allDownloadLinks={allLinks}
                             assetBadges={assetBadges}
                             currentPlatform={device.platform ?? undefined}
-                            showAllAssets={showAllAssets.has(release.id)}
                             isUnread={isUnread}
                             isAssetsExpanded={isAssetsExpanded}
                             isReleaseNotesExpanded={isReleaseNotesExpanded}
                             isFullContent={isFullContent}
                             truncatedBody={truncatedBody}
-                            matchesActiveFilters={(name, isSourceCode) => matchesLinkForCard(release, name, isSourceCode)}
-                            selectedFilters={selectedFilters}
                             onToggleAssets={() => toggleAssets(release.id)}
-                            onToggleAllAssets={() => toggleShowAllAssets(release.id)}
                             onToggleReleaseNotes={() => toggleReleaseNotes(release.id)}
                             onToggleFullContent={(e) => toggleFullContent(release.id, e)}
                             onUnsubscribe={() => handleUnsubscribeRelease(release.repository.id)}
@@ -1306,7 +1439,7 @@ export const ReleaseTimeline: React.FC = () => {
               size="icon"
               onClick={() => handlePageChange(1)}
               disabled={clampedPage === 1}
-              aria-label={t('第一页', 'First page')}
+              aria-label={t('releaseTimeline.first-page')}
               className="h-9 w-9 rounded-lg bg-muted p-0 text-muted-foreground dark:bg-muted/40 dark:text-muted-foreground hover:bg-accent dark:hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <ChevronsLeft className="w-4 h-4" />
@@ -1317,7 +1450,7 @@ export const ReleaseTimeline: React.FC = () => {
               size="icon"
               onClick={() => handlePageChange(clampedPage - 1)}
               disabled={clampedPage === 1}
-              aria-label={t('上一页', 'Previous page')}
+              aria-label={t('releaseTimeline.previous-page')}
               className="h-9 w-9 rounded-lg bg-muted p-0 text-muted-foreground dark:bg-muted/40 dark:text-muted-foreground hover:bg-accent dark:hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <ChevronLeft className="w-4 h-4" />
@@ -1351,7 +1484,7 @@ export const ReleaseTimeline: React.FC = () => {
               size="icon"
               onClick={() => handlePageChange(clampedPage + 1)}
               disabled={clampedPage === totalPages}
-              aria-label={t('下一页', 'Next page')}
+              aria-label={t('releaseTimeline.next-page')}
               className="h-9 w-9 rounded-lg bg-muted p-0 text-muted-foreground dark:bg-muted/40 dark:text-muted-foreground hover:bg-accent dark:hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <ChevronRight className="w-4 h-4" />
@@ -1362,7 +1495,7 @@ export const ReleaseTimeline: React.FC = () => {
               size="icon"
               onClick={() => handlePageChange(totalPages)}
               disabled={clampedPage === totalPages}
-              aria-label={t('最后一页', 'Last page')}
+              aria-label={t('releaseTimeline.last-page')}
               className="h-9 w-9 rounded-lg bg-muted p-0 text-muted-foreground dark:bg-muted/40 dark:text-muted-foreground hover:bg-accent dark:hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <ChevronsRight className="w-4 h-4" />
@@ -1374,6 +1507,9 @@ export const ReleaseTimeline: React.FC = () => {
         isOpen={isReleaseSourceSettingsOpen}
         onClose={() => setIsReleaseSourceSettingsOpen(false)}
       />
-    </div>
+        </div>
+      </div>
+      </div>
+    </>
   );
 };

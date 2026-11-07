@@ -47,6 +47,7 @@ function makeService(backendUrl: string | null = null): GitHubListsApiService {
   const api = new GitHubListsApiService('gh_token');
   if (backendUrl) {
     api.setBackendUrl(backendUrl);
+    api.setBackendAuthToken('backend_secret');
   }
   return api;
 }

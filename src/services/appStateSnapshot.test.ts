@@ -30,7 +30,7 @@ describe('appStateSnapshot', () => {
     const initial = createInitialState() as unknown as ReturnType<typeof useAppStore.getState>;
     const changedTheme = {
       ...initial,
-      theme: (initial.theme === 'dark' ? 'light' : 'dark') as 'light' | 'dark',
+      themeMode: (initial.themeMode === 'dark' ? 'light' : 'dark') as typeof initial.themeMode,
     };
     const changedToken = { ...initial, githubToken: 'github-token' };
 

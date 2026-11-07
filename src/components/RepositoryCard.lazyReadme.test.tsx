@@ -1,7 +1,7 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TooltipProvider } from './ui/tooltip';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Repository } from '../types';
 
 const mocks = vi.hoisted(() => ({
@@ -85,25 +85,13 @@ const storeState = {
 };
 
 describe('RepositoryCard README lazy boundary', () => {
-  afterEach(() => {
-    cleanup();
-    vi.doUnmock('./ReadmeModal');
-    vi.restoreAllMocks();
-  });
-
   beforeEach(() => {
-    cleanup();
     vi.resetModules();
-    vi.doUnmock('./ReadmeModal');
     vi.clearAllMocks();
     vi.spyOn(console, 'error').mockImplementation(mocks.consoleError);
     mocks.useAppStore.mockImplementation((selector?: (state: typeof storeState) => unknown) => (
       selector ? selector(storeState) : storeState
     ));
-  });
-
-  afterEach(() => {
-    cleanup();
   });
 
   it('restores focus to the keyboard trigger after the README modal closes', async () => {
@@ -141,7 +129,7 @@ describe('RepositoryCard README lazy boundary', () => {
     await user.click(await screen.findByRole('button', { name: 'Close README' }, { timeout: 10_000 }));
 
     expect(trigger).toHaveFocus();
-  }, 30_000);
+  }, 15_000);
 
   it('renders the existing error boundary when the README lazy chunk cannot load', async () => {
     vi.doMock('./ReadmeModal', () => {
@@ -160,5 +148,5 @@ describe('RepositoryCard README lazy boundary', () => {
     await user.click(screen.getByRole('button', { name: /owner\/example-repository/i }));
 
     expect(await screen.findByRole('heading', { name: 'Application Error' }, { timeout: 10_000 })).toBeInTheDocument();
-  }, 30_000);
+  }, 15_000);
 });

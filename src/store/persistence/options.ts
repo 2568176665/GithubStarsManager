@@ -5,9 +5,13 @@ import { defaultHeaderMenuConfig, defaultReleaseSourceSettings, defaultSubscript
 import { defaultRepositoryChatSettings } from '../../types/repositoryChat';
 import { logger } from '../../services/logger';
 import { normalizeReleaseSourceSettings } from '../../utils/releaseSources';
+import { normalizeXTweetFollows } from '../../utils/xTweetFollows';
+import { normalizeTelegramFollows } from '../../utils/telegramFollows';
+import { normalizeExternalDiscoveryChannels } from '../../utils/discoveryFeeds';
 import type { AppStoreState } from '../types';
 import {
   defaultDiscoveryChannels,
+  normalizeMcpConfig,
   normalizeRepositoryChatSettings,
   normalizeVectorSearchConfig,
   normalizeVectorSearchStatus,
@@ -19,17 +23,21 @@ import { debouncedPersistStorage } from './storage';
 
 export const appPersistenceOptions: PersistOptions<AppStoreState, PersistedAppState> = {
   name: 'github-stars-manager',
-  version: 14,
+  version: 16,
   storage: debouncedPersistStorage as PersistStorage<PersistedAppState>,
 partialize: (state) => ({
   // 持久化用户信息和认证状态
   user: state.user,
   githubToken: state.githubToken,
   isAuthenticated: state.isAuthenticated,
+  accountWorkspaces: state.accountWorkspaces,
 
   // 持久化仓库数据
   repositories: state.repositories,
   lastSync: state.lastSync,
+
+  // Theme token（开发守则 §14）：声明式外观偏好
+  themeTokens: state.themeTokens,
 
   // 持久化 Gist 数据
   gists: state.gists,
@@ -54,6 +62,9 @@ sortOrder: state.gistSearchFilters.sortOrder,
   vectorSearchConfig: state.vectorSearchConfig,
   // 持久化向量搜索状态（vectorCount 等，跨重启保留）
   vectorSearchStatus: state.vectorSearchStatus,
+
+  // MCP prefs + bearer token (stable across restarts; only changes on user reset)
+  mcpConfig: state.mcpConfig,
 
   // 持久化WebDAV配置
   webdavConfigs: state.webdavConfigs,
@@ -80,16 +91,28 @@ sortOrder: state.gistSearchFilters.sortOrder,
 
   // 持久化资源过滤器
   assetFilters: state.assetFilters,
+  // 卡片可见字段（开发守则 §14）
+  repositoryCardFields: state.repositoryCardFields,
+  repositoryCardActions: state.repositoryCardActions,
+
+  // Trending 快照（开发守则 §7）：本地榜单历史，不参与任何远端同步
+  trendingSnapshots: state.trendingSnapshots,
 
   // 持久化UI设置
-  theme: state.theme,
-  themePreset: state.themePreset,
+  themeMode: state.themeMode,
+  themePresetLight: state.themePresetLight,
+  themePresetDark: state.themePresetDark,
   currentView: state.currentView,
   selectedCategory: state.selectedCategory,
   language: state.language,
   translationEngine: state.translationEngine,
+  autoTranslateRepoDescription: state.autoTranslateRepoDescription,
   isSidebarCollapsed: state.isSidebarCollapsed,
   headerMenuConfig: state.headerMenuConfig,
+
+  // 持久化后端 API Secret（跨会话/跨标签保留，配合修复 #259）。同时保留
+  // localStorage 镜像（AUTH_MIRROR_KEY）作为异步 IndexedDB 写入失败时的兜底。
+  backendApiSecret: state.backendApiSecret,
 
   // 持久化同步范围配置（GitHub Lists 同步）
   syncMode: state.syncMode,
@@ -99,11 +122,8 @@ sortOrder: state.gistSearchFilters.sortOrder,
 
   // 持久化搜索排序设置
   searchFilters: {
-    sortBy: state.searchFilters.sortBy,
-    sortOrder: state.searchFilters.sortOrder,
-    healthArchived: state.searchFilters.healthArchived,
-    healthRecentActivity: state.searchFilters.healthRecentActivity,
-    healthHasLicense: state.searchFilters.healthHasLicense,
+sortBy: state.searchFilters.sortBy,
+sortOrder: state.searchFilters.sortOrder,
   },
 
   // 持久化仓库页面视图设置
@@ -128,7 +148,7 @@ sortOrder: state.gistSearchFilters.sortOrder,
 discoveryChannels: state.discoveryChannels,
 selectedDiscoveryChannel: state.selectedDiscoveryChannel,
 // discoveryRepos 不持久化，它是极其庞大的 JSON 对象。
-// 在部分浏览器的 IDB partialize 阶段，
+// 在 Electron 41/v8/macOS 上的 IDB partialize 阶段，
 // 由于频繁序列化这个可能达数MB的大对象，会触发底层 JIT CHECK assertion failed (brk 0) 导致崩溃。
 // 这里的会话级运行时数据都取消持久化：
 // discoveryRepos
@@ -140,7 +160,25 @@ discoveryPlatform: state.discoveryPlatform,
 discoveryLanguage: state.discoveryLanguage,
 discoverySortBy: state.discoverySortBy,
 discoverySortOrder: state.discoverySortOrder,
+// 仓库搜索模式（关键词/AI 语义）持久化；语义搜索的 phase 进度与空态原因是
+// 会话级运行时数据（同 discoveryRepos 理由），不入白名单。
+discoverySearchMode: state.discoverySearchMode,
 discoverySelectedTopic: state.discoverySelectedTopic,
+  weeklyOnlyCollected: state.weeklyOnlyCollected,
+  xTweetFollows: state.xTweetFollows,
+  // xTweetAuth 仅由桌面端 safeStorage 安全加密存储（Web 模式仅在内存），避免明文 Cookie 写入 IndexedDB/localStorage（CWE-922）。
+  // 仅持久化非敏感的 xTweetAuthRevision 用于跨会话请求签名稳定性。
+  xTweetAuthRevision: state.xTweetAuthRevision,
+  telegramFollows: state.telegramFollows,
+// 持久化完整代理配置，包含认证密码，确保重启后无需重新输入。
+proxyConfig: {
+  enabled: state.proxyConfig.enabled,
+  type: state.proxyConfig.type,
+  host: state.proxyConfig.host,
+  port: state.proxyConfig.port,
+  username: state.proxyConfig.username,
+  password: state.proxyConfig.password,
+},
 // 持久化 RPC 下载配置（含密钥，确保重启后不丢失）
 rpcDownloadConfig: {
   enabled: state.rpcDownloadConfig.enabled,
@@ -184,6 +222,12 @@ state.defaultCategoryOverrides = {};
 state.vectorSearchStatus = normalizeVectorSearchStatus(state.vectorSearchStatus);
   }
 
+  // Additive: MCP config defaults when missing (upgrade). Old builds ignore this key on downgrade.
+  if (state) {
+const stateRecord = state as Record<string, unknown>;
+stateRecord.mcpConfig = normalizeMcpConfig(stateRecord.mcpConfig);
+  }
+
   // 迁移仓库数据中的旧标记
   if (state && Array.isArray(state.repositories)) {
 let migratedCount = 0;
@@ -207,7 +251,7 @@ state.selectedDiscoveryChannel = 'trending';
 state.discoveryChannels = defaultDiscoveryChannels;
   } else if (state && Array.isArray(state.discoveryChannels)) {
 const persistedChannels = state.discoveryChannels as unknown[];
-state.discoveryChannels = defaultDiscoveryChannels.map((defaultChannel) => {
+state.discoveryChannels = [...defaultDiscoveryChannels.map((defaultChannel) => {
 const persistedChannel = persistedChannels.find((channel) => {
   return (channel as Record<string, unknown>)?.id === defaultChannel.id;
 }) as Record<string, unknown> | undefined;
@@ -220,7 +264,7 @@ return {
 ...defaultChannel,
 enabled: persistedChannel.enabled !== false,
 };
-});
+}), ...normalizeExternalDiscoveryChannels(persistedChannels)];
   }
   // 迁移订阅频道（版本 4→5：daily-dev → most-dev，新增 trending，补全 nameEn）
   const defaultChannelsMap = new Map(defaultSubscriptionChannels.map(ch => [ch.id, ch]));
@@ -279,12 +323,37 @@ state.discoverySortOrder = 'Descending';
   // discoveryIsLoading 不应持久化，migrate 时始终重置防止旧数据格式异常导致 spread 崩溃
   if (state) {
 (state as Record<string, unknown>).discoveryIsLoading = {
-'trending': false, 'hot-release': false, 'most-popular': false, 'topic': false, 'search': false,
+'trending': false, 'hot-release': false, 'most-popular': false, 'topic': false, 'x-tweet': false, 'telegram': false, 'weekly': false, 'search': false, 'code-search': false,
 };
 // discoveryScrollPositions 同样不应持久化，重置以避免 stale 滚动位置
 (state as Record<string, unknown>).discoveryScrollPositions = {
-'trending': 0, 'hot-release': 0, 'most-popular': 0, 'topic': 0, 'search': 0,
+'trending': 0, 'hot-release': 0, 'most-popular': 0, 'topic': 0, 'x-tweet': 0, 'telegram': 0, 'weekly': 0, 'search': 0, 'code-search': 0,
 };
+  }
+
+  // v14: 周刊频道过滤器偏好兜底
+  if (state && typeof (state as Record<string, unknown>).weeklyOnlyCollected !== 'boolean') {
+    (state as Record<string, unknown>).weeklyOnlyCollected = false;
+  }
+
+  // v14→v15: X 推文频道选项兜底（关注列表默认含 geekbb）
+  if (state) {
+    const stateRecord = state as Record<string, unknown>;
+    stateRecord.xTweetFollows = normalizeXTweetFollows(stateRecord.xTweetFollows);
+    // 旧快照可能含明文 xTweetAuth：直接删除（不删除整个快照），内存态置 null；
+    // 清理后的快照随下次持久化写回 IndexedDB/localStorage。
+    if ('xTweetAuth' in stateRecord) delete stateRecord.xTweetAuth;
+    if (typeof stateRecord.xTweetAuthRevision !== 'number' || !Number.isFinite(stateRecord.xTweetAuthRevision)) {
+      stateRecord.xTweetAuthRevision = 0;
+    }
+    (state as Record<string, unknown>).telegramFollows = normalizeTelegramFollows(
+      (state as Record<string, unknown>).telegramFollows,
+    );
+  }
+
+  // v5→v6: 初始化 proxyConfig
+  if (state && !(state as Record<string, unknown>).proxyConfig) {
+(state as Record<string, unknown>).proxyConfig = { enabled: false, type: 'http', host: '', port: 7890 };
   }
 
   // 初始化 rpcDownloadConfig
@@ -303,6 +372,11 @@ state.discoverySortOrder = 'Descending';
   // v8→v9: 初始化 headerMenuConfig
   if (state && !Array.isArray((state as Record<string, unknown>).headerMenuConfig)) {
 (state as Record<string, unknown>).headerMenuConfig = defaultHeaderMenuConfig;
+  }
+
+  // v9→v10: 初始化 backendApiSecret（旧版仅存 sessionStorage；migrate 前置为 null）
+  if (state && typeof (state as Record<string, unknown>).backendApiSecret !== 'string') {
+(state as Record<string, unknown>).backendApiSecret = null;
   }
 
   // v11→v12: 仓库问答设置只存非敏感字段；旧快照使用安全默认值。
@@ -328,6 +402,17 @@ stateRecord.vectorSearchConfig = normalizeVectorSearchConfig(
 stateRecord.vectorSearchConfig,
 stateRecord.embeddingConfigs
 );
+stateRecord.mcpConfig = normalizeMcpConfig(stateRecord.mcpConfig);
+    }
+
+  // v15→v16: per-GitHub-id workspace snapshots so logout does not wipe local data
+  if (state) {
+    const stateRecord = state as Record<string, unknown>;
+    if (typeof stateRecord.accountWorkspaces !== 'object'
+      || stateRecord.accountWorkspaces === null
+      || Array.isArray(stateRecord.accountWorkspaces)) {
+      stateRecord.accountWorkspaces = {};
+    }
   }
 
   return state as PersistedAppState;
@@ -357,6 +442,7 @@ customCategoriesCount: normalized.customCategories?.length || 0,
   writeAuthMirror({
 user: merged.user ?? null,
 githubToken: typeof merged.githubToken === 'string' ? merged.githubToken : null,
+backendApiSecret: typeof merged.backendApiSecret === 'string' ? merged.backendApiSecret : null,
   });
 
   return merged;

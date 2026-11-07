@@ -1,14 +1,25 @@
+import { i18n } from '../../i18n';
 import type { Repository } from '../../types';
 import { logger } from '../../services/logger';
 import { matchesCategory } from '../../utils/categoryUtils';
 import type { AppStoreSlice } from '../types';
-import { defaultCategories, initialSearchFilters } from '../schema';
-import { getAllCategories, getCategoryNameVariants } from '../helpers/categoryHelpers';
+import { initialSearchFilters } from '../schema';
+import { getAllCategories } from '../helpers/categoryHelpers';
+import { buildListsPushPlan, validateListsPushPlan, GITHUB_LISTS_MAX_COUNT, GITHUB_LISTS_NAME_MAX_LENGTH } from '../helpers/listsPushPlan';
 import { hasActiveSearchFilters } from '../../utils/repoSearch';
 import { areRepositoryRecordsEqual, replaceRepositoryInList } from '../helpers/repositoryRecords';
-import { mergeRepositoriesPreservingLocalMetadata } from '../../utils/repositoryMerge';
+import { shouldPreserveExisting } from '../helpers/accountWorkspace';
+import { findIdentityMatch, isValidGitHubRepositoryId } from '../../utils/repositoryIdentity';
 
-const normalizeRepositoryName = (fullName: string): string => fullName.trim().toLowerCase();
+/** 合成一个不与现有记录冲突的本地 id（timestamp + random，避免并发竞态）。 */
+const generateFallbackRepositoryId = (existingRepositories: Repository[]): number => {
+  const timestamp = Date.now();
+  const random = Math.floor(Math.random() * 10000);
+  const maxExistingId = existingRepositories.length > 0
+    ? Math.max(...existingRepositories.map((r) => r.id))
+    : 0;
+  return Math.max(timestamp, maxExistingId + 1) + random;
+};
 
 export const createRepositorySlice: AppStoreSlice<Pick<import('../types').AppActions,
   | 'setRepositories'
@@ -33,14 +44,20 @@ export const createRepositorySlice: AppStoreSlice<Pick<import('../types').AppAct
   | 'setSearchResults'
 >> = (set, get) => ({
       // Repository actions
-      setRepositories: (repositories) => set((state) => ({
-        repositories,
-        // Background sync must not wipe an active search result set: replacing
-        // it with the full list shrinks the visible slice and unmounts the card
-        // being edited (closing its edit modal). SearchBar recomputes results
-        // from the new repositories on its own effect.
-        searchResults: hasActiveSearchFilters(state.searchFilters) ? state.searchResults : repositories,
-      })),
+      setRepositories: (repositories, options) => set((state) => {
+        if (shouldPreserveExisting(repositories, state.repositories, options?.allowEmpty)) {
+          logger.warn('store.setRepositories', 'Refusing empty overwrite of local repositories');
+          return state;
+        }
+        return {
+          repositories,
+          // Background sync must not wipe an active search result set: replacing
+          // it with the full list shrinks the visible slice and unmounts the card
+          // being edited (closing its edit modal). SearchBar recomputes results
+          // from the new repositories on its own effect.
+          searchResults: hasActiveSearchFilters(state.searchFilters) ? state.searchResults : repositories,
+        };
+      }),
       updateRepository: (repo) => set((state) => {
         const repositoriesResult = replaceRepositoryInList(state.repositories, repo);
         const searchResultsResult = state.searchResults === state.repositories
@@ -68,16 +85,23 @@ export const createRepositorySlice: AppStoreSlice<Pick<import('../types').AppAct
 
         const applyPatches = (list: Repository[]): { repositories: Repository[]; changed: boolean } => {
           let changed = false;
-          // 用 Map 索引避免多次 findIndex
-          const indexById = new Map(list.map((r, i) => [r.id, i]));
+          // 用 Map 索引避免多次 findIndex；重复 id 的所有记录统一应用补丁：
+          // 向量按 id 唯一，索引标记是 id 级事实，只标首条/末条都会让增量
+          // 模式下实际上传的副本漏标而反复重嵌。
+          const indicesById = new Map<number, number[]>();
+          list.forEach((r, i) => {
+            const indices = indicesById.get(r.id);
+            if (indices) indices.push(i);
+            else indicesById.set(r.id, [i]);
+          });
           const next = list.slice();
           for (const [id, patch] of patchMap) {
-            const idx = indexById.get(id);
-            if (idx === undefined) continue;
-            const merged = { ...next[idx], ...patch };
-            if (!areRepositoryRecordsEqual(next[idx], merged)) {
-              next[idx] = merged;
-              changed = true;
+            for (const idx of indicesById.get(id) ?? []) {
+              const merged = { ...next[idx], ...patch };
+              if (!areRepositoryRecordsEqual(next[idx], merged)) {
+                next[idx] = merged;
+                changed = true;
+              }
             }
           }
           return { repositories: next, changed };
@@ -104,37 +128,47 @@ export const createRepositorySlice: AppStoreSlice<Pick<import('../types').AppAct
         };
       }),
       addRepository: (repo) => set((state) => {
-        // GitHub full_name is case-insensitive; this also finds records created
-        // by older versions with a synthetic local ID.
-        const existingRepoIndex = state.repositories.findIndex(r =>
-          normalizeRepositoryName(r.full_name) === normalizeRepositoryName(repo.full_name)
-        );
+        // 身份判定统一走 findIdentityMatch（id 优先，合成 id 的名称兜底其次）——
+        // 与星标同步 mergeStarredRepositories 共用同一份规则，避免两处口径漂移。
+        const existing = findIdentityMatch(repo, state.repositories);
         let updatedRepositories;
 
-        if (existingRepoIndex >= 0) {
-          const existingRepository = state.repositories[existingRepoIndex];
-          const [updatedRepository] = mergeRepositoriesPreservingLocalMetadata(
-            [{ ...repo, id: existingRepository.id }],
-            [existingRepository],
-          );
-
-          // Real GitHub IDs supersede the synthetic IDs generated by older
-          // versions. Keep the old ID only for incomplete local inputs.
+        if (existing) {
+          // 同一 GitHub 身份：更新现有仓库（沿用其 ID，保留 AI 分析与自定义字段）。
+          // 入参是完整 GitHub 数据，full_name 等源字段随之刷新（改名即在此生效）。
+          const existingRepoIndex = state.repositories.indexOf(existing);
           updatedRepositories = [...state.repositories];
           updatedRepositories[existingRepoIndex] = {
-            ...updatedRepository,
-            id: repo.id > 0 ? repo.id : existingRepository.id,
+            ...repo,
+            id: existing.id,
+            // 保留自定义编辑的内容
+            custom_description: existing.custom_description,
+            custom_tags: existing.custom_tags,
+            custom_category: existing.custom_category,
+            category_locked: existing.category_locked,
+            last_edited: existing.last_edited,
+            subscribed_to_releases: existing.subscribed_to_releases,
+            // 保留已完成的 AI 分析：入参来自 GitHub 详情 / 发现页数据，
+            // 不带这些字段，直接展开会把已有 AI 摘要与标签清空。
+            // 用 `?? existing.x` 而非无条件回填：入参若显式带了新值则采用新值。
+            ai_summary: repo.ai_summary ?? existing.ai_summary,
+            ai_tags: repo.ai_tags ?? existing.ai_tags,
+            ai_platforms: repo.ai_platforms ?? existing.ai_platforms,
+            analyzed_at: repo.analyzed_at ?? existing.analyzed_at,
+            analysis_failed: repo.analysis_failed ?? existing.analysis_failed,
+            analysis_error: repo.analysis_error ?? existing.analysis_error,
           };
         } else {
-          // GitHub API 返回的正数 ID 是稳定身份；仅本地不完整输入才生成 ID。
-          // 使用 timestamp + random 确保唯一性，避免并发时的竞态条件
-          const timestamp = Date.now();
-          const random = Math.floor(Math.random() * 10000);
-          const maxExistingId = state.repositories.length > 0
-            ? Math.max(...state.repositories.map(r => r.id))
-            : 0;
-          const newId = repo.id > 0 ? repo.id : Math.max(timestamp, maxExistingId + 1) + random;
-          updatedRepositories = [...state.repositories, { ...repo, id: newId }];
+          // 新增为独立记录：本地没有该仓库，或同名但属于**另一个** GitHub 仓库。
+          // 此时绝不能沿用 existing.id —— 否则新仓库会被写到旧仓库的 ID 下：
+          // 用户对新仓库做完 AI 分析后，下次同步按 GitHub ID 匹配不到本地记录
+          // （id 不同，且名称兜底只认领合成 id 记录），分析结果会再次丢失；
+          // 若旧仓库仍在星标里，新仓库的分析还会被错误归属到旧仓库。
+          // 优先沿用入参的 GitHub 真实 id；仅当 id 不可用时，才退回合成 id
+          // （timestamp + random，确保唯一性，避免并发竞态）。
+          updatedRepositories = isValidGitHubRepositoryId(repo.id)
+            ? [...state.repositories, { ...repo, id: repo.id }]
+            : [...state.repositories, { ...repo, id: generateFallbackRepositoryId(state.repositories) }];
         }
 
         return {
@@ -156,21 +190,21 @@ export const createRepositorySlice: AppStoreSlice<Pick<import('../types').AppAct
       resetListsPush: () => set({ listsPush: { isRunning: false, total: 0, done: 0, currentLabel: null, message: null, error: null } }),
       setListsPushError: (error) => set({ listsPush: { isRunning: false, total: 0, done: 0, currentLabel: null, message: null, error } }),
       setCategoryListIdMap: (categoryId, listId) => set((state) => ({ categoryListIdMap: { ...state.categoryListIdMap, [categoryId]: listId } })),
-      pushCategoriesToLists: async (api) => {
+      pushCategoriesToLists: async (api, categoryIds) => {
         const state = get();
-        const t = (zh: string, en: string) => (state.language === 'zh' ? zh : en);
+        const t = i18n.getFixedT(state.language, 'app');
         // 重入保护：已有回写进行中时直接返回，避免并发创建重复 list 并互相覆盖成员
         if (state.listsPush.isRunning) return;
         if (!state.githubToken) {
-          set({ listsPush: { isRunning: false, total: 0, done: 0, currentLabel: null, message: null, error: t('未登录 GitHub，请先连接', 'Not connected to GitHub yet') } });
+          set({ listsPush: { isRunning: false, total: 0, done: 0, currentLabel: null, message: null, error: t('repositorySlice.not-connected-to-github-yet') } });
           return;
         }
         if (!state.user) {
-          set({ listsPush: { isRunning: false, total: 0, done: 0, currentLabel: null, message: null, error: t('缺少用户信息，请重新连接', 'Missing user info, reconnect') } });
+          set({ listsPush: { isRunning: false, total: 0, done: 0, currentLabel: null, message: null, error: t('repositorySlice.missing-user-info-reconnect') } });
           return;
         }
         if (state.repositories.length === 0) {
-          set({ listsPush: { isRunning: false, total: 0, done: 0, currentLabel: null, message: null, error: t('暂无仓库可回写', 'No repositories to push') } });
+          set({ listsPush: { isRunning: false, total: 0, done: 0, currentLabel: null, message: null, error: t('repositorySlice.no-repositories-to-push') } });
           return;
         }
 
@@ -179,96 +213,108 @@ export const createRepositorySlice: AppStoreSlice<Pick<import('../types').AppAct
         try {
           const { user, repositories, customCategories, language, hiddenDefaultCategoryIds, defaultCategoryOverrides, categoryListIdMap } = get();
 
-          const allCategories = getAllCategories(
+          const allCategoriesForPush = getAllCategories(
             customCategories,
             language,
             hiddenDefaultCategoryIds,
             defaultCategoryOverrides
           ).filter(cat => cat.id !== 'all');
+          const allCategories = allCategoriesForPush
+            .filter(cat => !categoryIds || categoryIds.includes(cat.id));
+
+          // 仅推送选中分类时，选中集合为空（含未知/已隐藏 id）则直接报错，不发起请求
+          if (categoryIds && allCategories.length === 0) {
+            set({ listsPush: { isRunning: false, total: 0, done: 0, currentLabel: null, message: null, error: t('repositorySlice.no-categories-selected') } });
+            return;
+          }
 
           // 1. 获取当前全部 list（含成员）
           const currentLists = await api.getUserLists(user!.login);
 
-          // 2. 构建"托管 list"映射：每个本地分类 → list id。
+          // 2. 构建"托管 list"映射计划：每个本地分类 → list id。
           //    使用分类的稳定身份（规范名 + 持久化 id 映射），而不是翻译后的 cat.name：
           //    否则在中文/英文间来回推送会创建并行 list（如 "Web应用" 与 "Web Apps"）。
           //    - 优先复用已持久化的 categoryListIdMap[cat.id]（跨语言稳定）
           //    - 否则按规范名及其本地化变体在既有 list 中查找（迁移历史 list，避免重复创建）
           //    - 仍找不到才新建，并用规范名命名，随后记录到映射
-          const plannedLists = allCategories.map(cat => {
-            const persistedId = categoryListIdMap[cat.id];
-            const existing = persistedId ? currentLists.find(l => l.id === persistedId) : undefined;
-            if (existing) return { cat, existing };
+          //    计划构建为纯本地计算，便于在写入前整体校验 GitHub Lists 硬限制。
+          const plan = buildListsPushPlan(allCategories, currentLists, categoryListIdMap, defaultCategoryOverrides);
 
-            // 规范名：默认分类用其稳定中文名（除非被用户覆盖），自定义分类用其自身名称
-            const defaultCat = defaultCategories.find(d => d.id === cat.id);
-            const canonicalName = defaultCat ? defaultCat.name : cat.name;
-            const overrideName = defaultCategoryOverrides[cat.id]?.name;
-            const nameVariants = getCategoryNameVariants(canonicalName, overrideName);
-            return {
-              cat,
-              existing: currentLists.find(l =>
-                nameVariants.some(v => v.toLowerCase() === l.name.toLowerCase())
-              ),
-            };
-          });
+          // 仅推送部分分类时，未选分类可能与选中分类解析到同一个既有 list
+          //（同名分类经名称变体命中同一 list，或历史映射重叠）。这类 list 同时
+          // 承载未选分类的成员关系，第 9 步清理过期成员时不能把它们整体视为
+          // "托管"清空，否则会误删未选分类的仓库成员。按完整分类集解析出未选
+          // 分类占用的既有 list，在第 9 步原样保留。
+          const unselectedListIds = categoryIds
+            ? new Set(
+                buildListsPushPlan(
+                  allCategoriesForPush.filter(cat => !categoryIds.includes(cat.id)),
+                  currentLists,
+                  categoryListIdMap,
+                  defaultCategoryOverrides
+                )
+                  .filter(entry => entry.kind !== 'create')
+                  .map(entry => entry.listId)
+              )
+            : new Set<string>();
 
-          // GitHub limits each account to 32 lists and each list name to 32 characters.
-          // Validate the complete plan before resolving repository ids or issuing mutations.
-          const projectedListCount = currentLists.length + plannedLists.filter(plan => !plan.existing).length;
-          const invalidNames = plannedLists
-            .filter(plan => plan.cat.name.length > 32)
-            .map(plan => plan.cat.name);
-          const limitErrors: string[] = [];
-          if (projectedListCount > 32) {
-            limitErrors.push(t(
-              `计划中的 Lists 数量为 ${projectedListCount}，超过 GitHub 上限 32 个`,
-              `The planned Lists count is ${projectedListCount}, exceeding GitHub's limit of 32`
-            ));
-          }
-          for (const name of invalidNames) {
-            limitErrors.push(t(
-              `List 名称超过 32 个字符：${name}`,
-              `List name exceeds 32 characters: ${name}`
-            ));
-          }
-          if (limitErrors.length > 0) {
-            set({ listsPush: { isRunning: false, total: 0, done: 0, currentLabel: null, message: null, error: t(
-              `GitHub Lists 写入已取消：${limitErrors.join('；')}`,
-              `GitHub Lists push cancelled: ${limitErrors.join('; ')}`
-            ) } });
+          // 3. 预校验硬限制（list 总数上限 32、list 名称上限 32 字符）：
+          //    任一触发即整体中止、零写入，并在错误中列出明细，引导用户到
+          //    分类管理中隐藏/删除/重命名后重试（隐藏的分类不参与回写）。
+          const planIssue = validateListsPushPlan(plan, currentLists.length);
+          if (planIssue) {
+            const parts: string[] = [];
+            if (planIssue.tooLongNames.length > 0) {
+              const items = planIssue.tooLongNames
+                .map(({ name, length }) => t('repositorySlice.lists-push-limit-name-item', { name, length, max: GITHUB_LISTS_NAME_MAX_LENGTH }))
+                .join('\n');
+              parts.push(t('repositorySlice.lists-push-limit-name-too-long', { max: GITHUB_LISTS_NAME_MAX_LENGTH, items }));
+            }
+            if (planIssue.countExceeded) {
+              parts.push(t('repositorySlice.lists-push-limit-count-exceeded', {
+                max: GITHUB_LISTS_MAX_COUNT,
+                existing: planIssue.countExceeded.existing,
+                needed: planIssue.countExceeded.needed,
+              }));
+            }
+            set({ listsPush: { isRunning: false, total: 0, done: 0, currentLabel: null, message: null, error: parts.join('\n\n') } });
             return;
           }
 
+          // 4. 执行计划（改名 best-effort：失败保留映射，下轮推送自然重试）
           const listIdByCategoryId = new Map<string, string>();
           const managedListIds = new Set<string>();
           const nextCategoryListIdMap = { ...categoryListIdMap };
           const renameFailures: string[] = [];
-          for (const { cat, existing } of plannedLists) {
-            if (existing) {
-              // auto-migrate name on language switch — best-effort, keep mapping even if rename fails (retry next push)
-              if (existing.name !== cat.name) {
-                try {
-                  await api.updateUserList(existing.id, cat.name);
-                } catch (e) {
-                  console.warn('rename list failed', existing.id, existing.name, '->', cat.name, e);
-                  renameFailures.push(`${existing.name} -> ${cat.name}`);
-                }
-              }
-              listIdByCategoryId.set(cat.id, existing.id);
-              nextCategoryListIdMap[cat.id] = existing.id;
-              managedListIds.add(existing.id);
+          const categoryById = new Map(allCategories.map(cat => [cat.id, cat]));
+          for (const entry of plan) {
+            const cat = categoryById.get(entry.categoryId)!;
+            if (entry.kind === 'create') {
+              const id = await api.createUserList(entry.name, true);
+              listIdByCategoryId.set(entry.categoryId, id);
+              nextCategoryListIdMap[entry.categoryId] = id;
+              managedListIds.add(id);
               continue;
             }
-            const id = await api.createUserList(cat.name, true);
-            listIdByCategoryId.set(cat.id, id);
-            nextCategoryListIdMap[cat.id] = id;
-            managedListIds.add(id);
+            // auto-migrate name on language switch
+            if (entry.remoteName !== cat.name) {
+              try {
+                await api.updateUserList(entry.listId, cat.name);
+              } catch (e) {
+                console.warn('rename list failed', entry.listId, entry.remoteName, '->', cat.name, e);
+                renameFailures.push(`${entry.remoteName} -> ${cat.name}`);
+              }
+            }
+            listIdByCategoryId.set(entry.categoryId, entry.listId);
+            managedListIds.add(entry.listId);
+            if (entry.kind === 'matched') {
+              nextCategoryListIdMap[entry.categoryId] = entry.listId;
+            }
           }
           if (renameFailures.length > 0) {
             logger.warn('githubLists', 'Some lists failed to rename, will retry next push', { failures: renameFailures });
           }
-          // 3. 每仓库当前的 list 成员（小写 full_name → list id 集合）
+          // 5. 每仓库当前的 list 成员（小写 full_name → list id 集合）
           const repoCurrentListIds = new Map<string, Set<string>>();
           const lowerToOriginal = new Map<string, string>();
           for (const list of currentLists) {
@@ -280,7 +326,7 @@ export const createRepositorySlice: AppStoreSlice<Pick<import('../types').AppAct
             }
           }
 
-          // 4. 每仓库命中的托管 list（effective 标签匹配）
+          // 6. 每仓库命中的托管 list（effective 标签匹配）
           const repoTargetListIds = new Map<string, Set<string>>();
           for (const repo of repositories) {
             const ownerLogin = repo.owner?.login;
@@ -301,7 +347,7 @@ export const createRepositorySlice: AppStoreSlice<Pick<import('../types').AppAct
             }
           }
 
-          // 5. 需要更新的仓库：命中托管 list 的，或当前已在托管 list 中的（用于清理过期成员）
+          // 7. 需要更新的仓库：命中托管 list 的，或当前已在托管 list 中的（用于清理过期成员）
           const reposToUpdate = new Map<string, Set<string>>();
           for (const [key, targetIds] of repoTargetListIds) {
             reposToUpdate.set(key, targetIds);
@@ -314,11 +360,11 @@ export const createRepositorySlice: AppStoreSlice<Pick<import('../types').AppAct
           }
 
           if (reposToUpdate.size === 0) {
-            set({ listsPush: { isRunning: false, total: 0, done: 0, currentLabel: null, message: t('没有仓库命中任何分类', 'No repos matched any category'), error: null } });
+            set({ listsPush: { isRunning: false, total: 0, done: 0, currentLabel: null, message: t('repositorySlice.no-repos-matched-any-category'), error: null } });
             return;
           }
 
-          // 6. 解析仓库 node id
+          // 8. 解析仓库 node id
           const ownerNamePairs = [...reposToUpdate.keys()].map(key => {
             const original = lowerToOriginal.get(key) || key;
             const idx = original.indexOf('/');
@@ -326,7 +372,7 @@ export const createRepositorySlice: AppStoreSlice<Pick<import('../types').AppAct
           });
           const nodeIdMap = await api.resolveRepositoryNodeIds(ownerNamePairs);
 
-          // 7. 覆盖写入（保留非托管 list 成员），逐仓库更新进度
+          // 9. 覆盖写入（保留非托管 list 成员），逐仓库更新进度
           let updatedCount = 0;
           let done = 0;
           const total = reposToUpdate.size;
@@ -336,7 +382,10 @@ export const createRepositorySlice: AppStoreSlice<Pick<import('../types').AppAct
             const itemId = nodeIdMap.get(key);
             if (!itemId) continue;
             const currentIds = repoCurrentListIds.get(key) || new Set<string>();
-            const preservedIds = [...currentIds].filter(id => !managedListIds.has(id));
+            // 与未选分类共享的 list 即使同时被选中分类托管，其成员关系也按"未选"保留
+            const preservedIds = [...currentIds].filter(
+              id => !managedListIds.has(id) || unselectedListIds.has(id)
+            );
             const finalListIds = [...new Set([...preservedIds, ...targetIds])];
             if (finalListIds.length === currentIds.size && finalListIds.every(id => currentIds.has(id))) {
               continue;
@@ -345,14 +394,11 @@ export const createRepositorySlice: AppStoreSlice<Pick<import('../types').AppAct
             updatedCount++;
           }
 
-          set({ listsPush: { isRunning: false, total, done, currentLabel: null, message: t(
-            `已同步 ${listIdByCategoryId.size} 个 list、更新 ${updatedCount} 个仓库`,
-            `Pushed ${listIdByCategoryId.size} lists, updated ${updatedCount} repos`
-          ), error: null }, categoryListIdMap: nextCategoryListIdMap });
+          set({ listsPush: { isRunning: false, total, done, currentLabel: null, message: t('repositorySlice.pushed-v1-lists-updated-updatedcount-repos', { v1: listIdByCategoryId.size, updatedCount: updatedCount }), error: null }, categoryListIdMap: nextCategoryListIdMap });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           console.error('Push categories to lists failed:', error);
-          set({ listsPush: { isRunning: false, total: 0, done: 0, currentLabel: null, message: null, error: t('同步失败', 'Push failed') + `: ${message}` } });
+          set({ listsPush: { isRunning: false, total: 0, done: 0, currentLabel: null, message: null, error: t('repositorySlice.push-failed-detail', { message }) } });
         }
       },
       deleteRepository: (repoId) => set((state) => {
@@ -406,8 +452,12 @@ export const createRepositorySlice: AppStoreSlice<Pick<import('../types').AppAct
           originalSearchResults: state.similarView?.originalSearchResults ?? state.searchResults,
           originalSearchFilters: state.similarView?.originalSearchFilters ?? state.searchFilters,
         },
-        // 进入相似视图时清空搜索条件，避免与搜索结果混淆（相似视图是列表的"替代"视图）
-        searchFilters: { ...initialSearchFilters },
+        // 进入相似视图时清空搜索条件，但保留用户选择的排序。
+        searchFilters: {
+          ...initialSearchFilters,
+          sortBy: state.searchFilters.sortBy,
+          sortOrder: state.searchFilters.sortOrder,
+        },
       })),
       /**
        * 重置相似视图：恢复进入前的搜索结果与条件（回到"查找相似之前"的状态）。

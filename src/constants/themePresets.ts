@@ -1,34 +1,51 @@
+import { GENERATED_THEME_PRESETS } from './themePresets.generated';
+import type { GeneratedThemePalette } from './themePresets.generated';
+
 /**
- * Theme preset registry.
+ * Curated theme registry.
  *
- * Only the default preset is retained. The default preset mirrors the
- * shadcn variables in src/index.css.
+ * Palettes for non-default presets come from the generated tweakcn subset
+ * (see scripts/generate-theme-presets.mjs). The default preset mirrors the
+ * shadcn variables in src/index.css so it always matches the stylesheet.
  */
 
 export const DEFAULT_THEME_PRESET_ID = 'default' as const;
 
-export const THEME_PRESET_IDS = [DEFAULT_THEME_PRESET_ID] as const;
+export const THEME_PRESET_IDS = [
+  DEFAULT_THEME_PRESET_ID,
+  'enterprise-mod-2',
+  'light-green',
+  'claude',
+  'vercel',
+  't3-chat',
+  'deep-purple',
+  'openprofile',
+  'autoblog',
+  'zen-inspired',
+  'logistic-one',
+  'whatsapp',
+] as const;
 
 export type ThemePresetId = (typeof THEME_PRESET_IDS)[number];
-
-export type ThemePalette = Record<string, string>;
 
 export interface ThemePreset {
   id: ThemePresetId;
   labelZh: string;
   labelEn: string;
-  lightColors: ThemePalette;
-  darkColors: ThemePalette;
+  lightColors: GeneratedThemePalette;
+  darkColors: GeneratedThemePalette;
+  /** Optional per-theme radius override (CSS length). */
   radius?: string;
   fontSans?: string;
   fontMono?: string;
   fontSerif?: string;
   shadowColor?: string;
   shadowOpacity?: number;
+  /** Canonical box-shadow shared by subtle/elevated/dialog elevation tokens. */
   shadow?: string;
 }
 
-const DEFAULT_LIGHT_COLORS: ThemePalette = {
+const DEFAULT_LIGHT_COLORS: GeneratedThemePalette = {
   background: '210 40% 98%',
   foreground: '222.2 84% 4.9%',
   card: '0 0% 100%',
@@ -43,7 +60,7 @@ const DEFAULT_LIGHT_COLORS: ThemePalette = {
   'muted-foreground': '215.4 16.3% 46.9%',
   accent: '210 40% 92%',
   'accent-foreground': '222.2 47.4% 11.2%',
-  destructive: '0 84.2% 60.2%',
+  destructive: '0 72% 51%',
   'destructive-foreground': '210 40% 98%',
   border: '214.3 31.8% 91.4%',
   'border-strong': '214.3 25% 80%',
@@ -54,7 +71,7 @@ const DEFAULT_LIGHT_COLORS: ThemePalette = {
   'search-highlight': '222.2 28.4% 72.8%',
 };
 
-const DEFAULT_DARK_COLORS: ThemePalette = {
+const DEFAULT_DARK_COLORS: GeneratedThemePalette = {
   background: '222.2 84% 4.9%',
   foreground: '210 40% 98%',
   card: '222.2 47.4% 11.2%',
@@ -80,7 +97,7 @@ const DEFAULT_DARK_COLORS: ThemePalette = {
   'search-highlight': '210 24% 29.6%',
 };
 
-export const DEFAULT_PRESET: ThemePreset = {
+const DEFAULT_PRESET: ThemePreset = {
   id: DEFAULT_THEME_PRESET_ID,
   labelZh: '默认',
   labelEn: 'Default',
@@ -88,13 +105,83 @@ export const DEFAULT_PRESET: ThemePreset = {
   darkColors: DEFAULT_DARK_COLORS,
 };
 
-export const THEME_PRESETS: ThemePreset[] = [DEFAULT_PRESET];
+/** Labels for generated presets, keyed by id. */
+const GENERATED_LABELS_ZH: Record<string, string> = {
+  'enterprise-mod-2': 'Enterprise 靛蓝',
+  'light-green': '清新绿',
+  claude: 'Claude 暖橘',
+  vercel: 'Vercel 极简',
+  't3-chat': 'T3 Chat',
+  'deep-purple': '深邃紫',
+  openprofile: 'openprofile 杏黄',
+  autoblog: 'autoblog 暖橙',
+  'zen-inspired': 'Zen 素雅',
+  'logistic-one': 'LogisticOne 藏蓝',
+  whatsapp: 'WhatsApp 青绿',
+};
 
-export function getThemePreset(id?: string): ThemePreset {
-  void id;
-  return DEFAULT_PRESET;
+/**
+ * Ordered registry: curated display order, not alphabetical.
+ * Generated presets missing from the curated order are appended so data and
+ * registry can never drift apart silently.
+ */
+export const THEME_PRESETS: ThemePreset[] = (() => {
+  const byId = new Map(GENERATED_THEME_PRESETS.map((p) => [p.id, p]));
+  const ordered: ThemePreset[] = [DEFAULT_PRESET];
+  for (const id of THEME_PRESET_IDS) {
+    if (id === DEFAULT_THEME_PRESET_ID) continue;
+    const generated = byId.get(id);
+    if (!generated) {
+      throw new Error(`themePresets: generated preset "${id}" is missing — rerun npm run gen:themes`);
+    }
+    ordered.push({
+      id,
+      labelZh: GENERATED_LABELS_ZH[id] ?? generated.labelEn,
+      labelEn: generated.labelEn,
+      lightColors: generated.lightColors,
+      darkColors: generated.darkColors,
+      radius: generated.radius,
+      fontSans: generated.fontSans,
+      fontMono: generated.fontMono,
+      fontSerif: generated.fontSerif,
+      shadowColor: generated.shadowColor,
+      shadowOpacity: generated.shadowOpacity,
+      shadow: generated.shadow,
+    });
+    byId.delete(id);
+  }
+  // Anything generated but not curated still ships (forward compatibility).
+  for (const generated of byId.values()) {
+    ordered.push({
+      id: generated.id as ThemePresetId,
+      labelZh: GENERATED_LABELS_ZH[generated.id] ?? generated.labelEn,
+      labelEn: generated.labelEn,
+      lightColors: generated.lightColors,
+      darkColors: generated.darkColors,
+      radius: generated.radius,
+      fontSans: generated.fontSans,
+      fontMono: generated.fontMono,
+      fontSerif: generated.fontSerif,
+      shadowColor: generated.shadowColor,
+      shadowOpacity: generated.shadowOpacity,
+      shadow: generated.shadow,
+    });
+  }
+  return ordered;
+})();
+
+/**
+ * Look up a theme preset by its identifier, falling back to the default preset.
+ *
+ * @param id The theme preset identifier to look up.
+ * @returns The matching ThemePreset or default preset.
+ */
+export function getThemePreset(id: ThemePresetId): ThemePreset {
+  const preset = THEME_PRESETS.find((p) => p.id === id);
+  return preset ?? DEFAULT_PRESET;
 }
 
+/** Runtime guard based on the live registry (covers forward-added presets). */
 export function isThemePresetId(value: unknown): value is ThemePresetId {
-  return value === DEFAULT_THEME_PRESET_ID;
+  return typeof value === 'string' && THEME_PRESETS.some((p) => p.id === value);
 }

@@ -1,7 +1,6 @@
 
 import type { AppStoreSlice } from '../types';
-import { mergeVectorSearchConfig } from '../schema';
-import { resolveActiveAIConfig } from '../../utils/aiConfig';
+import { mergeVectorSearchConfig, normalizeMcpConfig } from '../schema';
 
 export const createConfigurationSlice: AppStoreSlice<Pick<import('../types').AppActions,
   | 'addAIConfig'
@@ -24,34 +23,23 @@ export const createConfigurationSlice: AppStoreSlice<Pick<import('../types').App
   | 'setVectorSearchConfig'
   | 'setVectorSearchStatus'
   | 'setVectorIndexingState'
+  | 'setMcpConfig'
 >> = (set) => ({
       // AI actions
-      addAIConfig: (config) => set((state) => {
-        const aiConfigs = [...state.aiConfigs, config];
-        return {
-          aiConfigs,
-          activeAIConfig: resolveActiveAIConfig(aiConfigs, state.activeAIConfig)?.id ?? null,
-        };
-      }),
+      addAIConfig: (config) => set((state) => ({
+        aiConfigs: [...state.aiConfigs, config]
+      })),
       updateAIConfig: (id, updates) => set((state) => ({
         aiConfigs: state.aiConfigs.map(config =>
           config.id === id ? { ...config, ...updates } : config
         )
       })),
-      deleteAIConfig: (id) => set((state) => {
-        const aiConfigs = state.aiConfigs.filter(config => config.id !== id);
-        return {
-          aiConfigs,
-          activeAIConfig: resolveActiveAIConfig(aiConfigs, state.activeAIConfig)?.id ?? null,
-        };
-      }),
-      setActiveAIConfig: (activeAIConfig) => set((state) => ({
-        activeAIConfig: resolveActiveAIConfig(state.aiConfigs, activeAIConfig)?.id ?? null,
+      deleteAIConfig: (id) => set((state) => ({
+        aiConfigs: state.aiConfigs.filter(config => config.id !== id),
+        activeAIConfig: state.activeAIConfig === id ? null : state.activeAIConfig
       })),
-      setAIConfigs: (aiConfigs) => set((state) => ({
-        aiConfigs,
-        activeAIConfig: resolveActiveAIConfig(aiConfigs, state.activeAIConfig)?.id ?? null,
-      })),
+      setActiveAIConfig: (activeAIConfig) => set({ activeAIConfig }),
+      setAIConfigs: (aiConfigs) => set({ aiConfigs }),
       setRepositoryChatSettings: (settings) => set((state) => ({
         repositoryChatSettings: { ...state.repositoryChatSettings, ...settings },
       })),
@@ -106,6 +94,10 @@ export const createConfigurationSlice: AppStoreSlice<Pick<import('../types').App
         vectorSearchConfig: mergeVectorSearchConfig(state.vectorSearchConfig, config)
       })),
       setVectorSearchStatus: (status) => set({ vectorSearchStatus: status }),
+      setMcpConfig: (config) =>
+        set((state) => ({
+          mcpConfig: normalizeMcpConfig({ ...state.mcpConfig, ...config }),
+        })),
       setVectorIndexingState: (indexingState) => set((state) => ({
         vectorIndexingState: { ...state.vectorIndexingState, ...indexingState }
       })),

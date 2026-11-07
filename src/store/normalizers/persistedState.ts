@@ -8,16 +8,26 @@ import type {
 } from '../../types';
 import { defaultHeaderMenuConfig, defaultSubscriptionChannels } from '../../types';
 import { DEFAULT_THEME_PRESET_ID, isThemePresetId } from '../../constants/themePresets';
+import { isAppLanguage } from '../../i18n/languages';
 import { normalizeReleaseSourceSettings } from '../../utils/releaseSources';
 import { normalizeAssetFilters } from '../../utils/assetFilters';
-import { resolveActiveAIConfig } from '../../utils/aiConfig';
+import { normalizeThemeTokens } from '../../utils/themeTokens';
+import { normalizeTrendingSnapshots } from '../../utils/trendingSnapshots';
+import { normalizeRepositoryCardFields } from '../../utils/repositoryCardFields';
+import { normalizeRepositoryCardActions } from '../../utils/repositoryCardActions';
+import { normalizeXTweetAuth, normalizeXTweetFollows } from '../../utils/xTweetFollows';
+import { normalizeTelegramFollows } from '../../utils/telegramFollows';
+import { normalizeExternalDiscoveryChannels } from '../../utils/discoveryFeeds';
+import { isChannelScrapable, isScrapeSupportSettled } from '../../services/scrapeSupport';
 import type { AppStoreState } from '../types';
+import { normalizeAccountWorkspaces } from '../helpers/accountWorkspace';
 import { readAuthMirror } from '../persistence/authStorage';
 import {
   defaultDiscoveryChannels,
   defaultPresetFilters,
   initialGistSearchFilters,
   initialSearchFilters,
+  normalizeMcpConfig,
   normalizeNumberSet,
   normalizeRepositoryChatSettings,
   normalizeVectorSearchConfig,
@@ -31,12 +41,41 @@ export const normalizePersistedState = (
   currentState: AppStoreState
 ): Partial<AppStoreState> => {
   const safePersisted = persisted ?? {};
-  // Keep only fields known by the Worker-era store. This also drops unknown
-  // fields left by older clients without reintroducing their types.
-  const workerPersisted = Object.fromEntries(
-    Object.entries(safePersisted).filter(([key]) => key in currentState),
-  ) as Partial<AppStoreState>;
-  const defaultDiscoveryChannelIds = new Set(defaultDiscoveryChannels.map((channel) => channel.id));
+  // 旧版持久化只有 theme/themePreset 单值；新契约是 themeMode +
+  // 按深浅分开的 themePresetLight/themePresetDark。旧键在此消费，
+  // 不再进入水合后的状态（避免残留僵尸字段）。
+  const { theme: legacyTheme, themePreset: legacyThemePreset, ...persistedRest } = safePersisted as
+    PersistedAppState & { theme?: unknown; themePreset?: unknown };
+  const resolvedLegacyTheme = legacyTheme === 'light' || legacyTheme === 'dark' ? legacyTheme : null;
+  const themeMode: AppStoreState['themeMode'] =
+    safePersisted.themeMode === 'light' || safePersisted.themeMode === 'dark' || safePersisted.themeMode === 'system'
+      ? safePersisted.themeMode
+      : (resolvedLegacyTheme ?? 'dark');
+  const legacyPreset = isThemePresetId(legacyThemePreset) ? legacyThemePreset : DEFAULT_THEME_PRESET_ID;
+  const themePresetLight = isThemePresetId(safePersisted.themePresetLight)
+    ? safePersisted.themePresetLight
+    : legacyPreset;
+  const themePresetDark = isThemePresetId(safePersisted.themePresetDark)
+    ? safePersisted.themePresetDark
+    : legacyPreset;
+  const persistedDiscoveryChannels = (safePersisted as Record<string, unknown>).discoveryChannels;
+  const normalizedDiscoveryChannels = [...defaultDiscoveryChannels.map((defaultChannel) => {
+    const persistedChannel = Array.isArray(persistedDiscoveryChannels)
+      ? persistedDiscoveryChannels.find((channel: unknown) =>
+          (channel as Record<string, unknown>)?.id === defaultChannel.id
+        ) as Record<string, unknown> | undefined
+      : undefined;
+    return {
+      ...defaultChannel,
+      enabled: persistedChannel?.enabled !== false,
+    };
+  }), ...normalizeExternalDiscoveryChannels(persistedDiscoveryChannels)];
+  // 抓取支持结论未落定（Web 启动探测中）时不做可见性决策，完整保留持久化的
+  // 启用标志，避免误启用「趋势」并被后续持久化写入固化（桌面端恒定已落定）
+  const scrapeSupportSettled = isScrapeSupportSettled();
+  if (scrapeSupportSettled && !normalizedDiscoveryChannels.some(channel => channel.enabled && isChannelScrapable(channel.id))) {
+    normalizedDiscoveryChannels[0] = { ...normalizedDiscoveryChannels[0], enabled: true };
+  }
   const authMirror = readAuthMirror();
 
   // Effective auth: persisted values win; the synchronous localStorage mirror
@@ -46,58 +85,74 @@ export const normalizePersistedState = (
     typeof safePersisted.githubToken === 'string'
       ? safePersisted.githubToken
       : (authMirror?.githubToken ?? null);
+  const resolvedBackendApiSecret =
+    typeof safePersisted.backendApiSecret === 'string'
+      ? (safePersisted.backendApiSecret || null)
+      : (authMirror?.backendApiSecret ?? currentState.backendApiSecret ?? null);
+
   const repositories = Array.isArray(safePersisted.repositories) ? safePersisted.repositories : [];
   const gists = Array.isArray(safePersisted.gists) ? safePersisted.gists : [];
   const starredGists = Array.isArray(safePersisted.starredGists) ? safePersisted.starredGists : [];
   const releases = Array.isArray(safePersisted.releases) ? safePersisted.releases : [];
-  const aiConfigs = Array.isArray(safePersisted.aiConfigs) ? safePersisted.aiConfigs : currentState.aiConfigs;
-  const persistedActiveAIConfig = typeof safePersisted.activeAIConfig === 'string' || safePersisted.activeAIConfig === null
-    ? safePersisted.activeAIConfig
-    : currentState.activeAIConfig;
-  const activeAIConfig = resolveActiveAIConfig(aiConfigs, persistedActiveAIConfig)?.id ?? null;
 
-  // Migration for old users: mark repos with existing releases as already synced
-
-  let repositoriesChanged = false;
-  const migratedRepositoryCandidates = repositories.map(repo => {
-    const hasExistingRelease = releases.some(r => r.repository?.id === repo.id);
-    if (hasExistingRelease && !repo.has_fetched_releases) {
-      repositoriesChanged = true;
+  // Migration for old users: mark repos with existing releases as already synced.
+  // 引用保留：无需回填时直接返回原数组——分片持久化按引用判脏，若 hydration
+  // 总是产生新数组引用，会在每次启动后触发一次全量重写。
+  // 用 String(id) 建索引：历史快照里 id 可能被持久化为字符串，与旧实现的
+  // `===` 宽松匹配历史数据保持等价；单次遍历建 Map，回填整体 O(R+L)。
+  const latestReleaseTimeByRepoId = new Map<string, number>();
+  for (const release of releases) {
+    const repoId = release.repository?.id;
+    if (repoId === undefined || repoId === null) continue;
+    const key = String(repoId);
+    const publishedTime = new Date(release.published_at).getTime();
+    const previous = latestReleaseTimeByRepoId.get(key);
+    latestReleaseTimeByRepoId.set(key, previous === undefined ? publishedTime : Math.max(previous, publishedTime));
+  }
+  const needsReleaseBackfill = repositories.some(
+    repo => latestReleaseTimeByRepoId.has(String(repo.id)) && !repo.has_fetched_releases,
+  );
+  const migratedRepositories = needsReleaseBackfill
+    ? repositories.map(repo => {
+      if (repo.has_fetched_releases) {
+        return repo;
+      }
       // Backfill last_release_fetch_time from the latest persisted release timestamp
-      const repoReleases = releases.filter(r => r.repository?.id === repo.id);
-      const latestReleaseTime = repoReleases.length > 0
-        ? Math.max(...repoReleases.map(r => new Date(r.published_at).getTime()))
-        : null;
+      const latestReleaseTime = latestReleaseTimeByRepoId.get(String(repo.id));
+      if (latestReleaseTime === undefined) {
+        return repo;
+      }
       return {
         ...repo,
         has_fetched_releases: true,
         last_release_fetch_time: repo.last_release_fetch_time || (latestReleaseTime ? new Date(latestReleaseTime).toISOString() : new Date().toISOString())
       };
-    }
-    return repo;
-  });
-  const migratedRepositories = repositoriesChanged ? migratedRepositoryCandidates : repositories;
+    })
+    : repositories;
 
   // Default includePreRelease to true if not set (backward compatibility)
   const includePreRelease = safePersisted.includePreRelease !== undefined
     ? safePersisted.includePreRelease
     : true;
 
+  const normalizedAssetFilters = normalizeAssetFilters(safePersisted.assetFilters);
+
   return {
     ...currentState,
-    ...workerPersisted,
+    ...persistedRest,
     // Auth fallback: if the IndexedDB snapshot is missing the login credentials
     // (e.g. async unload write never completed), restore from the synchronous
     // localStorage mirror. Persisted values always win over the mirror.
     user: resolvedUser,
     githubToken: resolvedGithubToken,
-    theme:
-      safePersisted.theme === 'light' || safePersisted.theme === 'dark'
-        ? safePersisted.theme
-        : 'dark',
-    themePreset: isThemePresetId(safePersisted.themePreset)
-      ? safePersisted.themePreset
-      : DEFAULT_THEME_PRESET_ID,
+    backendApiSecret: resolvedBackendApiSecret,
+    accountWorkspaces: normalizeAccountWorkspaces(
+      (safePersisted as Record<string, unknown>).accountWorkspaces,
+    ),
+    themeMode,
+    themePresetLight,
+    themePresetDark,
+    themeTokens: normalizeThemeTokens((safePersisted as Record<string, unknown>).themeTokens),
     repositories: migratedRepositories,
     gists,
     starredGists,
@@ -146,8 +201,6 @@ export const normalizePersistedState = (
       sortOrder: safePersisted.gistSearchFilters?.sortOrder || 'desc',
     },
     webdavConfigs: Array.isArray(safePersisted.webdavConfigs) ? safePersisted.webdavConfigs : [],
-    aiConfigs,
-    activeAIConfig,
     embeddingConfigs: Array.isArray(safePersisted.embeddingConfigs) ? safePersisted.embeddingConfigs : [],
     activeEmbeddingConfig: typeof safePersisted.activeEmbeddingConfig === 'string' ? safePersisted.activeEmbeddingConfig : null,
     vectorSearchConfig: normalizeVectorSearchConfig(
@@ -157,6 +210,9 @@ export const normalizePersistedState = (
     vectorSearchStatus: normalizeVectorSearchStatus(
       safePersisted.vectorSearchStatus ?? currentState.vectorSearchStatus
     ),
+// Persist full mcpConfig including token so Agent configs stay stable across restarts
+    // unless the user explicitly resets the token.
+    mcpConfig: normalizeMcpConfig((safePersisted as Record<string, unknown>).mcpConfig),
     repositoryChatSettings: normalizeRepositoryChatSettings((safePersisted as Record<string, unknown>).repositoryChatSettings),
     customCategories: Array.isArray(safePersisted.customCategories) ? safePersisted.customCategories : [],
     hiddenDefaultCategoryIds: (() => {
@@ -174,56 +230,55 @@ export const normalizePersistedState = (
     categoryOrder: Array.isArray(safePersisted.categoryOrder) ? safePersisted.categoryOrder.filter((id: unknown): id is string => typeof id === 'string') : [],
     collapsedSidebarCategoryCount: typeof safePersisted.collapsedSidebarCategoryCount === 'number' && safePersisted.collapsedSidebarCategoryCount > 0 ? safePersisted.collapsedSidebarCategoryCount : 20,
     categoryMatchMode: safePersisted.categoryMatchMode === 'legacy' ? 'legacy' : 'effective',
-    assetFilters: (() => {
-      const normalized = normalizeAssetFilters(safePersisted.assetFilters);
-      return normalized.length > 0 ? normalized : defaultPresetFilters;
-    })(),
-    language: safePersisted.language || 'zh',
+    assetFilters: normalizedAssetFilters.length > 0 ? normalizedAssetFilters : defaultPresetFilters,
+    // Trending 快照（开发守则 §7）：逐份校验并裁剪，坏快照不进内存
+    trendingSnapshots: normalizeTrendingSnapshots((safePersisted as Record<string, unknown>).trendingSnapshots),
+    // 卡片可见字段（开发守则 §14）：逐项校验，非法值按默认（显示）处理
+    repositoryCardFields: normalizeRepositoryCardFields((safePersisted as Record<string, unknown>).repositoryCardFields),
+    repositoryCardActions: normalizeRepositoryCardActions((safePersisted as Record<string, unknown>).repositoryCardActions),
+    language: isAppLanguage(safePersisted.language) ? safePersisted.language : currentState.language,
     translationEngine: safePersisted.translationEngine === 'google' || safePersisted.translationEngine === 'ai'
       ? safePersisted.translationEngine
       : 'microsoft',
+    autoTranslateRepoDescription: typeof safePersisted.autoTranslateRepoDescription === 'boolean'
+      ? safePersisted.autoTranslateRepoDescription
+      : false,
     isAuthenticated: !!(resolvedUser && resolvedGithubToken),
     releaseViewMode: safePersisted.releaseViewMode || 'timeline',
     releaseShowMode: safePersisted.releaseShowMode === 'unread' ? 'unread' : 'all',
     releaseLatestMode: safePersisted.releaseLatestMode === 'latest' ? 'latest' : 'all',
     releaseSelectedFilters: Array.isArray(safePersisted.releaseSelectedFilters) ? safePersisted.releaseSelectedFilters : [],
     releaseSearchQuery: typeof safePersisted.releaseSearchQuery === 'string' ? safePersisted.releaseSearchQuery : '',
-    discoveryChannels: (() => {
-      const persisted = (safePersisted as Record<string, unknown>).discoveryChannels;
-      if (!Array.isArray(persisted)) return defaultDiscoveryChannels;
-
-      return defaultDiscoveryChannels.map((defaultChannel) => {
-        const persistedChannel = persisted.find((channel: unknown) => {
-          return (channel as Record<string, unknown>)?.id === defaultChannel.id;
-        }) as Record<string, unknown> | undefined;
-
-        if (!persistedChannel) {
-          return defaultChannel;
-        }
-
-        return {
-      ...defaultChannel,
-      enabled: persistedChannel.enabled !== false,
-    };
-      });
-    })(),
+    discoveryChannels: normalizedDiscoveryChannels,
     // discoveryRepos is session-only runtime data. Never revive a stale legacy
     // cache during hydration, even if a historical snapshot contains the field.
-    discoveryRepos: { 'trending': [], 'hot-release': [], 'most-popular': [], 'topic': [], 'search': [] } as Record<DiscoveryChannelId, DiscoveryRepo[]>,
-    discoveryLastRefresh: { 'trending': null, 'hot-release': null, 'most-popular': null, 'topic': null, 'search': null },
-    discoveryTotalCount: { 'trending': 0, 'hot-release': 0, 'most-popular': 0, 'topic': 0, 'search': 0 },
-    selectedDiscoveryChannel: defaultDiscoveryChannelIds.has(safePersisted.selectedDiscoveryChannel as DiscoveryChannelId)
+    discoveryRepos: { 'trending': [], 'hot-release': [], 'most-popular': [], 'topic': [], 'x-tweet': [], 'telegram': [], 'weekly': [], 'search': [], 'code-search': [] } as Record<DiscoveryChannelId, DiscoveryRepo[]>,
+    discoveryLastRefresh: { 'trending': null, 'hot-release': null, 'most-popular': null, 'topic': null, 'x-tweet': null, 'telegram': null, 'weekly': null, 'search': null, 'code-search': null },
+    discoveryTotalCount: { 'trending': 0, 'hot-release': 0, 'most-popular': 0, 'topic': 0, 'x-tweet': 0, 'telegram': 0, 'weekly': 0, 'search': 0, 'code-search': 0 },
+    // 选中频道保留持久化值（存在且启用即可；未落定时 Visibility 判定延后，
+    // 由 DiscoveryView 在抓取支持结论落定后再纠偏，避免 Web+后端用户启动探测
+    // 未完成时丢失选择）
+    selectedDiscoveryChannel: normalizedDiscoveryChannels.some(channel => channel.id === safePersisted.selectedDiscoveryChannel && channel.enabled && (!scrapeSupportSettled || isChannelScrapable(channel.id)))
       ? safePersisted.selectedDiscoveryChannel as DiscoveryChannelId
-      : 'trending',
+      : normalizedDiscoveryChannels.find(channel => channel.enabled && (!scrapeSupportSettled || isChannelScrapable(channel.id)))?.id ?? defaultDiscoveryChannels[0].id,
     // discoveryIsLoading 不持久化，始终重置为 false（防止旧数据格式异常）
-    discoveryIsLoading: { 'trending': false, 'hot-release': false, 'most-popular': false, 'topic': false, 'search': false },
-    discoveryIsLoadingMore: { 'trending': false, 'hot-release': false, 'most-popular': false, 'topic': false, 'search': false },
-    discoveryLoadMoreError: { 'trending': null, 'hot-release': null, 'most-popular': null, 'topic': null, 'search': null },
-    discoveryHasMore: { 'trending': false, 'hot-release': false, 'most-popular': false, 'topic': false, 'search': false },
-    discoveryNextPage: { 'trending': 1, 'hot-release': 1, 'most-popular': 1, 'topic': 1, 'search': 1 },
+    discoveryIsLoading: { 'trending': false, 'hot-release': false, 'most-popular': false, 'topic': false, 'x-tweet': false, 'telegram': false, 'weekly': false, 'search': false, 'code-search': false },
+    discoveryIsLoadingMore: { 'trending': false, 'hot-release': false, 'most-popular': false, 'topic': false, 'x-tweet': false, 'telegram': false, 'weekly': false, 'search': false, 'code-search': false },
+    discoveryLoadMoreError: { 'trending': null, 'hot-release': null, 'most-popular': null, 'topic': null, 'x-tweet': null, 'telegram': null, 'weekly': null, 'search': null, 'code-search': null },
+    discoveryHasMore: { 'trending': false, 'hot-release': false, 'most-popular': false, 'topic': false, 'x-tweet': false, 'telegram': false, 'weekly': false, 'search': false, 'code-search': false },
+    discoveryNextPage: { 'trending': 1, 'hot-release': 1, 'most-popular': 1, 'topic': 1, 'x-tweet': 1, 'telegram': 1, 'weekly': 1, 'search': 1, 'code-search': 1 },
     // discoveryScrollPositions 不持久化，始终重置为 0
-    discoveryScrollPositions: { 'trending': 0, 'hot-release': 0, 'most-popular': 0, 'topic': 0, 'search': 0 },
+    discoveryScrollPositions: { 'trending': 0, 'hot-release': 0, 'most-popular': 0, 'topic': 0, 'x-tweet': 0, 'telegram': 0, 'weekly': 0, 'search': 0, 'code-search': 0 },
   trendingTimeRange: 'weekly' as TrendingTimeRange,
+    xTweetFollows: normalizeXTweetFollows(safePersisted.xTweetFollows),
+    // xTweetAuth 仅由桌面端 safeStorage 安全加密存储（Web 模式仅在内存），debouncedPersistStorage 不将其写入快照（CWE-922）。
+    // hydration 期间保留当前运行态 currentState.xTweetAuth，避免冲掉桌面端已恢复的鉴权状态。
+    xTweetAuth: normalizeXTweetAuth(currentState.xTweetAuth),
+    xTweetAuthRevision: typeof (safePersisted as Record<string, unknown>).xTweetAuthRevision === 'number'
+      && Number.isFinite((safePersisted as Record<string, unknown>).xTweetAuthRevision)
+      ? (safePersisted as Record<string, unknown>).xTweetAuthRevision as number
+      : 0,
+    telegramFollows: normalizeTelegramFollows(safePersisted.telegramFollows),
     // 确保 subscription 相关状态包含 trending 键
     subscriptionRepos: {
       'most-stars': [],
@@ -268,6 +323,24 @@ export const normalizePersistedState = (
       }).concat(
         defaultSubscriptionChannels.filter(dch => !persisted.some((ch: unknown) => (ch as Record<string, unknown>).id === dch.id))
       );
+    })(),
+    proxyConfig: (() => {
+      const p = (safePersisted as Record<string, unknown>).proxyConfig;
+      if (p && typeof p === 'object') {
+        const obj = p as Record<string, unknown>;
+        const validType = obj.type === 'http' || obj.type === 'socks5' ? obj.type : 'http';
+        const validHost = typeof obj.host === 'string' ? obj.host : '';
+        const validPort = typeof obj.port === 'number' && Number.isFinite(obj.port) ? obj.port : 7890;
+        return {
+          enabled: typeof obj.enabled === 'boolean' ? obj.enabled : false,
+          type: validType as import('../../types').ProxyType,
+          host: validHost,
+          port: validPort,
+          username: typeof obj.username === 'string' ? obj.username : undefined,
+          password: typeof obj.password === 'string' ? obj.password : undefined,
+        };
+      }
+      return { enabled: false, type: 'http' as const, host: '', port: 7890 };
     })(),
     rpcDownloadConfig: (() => {
       const r = (safePersisted as Record<string, unknown>).rpcDownloadConfig;

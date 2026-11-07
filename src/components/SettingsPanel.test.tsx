@@ -1,119 +1,168 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ReactNode } from 'react';
 import { SettingsPanel } from './SettingsPanel';
+import { useAppStore } from '../store/useAppStore';
 
-const mocks = vi.hoisted(() => {
-  const panel = (name: string) => () => <div data-testid={`settings-panel-${name}`}>{name}</div>;
-  const storeState = {
-    language: 'en',
-    setCurrentView: vi.fn(),
-  };
-
-  return {
-    storeState,
-    useAppStore: vi.fn((selector?: (state: typeof storeState) => unknown) => (
-      selector ? selector(storeState) : storeState
-    )),
-    backend: { isAvailable: true },
-    panels: {
-      general: panel('general'),
-      starSync: panel('star-sync'),
-      ai: panel('ai'),
-      webdav: panel('webdav'),
-      backup: panel('backup'),
-      backend: panel('backend'),
-      category: panel('category'),
-      menu: panel('menu'),
-      data: panel('data'),
-      logs: panel('logs'),
-      network: panel('network'),
-      vectorSearch: panel('vector-search'),
-    },
-  };
-});
-
-vi.mock('../store/useAppStore', () => ({ useAppStore: mocks.useAppStore }));
-vi.mock('../services/backendAdapter', () => ({ backend: mocks.backend }));
-vi.mock('./settings', () => ({
-  GeneralPanel: mocks.panels.general,
-  StarSyncPanel: mocks.panels.starSync,
-  AIConfigPanel: mocks.panels.ai,
-  WebDAVPanel: mocks.panels.webdav,
-  BackupPanel: mocks.panels.backup,
-  BackendPanel: mocks.panels.backend,
-  CategoryPanel: mocks.panels.category,
-  MenuManagementPanel: mocks.panels.menu,
-  DataManagementPanel: mocks.panels.data,
-  DiagnosticLogsPanel: mocks.panels.logs,
-  NetworkPanel: mocks.panels.network,
-  VectorSearchSettings: mocks.panels.vectorSearch,
+const hookState = vi.hoisted(() => ({
+  backendAvailable: false,
+  unindexedRepoCount: 0,
 }));
 
-Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
-  configurable: true,
-  value: vi.fn(),
+vi.mock('../features/settings/hooks/useBackendAvailability', () => ({
+  useBackendAvailability: () => hookState.backendAvailable,
+}));
+
+vi.mock('../features/settings/hooks/useVectorSearchActions', () => ({
+  useVectorSearchActions: () => ({ unindexedRepoCount: hookState.unindexedRepoCount }),
+}));
+
+vi.mock('../store/useAppStore', () => ({
+  useAppStore: vi.fn(),
+}));
+
+vi.mock('./settings', () => ({
+  AppearancePanel: () => <div data-testid="AppearancePanel-content" />,
+  GeneralPanel: () => <div data-testid="GeneralPanel-content" />,
+  AIConfigPanel: () => <div data-testid="AIConfigPanel-content" />,
+  BackendPanel: () => <div data-testid="BackendPanel-content" />,
+  CategoryPanel: () => <div data-testid="CategoryPanel-content" />,
+  DataManagementPanel: () => <div data-testid="DataManagementPanel-content" />,
+  MenuManagementPanel: () => <div data-testid="MenuManagementPanel-content" />,
+  StarSyncPanel: () => <div data-testid="StarSyncPanel-content" />,
+  VectorSearchSettings: () => <div data-testid="VectorSearchSettings-content" />,
+}));
+
+vi.mock('./ui/dialog', () => ({
+  Dialog: ({ open, children }: { open: boolean; children: ReactNode }) =>
+    open ? <div data-testid="dialog-portal">{children}</div> : null,
+  DialogContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  DialogTitle: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+}));
+
+const storeState = {
+  language: 'zh' as const,
+  setCurrentView: vi.fn(),
+};
+
+const mockUseAppStore = vi.mocked(useAppStore);
+
+const getSidebar = () => document.querySelector<HTMLElement>('[data-context-sidebar="settings"]');
+
+const expectSidebarTabs = (
+  present: string[],
+  absent: string[] = [],
+) => {
+  const sidebar = getSidebar();
+  expect(sidebar).not.toBeNull();
+  for (const id of present) {
+    expect(
+      within(sidebar as HTMLElement).getByRole('tab', { name: new RegExp(id) })
+    ).toBeTruthy();
+  }
+  for (const id of absent) {
+    expect(
+      within(sidebar as HTMLElement).queryByRole('tab', { name: new RegExp(id) })
+    ).toBeNull();
+  }
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  if (typeof Element.prototype.scrollTo !== 'function') {
+    Element.prototype.scrollTo = vi.fn();
+  }
+  hookState.backendAvailable = false;
+  hookState.unindexedRepoCount = 0;
+  sessionStorage.clear();
+  mockUseAppStore.mockImplementation(((selector?: (state: typeof storeState) => unknown) => (
+    selector ? selector(storeState) : storeState
+  )) as typeof useAppStore);
 });
 
-async function selectTab(label: string, panelName: string) {
-  fireEvent.click(screen.getAllByRole('tab', { name: label })[0]);
-  await waitFor(() => expect(screen.getByTestId(`settings-panel-${panelName}`)).toBeInTheDocument());
-  await act(async () => {
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 130));
-  });
-}
+afterEach(() => {
+  sessionStorage.clear();
+});
 
-describe('SettingsPanel', () => {
-  beforeEach(() => {
-    mocks.backend.isAvailable = true;
-    mocks.storeState.setCurrentView.mockClear();
-    sessionStorage.clear();
-  });
+describe('SettingsPanel context sidebar ownership', () => {
+  it('独立页面模式：唯一 settings 上下文侧栏，纯 SPA 不含 network/plugins/mcp，无仓库分类', () => {
+    render(<SettingsPanel isOpen />);
 
-  afterEach(() => {
-    cleanup();
-  });
+    expect(document.querySelectorAll('[data-context-sidebar="settings"]')).toHaveLength(1);
 
-  it('renders every available settings tab and switches to its panel', { timeout: 15000 }, async () => {
-    render(<SettingsPanel />);
+    const sidebar = getSidebar() as HTMLElement;
+    const tablist = within(sidebar).getByRole('tablist', { name: '设置标签页' });
+    expect(within(tablist).getAllByRole('tab')).toHaveLength(9);
+    expectSidebarTabs(['通用', '外观', '分类管理']);
+    expectSidebarTabs([], ['网络设置', '插件管理', 'MCP服务']);
 
-    expect(screen.getByTestId('settings-panel-general')).toBeInTheDocument();
-    const tabs = [
-      ['Star Sync', 'star-sync'],
-      ['AI Config', 'ai'],
-      ['WebDAV', 'webdav'],
-      ['Backup', 'backup'],
-      ['Backend', 'backend'],
-      ['Categories', 'category'],
-      ['Menu', 'menu'],
-      ['Data Management', 'data'],
-      ['Diagnostic Logs', 'logs'],
-      ['Network', 'network'],
-      ['Vector Search', 'vector-search'],
-    ];
-
-    for (const [label, panelName] of tabs) {
-      await selectTab(label, panelName);
-    }
+    // 仓库分类导航不允许串入设置页
+    expect(screen.queryByText('仓库分类')).toBeNull();
+    expect(screen.queryByText('添加分类')).toBeNull();
   });
 
-  it('hides long-lived backend tabs when no backend is available', () => {
-    mocks.backend.isAvailable = false;
+  it('Modal 模式：不渲染 data-context-sidebar，只有设置标签页', () => {
+    render(<SettingsPanel isOpen isModal onClose={vi.fn()} />);
 
-    render(<SettingsPanel />);
-
-    expect(screen.queryByRole('tab', { name: 'Network' })).not.toBeInTheDocument();
-    expect(screen.getAllByRole('tab', { name: 'Backend' })).toHaveLength(2);
+    expect(document.querySelectorAll('[data-context-sidebar="settings"]')).toHaveLength(0);
+    expect(screen.getAllByRole('tablist', { name: '设置标签页' }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('tab', { name: '通用' }).length).toBeGreaterThan(0);
+    expect(screen.queryByText('仓库分类')).toBeNull();
   });
 
-  it('opens a tab requested through the pending session navigation handoff', async () => {
-    sessionStorage.setItem('gsm:pending-settings-tab', 'backend');
+  it('切到 category Tab 后分类管理面板正常显示', async () => {
+    const scrollToSpy = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+    render(<SettingsPanel isOpen />);
 
-    render(<SettingsPanel />);
+    const sidebar = getSidebar() as HTMLElement;
+    fireEvent.click(within(sidebar).getByRole('tab', { name: '分类管理' }));
 
-    await act(async () => {
-      await Promise.resolve();
+    await waitFor(() => {
+      expect(screen.getByTestId('CategoryPanel-content')).toBeTruthy();
     });
-    expect(screen.getByTestId('settings-panel-backend')).toBeInTheDocument();
+    expect(scrollToSpy).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+    expect(screen.getByRole('tabpanel', { name: '分类管理' })).toBeTruthy();
+    scrollToSpy.mockRestore();
+  });
+
+  it('Modal 切换 Tab 不改变文档滚动位置', async () => {
+    const scrollToSpy = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+    render(<SettingsPanel isOpen isModal onClose={vi.fn()} />);
+
+    const desktopTablist = screen.getAllByRole('tablist', { name: '设置标签页' })[0];
+    fireEvent.click(within(desktopTablist).getByRole('tab', { name: '分类管理' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('CategoryPanel-content')).toBeTruthy();
+    });
+    expect(scrollToSpy).not.toHaveBeenCalled();
+    scrollToSpy.mockRestore();
+  });
+});
+
+describe('SettingsPanel pending tab and event navigation', () => {
+  it('sessionStorage pending tab 在挂载时立即生效', () => {
+    sessionStorage.setItem('gsm:pending-settings-tab', 'data');
+
+    render(<SettingsPanel isOpen />);
+
+    expect(screen.getByTestId('DataManagementPanel-content')).toBeTruthy();
     expect(sessionStorage.getItem('gsm:pending-settings-tab')).toBeNull();
+  });
+
+  it('gsm:navigate-to-settings-tab 事件继续生效', async () => {
+    render(<SettingsPanel isOpen />);
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent('gsm:navigate-to-settings-tab', {
+          detail: { tab: 'vectorSearch' },
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('VectorSearchSettings-content')).toBeTruthy();
+    });
   });
 });

@@ -1,3 +1,4 @@
+import { useT } from "../i18n/useT";
 import React, { useState, useRef } from 'react';
 import { X, Star, FolderOpen, Bot, Bell, BellOff, CheckSquare, Square, Loader2, Lock, Unlock, RotateCcw } from 'lucide-react';
 import { Repository } from '../types';
@@ -125,9 +126,8 @@ export const BulkActionToolbar: React.FC<BulkActionToolbarProps> = ({
           'restore': { zh: '批量还原', en: 'Bulk Restore' },
         };
         const label = actionLabels[action];
-        const message = language === 'zh'
-          ? `再次点击确认${label?.zh || ''}`
-          : `Click again to confirm ${label?.en || ''}`;
+        const label_text = language === 'zh' ? label?.zh : label?.en;
+        const message = t('bulkActionToolbar.click-again-to-confirm-v1', { v1: label_text || '' });
         setTooltip({
           action,
           message,
@@ -165,7 +165,7 @@ export const BulkActionToolbar: React.FC<BulkActionToolbarProps> = ({
     }
   };
 
-  const t = (zh: string, en: string) => language === 'zh' ? zh : en;
+  const t = useT('app');
 
   if (!shouldRender) return null;
 
@@ -182,7 +182,7 @@ export const BulkActionToolbar: React.FC<BulkActionToolbarProps> = ({
           <div className="flex items-center justify-between sm:justify-start space-x-2 sm:space-x-4">
             <div className="flex items-center space-x-2">
               <span className="text-base sm:text-lg font-semibold text-foreground dark:text-foreground">
-                {t(`已选择 ${selectedCount} 个`, `Selected ${selectedCount}`)}
+                {t('bulkActionToolbar.selected-selectedcount', { selectedCount: selectedCount })}
               </span>
             </div>
 
@@ -193,20 +193,20 @@ export const BulkActionToolbar: React.FC<BulkActionToolbarProps> = ({
                 onClick={onSelectAll}
                 disabled={isProcessing}
                 className="flex items-center space-x-1 px-2 sm:px-3 py-1.5 text-xs sm:text-sm text-muted-foreground dark:text-muted-foreground hover:bg-muted dark:hover:bg-accent rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                title={t('全选当前页面', 'Select all on page')}
+                title={t('bulkActionToolbar.select-all-on-page')}
               >
                 <CheckSquare className="w-3 h-3 sm:w-4 sm:h-4" />
-                <span>{t('全选', 'Select All')}</span>
+                <span>{t('bulkActionToolbar.select-all')}</span>
               </Button>
               <Button
                 variant="ghost"
                 onClick={handleDeselectAll}
                 disabled={isProcessing}
                 className="flex items-center space-x-1 px-2 sm:px-3 py-1.5 text-xs sm:text-sm text-muted-foreground dark:text-muted-foreground hover:bg-muted dark:hover:bg-accent rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                title={t('取消选择所有', 'Deselect all')}
+                title={t('bulkActionToolbar.deselect-all')}
               >
                 <Square className="w-3 h-3 sm:w-4 sm:h-4" />
-                <span>{t('不全选', 'Deselect All')}</span>
+                <span>{t('bulkActionToolbar.deselect-all-2')}</span>
               </Button>
             </div>
           </div>
@@ -217,7 +217,7 @@ export const BulkActionToolbar: React.FC<BulkActionToolbarProps> = ({
               type="button"
               variant="ghost"
               size="icon"
-              aria-label={t('取消 Star', 'Unstar selected repositories')}
+              aria-label={t('bulkActionToolbar.unstar-selected-repositories')}
               onClick={(e) => handleAction('unstar', e)}
               disabled={isProcessing}
               className={`flex-shrink-0 flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 p-0 rounded-lg transition-colors ${
@@ -237,7 +237,7 @@ export const BulkActionToolbar: React.FC<BulkActionToolbarProps> = ({
               type="button"
               variant="ghost"
               size="icon"
-              aria-label={t('分类', 'Categorize selected repositories')}
+              aria-label={t('bulkActionToolbar.categorize-selected-repositories')}
               onClick={(e) => handleAction('categorize', e)}
               disabled={isProcessing}
               className={`flex-shrink-0 flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 p-0 rounded-lg transition-colors ${
@@ -257,7 +257,7 @@ export const BulkActionToolbar: React.FC<BulkActionToolbarProps> = ({
               type="button"
               variant="ghost"
               size="icon"
-              aria-label={t('AI总结', 'Generate AI summaries')}
+              aria-label={t('bulkActionToolbar.generate-ai-summaries')}
               onClick={(e) => handleAction('ai-summary', e)}
               disabled={isProcessing}
               className={`flex-shrink-0 flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 p-0 rounded-lg transition-colors ${
@@ -277,7 +277,7 @@ export const BulkActionToolbar: React.FC<BulkActionToolbarProps> = ({
               type="button"
               variant="ghost"
               size="icon"
-              aria-label={t('订阅 Release', 'Subscribe to releases')}
+              aria-label={t('bulkActionToolbar.subscribe-to-releases')}
               onClick={(e) => handleAction('subscribe', e)}
               disabled={isProcessing}
               className={`flex-shrink-0 flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 p-0 rounded-lg transition-colors ${
@@ -297,7 +297,7 @@ export const BulkActionToolbar: React.FC<BulkActionToolbarProps> = ({
               type="button"
               variant="ghost"
               size="icon"
-              aria-label={t('取消订阅 Release', 'Unsubscribe from releases')}
+              aria-label={t('bulkActionToolbar.unsubscribe-from-releases')}
               onClick={(e) => handleAction('unsubscribe', e)}
               disabled={isProcessing}
               className={`flex-shrink-0 flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 p-0 rounded-lg transition-colors ${
@@ -317,7 +317,7 @@ export const BulkActionToolbar: React.FC<BulkActionToolbarProps> = ({
               type="button"
               variant="ghost"
               size="icon"
-              aria-label={t('锁定分类', 'Lock categories')}
+              aria-label={t('bulkActionToolbar.lock-categories')}
               onClick={(e) => handleAction('lock-category', e)}
               disabled={isProcessing}
               className={`flex-shrink-0 flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 p-0 rounded-lg transition-colors ${
@@ -337,7 +337,7 @@ export const BulkActionToolbar: React.FC<BulkActionToolbarProps> = ({
               type="button"
               variant="ghost"
               size="icon"
-              aria-label={t('解锁分类', 'Unlock categories')}
+              aria-label={t('bulkActionToolbar.unlock-categories')}
               onClick={(e) => handleAction('unlock-category', e)}
               disabled={isProcessing}
               className={`flex-shrink-0 flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 p-0 rounded-lg transition-colors ${
@@ -357,7 +357,7 @@ export const BulkActionToolbar: React.FC<BulkActionToolbarProps> = ({
               type="button"
               variant="ghost"
               size="icon"
-              aria-label={t('批量还原', 'Bulk Restore')}
+              aria-label={t('bulkActionToolbar.bulk-restore')}
               onClick={(e) => handleAction('restore', e)}
               disabled={isProcessing}
               className={`flex-shrink-0 flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 p-0 rounded-lg transition-colors ${
@@ -365,7 +365,7 @@ export const BulkActionToolbar: React.FC<BulkActionToolbarProps> = ({
                   ? 'bg-primary text-primary-foreground hover:bg-primary/90'
                   : 'bg-muted text-muted-foreground dark:bg-muted/40 dark:text-muted-foreground hover:bg-accent hover:text-foreground dark:hover:bg-accent dark:hover:text-foreground'
               } disabled:opacity-50 disabled:cursor-not-allowed`}
-              title={t('批量还原', 'Bulk Restore')}
+              title={t('bulkActionToolbar.bulk-restore')}
             >
               {isProcessing && showConfirm === 'restore' ? (
                 <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
@@ -381,7 +381,7 @@ export const BulkActionToolbar: React.FC<BulkActionToolbarProps> = ({
               onClick={handleClose}
               disabled={isProcessing}
               className="flex-shrink-0 p-2 text-muted-foreground dark:text-muted-foreground hover:bg-muted dark:hover:bg-accent rounded-lg transition-colors disabled:opacity-50"
-              title={t('关闭工具栏', 'Close toolbar')}
+              title={t('bulkActionToolbar.close-toolbar')}
             >
               <X className="w-4 h-4 sm:w-5 sm:h-5" />
             </Button>

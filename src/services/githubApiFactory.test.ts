@@ -3,6 +3,7 @@ import type { RouteMode } from '../types';
 
 const mocks = vi.hoisted(() => ({
   setBackendUrl: vi.fn(),
+  setBackendAuthToken: vi.fn(),
   backendUrlGet: vi.fn<() => string | null>(() => null),
   isAvailableGet: vi.fn<() => boolean>(() => false),
   routeMode: 'auto' as RouteMode,
@@ -11,12 +12,14 @@ const mocks = vi.hoisted(() => ({
 vi.mock('./githubApi', () => ({
   GitHubApiService: class {
     setBackendUrl = mocks.setBackendUrl;
+    setBackendAuthToken = mocks.setBackendAuthToken;
   },
 }));
 
 vi.mock('./githubListsApi', () => ({
   GitHubListsApiService: class {
     setBackendUrl = mocks.setBackendUrl;
+    setBackendAuthToken = mocks.setBackendAuthToken;
   },
 }));
 
@@ -29,7 +32,7 @@ vi.mock('./backendAdapter', () => ({
 
 vi.mock('../store/useAppStore', () => ({
   useAppStore: {
-    getState: () => ({ routeMode: mocks.routeMode }),
+    getState: () => ({ routeMode: mocks.routeMode, backendApiSecret: 'secret-value' }),
   },
 }));
 
@@ -38,6 +41,7 @@ import { createGitHubApiService, createGitHubListsApiService } from './githubApi
 describe('githubApiFactory routeMode', () => {
   beforeEach(() => {
     mocks.setBackendUrl.mockClear();
+    mocks.setBackendAuthToken.mockClear();
     mocks.routeMode = 'auto';
     mocks.backendUrlGet.mockReturnValue(null);
     mocks.isAvailableGet.mockReturnValue(false);
@@ -53,6 +57,7 @@ describe('githubApiFactory routeMode', () => {
     mocks.backendUrlGet.mockReturnValue('http://backend/api');
     createGitHubApiService('token');
     expect(mocks.setBackendUrl).toHaveBeenCalledWith('http://backend/api');
+    expect(mocks.setBackendAuthToken).toHaveBeenCalledWith('secret-value');
   });
 
   it('skips backend URL when routeMode is browser', () => {
@@ -60,6 +65,15 @@ describe('githubApiFactory routeMode', () => {
     mocks.backendUrlGet.mockReturnValue('http://backend/api');
     createGitHubApiService('token');
     expect(mocks.setBackendUrl).not.toHaveBeenCalled();
+    expect(mocks.setBackendAuthToken).not.toHaveBeenCalled();
+  });
+
+  it('direct option skips backend attach even when backend exists', () => {
+    mocks.routeMode = 'auto';
+    mocks.backendUrlGet.mockReturnValue('http://backend/api');
+    createGitHubApiService('token', { direct: true });
+    expect(mocks.setBackendUrl).not.toHaveBeenCalled();
+    expect(mocks.setBackendAuthToken).not.toHaveBeenCalled();
   });
 
   it('keeps backend routing for the lists factory in auto mode', () => {

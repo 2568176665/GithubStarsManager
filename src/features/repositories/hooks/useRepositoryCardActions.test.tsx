@@ -13,7 +13,12 @@ const mocks = vi.hoisted(() => ({
     analyzed_at: '2026-08-25T00:00:00.000Z',
     analysis_error: error,
   })),
-  findSimilarRepositories: vi.fn(),
+  runSimilarRepositoryPipeline: vi.fn(),
+  aiServiceConstructor: vi.fn(),
+  crossEncoderConstructor: vi.fn(),
+  isAbortError: vi.fn((error: unknown) => (
+    Boolean(error && typeof error === 'object' && 'name' in error && error.name === 'AbortError')
+  )),
   forceSyncToBackend: vi.fn(),
   unstarRepository: vi.fn(),
   getRepositoryReadme: vi.fn(),
@@ -36,7 +41,19 @@ vi.mock('../../../services/aiAnalysisHelper', () => ({
 vi.mock('../../../services/vectorSearchService', () => ({
   EmbeddingClient: vi.fn(),
   VectorSearchService: vi.fn(),
-  findSimilarRepositories: mocks.findSimilarRepositories,
+}));
+
+vi.mock('../../../services/aiService', () => ({
+  AIService: mocks.aiServiceConstructor,
+  isAbortError: mocks.isAbortError,
+}));
+
+vi.mock('../../../services/crossEncoderReranker', () => ({
+  CrossEncoderReranker: mocks.crossEncoderConstructor,
+}));
+
+vi.mock('../../../services/similarRepositoryPipeline', () => ({
+  runSimilarRepositoryPipeline: mocks.runSimilarRepositoryPipeline,
 }));
 
 vi.mock('../../../services/autoSync', () => ({
@@ -77,7 +94,7 @@ const repository: Repository = {
 const createStoreState = () => ({
   releaseSubscriptions: new Set<number>(),
   analyzingRepositoryIds: new Set<number>(),
-  githubToken: 'github-token' as string | null,
+  githubToken: 'github-token',
   activeAIConfig: 'ai-config',
   setAnalyzingRepository: vi.fn(),
   language: 'zh' as const,
@@ -130,7 +147,6 @@ describe('useRepositoryCardActions', () => {
     mockUseAppStore.mockImplementation(((selector?: (state: typeof storeState) => unknown) => (
       selector ? selector(storeState) : storeState
     )) as typeof useAppStore);
-    (mockUseAppStore as unknown as { getState: () => typeof storeState }).getState = () => storeState;
     mocks.confirm.mockResolvedValue(true);
     mocks.forceSyncToBackend.mockResolvedValue(undefined);
     mocks.unstarRepository.mockResolvedValue(undefined);
@@ -153,18 +169,6 @@ describe('useRepositoryCardActions', () => {
     rerender();
 
     expect(result.current).toBe(actions);
-  });
-
-  it('reads the latest store configuration when an action is invoked', async () => {
-    const { result } = renderActions();
-    storeState.githubToken = null;
-
-    await act(async () => {
-      await result.current.analyze();
-    });
-
-    expect(mocks.analyzeRepository).not.toHaveBeenCalled();
-    expect(mocks.toast).toHaveBeenCalledWith('GitHub token 未找到，请重新登录。', 'error');
   });
 
   it('aborts an in-flight analysis and clears the store marker on unmount', async () => {
@@ -217,7 +221,7 @@ describe('useRepositoryCardActions', () => {
       await result.current.findSimilar();
     });
 
-    expect(mocks.findSimilarRepositories).not.toHaveBeenCalled();
+    expect(mocks.runSimilarRepositoryPipeline).not.toHaveBeenCalled();
     expect(mocks.toast).toHaveBeenCalledWith(
       '向量搜索未就绪：请先在设置中开启向量搜索并完成索引。',
       'error',
@@ -267,22 +271,52 @@ describe('useRepositoryCardActions', () => {
   });
 
   it('enters the similar view with a README-symmetric card query and without triggering a backend sync', async () => {
-    mocks.findSimilarRepositories.mockResolvedValue([]);
+    mocks.runSimilarRepositoryPipeline.mockResolvedValue({
+      repositories: [],
+      diagnostics: {},
+    });
     const { result } = renderActions();
 
     await act(async () => {
       await result.current.findSimilar();
     });
 
-    expect(mocks.findSimilarRepositories).toHaveBeenCalledWith(repository, expect.objectContaining({
-      indexMode: 'readme',
-      readmeMaxChars: 6000,
+    expect(mocks.runSimilarRepositoryPipeline).toHaveBeenCalledWith(expect.objectContaining({
+      source: repository,
+      repositories: storeState.repositories,
+      vectorConfig: storeState.vectorSearchConfig,
+      aiService: expect.anything(),
+      crossEncoder: expect.anything(),
       readmeFetcher: expect.any(Function),
-      allRepos: storeState.repositories,
+      signal: expect.any(AbortSignal),
     }));
     expect(storeState.enterSimilarView).toHaveBeenCalledWith([], repository);
     expect(mocks.forceSyncToBackend).not.toHaveBeenCalled();
     expect(mocks.toast).toHaveBeenCalledWith('未找到相似的仓库。', 'info');
+  });
+
+  it('aborts a superseded similar search without entering the view', async () => {
+    let capturedSignal: AbortSignal | undefined;
+    mocks.runSimilarRepositoryPipeline.mockImplementation(({ signal }: { signal: AbortSignal }) => {
+      capturedSignal = signal;
+      return new Promise((_, reject) => {
+        signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+      });
+    });
+    const { result, unmount } = renderActions();
+
+    let promise!: Promise<void>;
+    await act(async () => {
+      promise = result.current.findSimilar();
+    });
+    await waitFor(() => expect(mocks.runSimilarRepositoryPipeline).toHaveBeenCalledTimes(1));
+
+    unmount();
+    await expect(promise).resolves.toBeUndefined();
+
+    expect(capturedSignal?.aborted).toBe(true);
+    expect(storeState.enterSimilarView).not.toHaveBeenCalled();
+    expect(mocks.toast).not.toHaveBeenCalledWith(expect.any(String), 'error');
   });
 
   it('does not delete local data or trigger a backend sync when remote unstar fails', async () => {

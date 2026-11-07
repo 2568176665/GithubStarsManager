@@ -1,280 +1,229 @@
-import { lazy, Suspense, useEffect, useState, type FC, type ClipboardEvent } from 'react';
-import { AlertCircle, BookOpen, Check, Loader2, Star, X } from 'lucide-react';
-import { useAppStore } from '../store/useAppStore';
-import { BATCH_STAR_IMPORT_LIMIT, useBatchStarImport } from '../features/repositories/hooks/useBatchStarImport';
-import type { Repository } from '../types';
+import { Component, lazy, Suspense, useState, type ErrorInfo, type ReactNode } from 'react';
+import { ExternalLink } from 'lucide-react';
+import { useT } from '../i18n/useT';
+import { useBatchStarImport } from '../features/repositories/hooks/useBatchStarImport';
 import { Button } from './ui/button';
 import { Checkbox } from './ui/checkbox';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
 import { Textarea } from './ui/textarea';
+import { Modal } from './Modal';
+import { logger } from '../services/logger';
+import { useBatchStarHistory } from '../features/repositories/hooks/useBatchStarHistory';
+import type { Repository } from '../types';
 
 const LazyReadmeModal = lazy(() => import('./ReadmeModal').then(module => ({ default: module.ReadmeModal })));
+type ReadmeRepository = Pick<Repository, 'full_name' | 'html_url' | 'owner' | 'default_branch'>;
 
-interface BatchStarImportDialogProps {
-  open: boolean;
-  onClose: () => void;
-  onSynced?: () => Promise<void>;
+class ReadmeLoadBoundary extends Component<{ title: string; closeLabel: string; errorMessage: string; onClose: () => void; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    logger.errorFromError('ui.batchStar', 'Failed to load README preview', error, { componentStack: errorInfo.componentStack });
+  }
+
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <Modal isOpen onClose={this.props.onClose} title={this.props.title}>
+        <p role="alert">{this.props.errorMessage}</p>
+        <Button variant="outline" className="mt-4" onClick={this.props.onClose}>{this.props.closeLabel}</Button>
+      </Modal>
+    );
+  }
 }
 
-const statusLabel = (status: string, t: (zh: string, en: string) => string): string => {
-  switch (status) {
-    case 'resolving': return t('正在检查', 'Checking');
-    case 'starred': return t('已 Star', 'Already starred');
-    case 'success': return t('已添加', 'Starred');
-    case 'resolve-error': return t('检查失败', 'Check failed');
-    case 'star-error': return t('添加失败', 'Star failed');
-    default: return t('可添加', 'Ready');
-  }
-};
+interface BatchStarImportDialogProps {
+  isOpen: boolean;
+  onClose: () => void;
+}
 
-export const BatchStarImportDialog: FC<BatchStarImportDialogProps> = ({ open, onClose, onSynced }) => {
-  const language = useAppStore(state => state.language);
-  const githubToken = useAppStore(state => state.githubToken);
-  const user = useAppStore(state => state.user);
-  const [input, setInput] = useState('');
-  const [inputHistoryState, setInputHistoryState] = useState<{ key: string | null; entries: string[] }>({ key: null, entries: [] });
-  const [readmeRepository, setReadmeRepository] = useState<Repository | null>(null);
-  const [translateDescriptions, setTranslateDescriptions] = useState(false);
-  const historyKey = user?.login ? `github-stars-batch-star-inputs:${user.login.toLowerCase()}` : null;
-  const inputHistory = inputHistoryState.key === historyKey ? inputHistoryState.entries : [];
+/**
+ * Dialog for starring repositories parsed from pasted text: previews their
+ * details, lets the user adjust the selection and optionally translate the
+ * descriptions into the interface language, then stars the selected ones
+ * with per-repository results.
+ */
+export function BatchStarImportDialog({ isOpen, onClose }: BatchStarImportDialogProps) {
+  const t = useT('repositories');
+  const [text, setText] = useState('');
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [editingText, setEditingText] = useState<string>();
+  const [readmeRepository, setReadmeRepository] = useState<ReadmeRepository | null>(null);
+  const { history, historyError, record, edit } = useBatchStarHistory();
   const {
-    rows,
-    duplicates,
-    invalid,
-    isResolving,
-    isStarring,
-    starProgress,
-    translationError,
-    syncError,
-    resolveInput,
-    toggleSelected,
-    selectAllReady,
-    starSelected,
-    reset,
-  } = useBatchStarImport(onSynced);
-  const t = (zh: string, en: string) => language === 'zh' ? zh : en;
-  const busy = isResolving || isStarring;
-  const selectedCount = rows.filter(row => row.selected && row.isStarred === false && row.status !== 'success').length;
-  const successfulCount = rows.filter(row => row.status === 'success').length;
-  const failedCount = rows.filter(row => row.status === 'star-error' || row.status === 'resolve-error').length;
+    rows, duplicateCount, inputError, isResolving, isStarring, syncError,
+    translations, isTranslating, translationError, translationsVisible,
+    preview, toggleRow, selectAll, invertSelection, clearPreview, starSelected, toggleTranslations,
+  } = useBatchStarImport();
+  const selectedCount = rows.filter(row => row.status === 'ready' && row.selected).length;
+  const starredCount = rows.filter(row => row.status === 'starred').length;
+  // locked 在解析与 Star 批处理期间同时禁用关闭，避免中途打断半完成的批次；
+  // 翻译只读不改选区，允许随时关闭弹窗。
+  const locked = isResolving || isStarring;
+  const busy = locked || isTranslating;
+  const hasSelectable = rows.some(row => row.status === 'ready');
+  const hasDescription = rows.some(row => Boolean(row.detail?.description));
 
-  useEffect(() => {
-    if (!historyKey) {
-      setInputHistoryState({ key: null, entries: [] });
-      return;
-    }
-    try {
-      const saved = JSON.parse(localStorage.getItem(historyKey) || '[]');
-      setInputHistoryState({
-        key: historyKey,
-        entries: Array.isArray(saved) ? saved.filter((entry): entry is string => typeof entry === 'string').slice(0, 10) : [],
-      });
-    } catch {
-      setInputHistoryState({ key: historyKey, entries: [] });
-    }
-  }, [historyKey]);
-
-  const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
-    const pasted = event.clipboardData.getData('text/plain').trim().slice(0, 200_000);
-    if (!pasted || !historyKey) return;
-
-    const nextHistory = [pasted, ...inputHistory.filter(entry => entry !== pasted)].slice(0, 10);
-    setInputHistoryState({ key: historyKey, entries: nextHistory });
-    try {
-      localStorage.setItem(historyKey, JSON.stringify(nextHistory));
-    } catch {
-      // Keep the current session usable when browser storage is unavailable or full.
-    }
-  };
-
-  const handleOpenChange = (nextOpen: boolean) => {
-    if (nextOpen) return;
-    if (busy) return;
-    reset();
-    setInput('');
-    setTranslateDescriptions(false);
-    setReadmeRepository(null);
-    onClose();
+  const errorLabels: Record<string, string> = {
+    'sign-in': t('batchStar.sign-in'),
+    'no-repositories': t('batchStar.no-repositories'),
+    'too-many-repositories': t('batchStar.too-many-repositories'),
+    'input-too-large': t('batchStar.input-too-large'),
   };
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-3xl" closeLabel={t('关闭', 'Close')}>
-        <DialogHeader>
-          <DialogTitle>{t('从链接批量 Star', 'Star repositories from links')}</DialogTitle>
-          <DialogDescription>
-            {t(`粘贴 GitHub 仓库链接、Markdown、owner/repo 或 JSON。每批最多检查 ${BATCH_STAR_IMPORT_LIMIT} 个仓库。`, `Paste GitHub repository links, Markdown, owner/repo references, or JSON. Up to ${BATCH_STAR_IMPORT_LIMIT} repositories per batch.`)}
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-3">
-          <Textarea
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            onPaste={handlePaste}
-            disabled={busy}
-            maxLength={200_000}
-            rows={5}
-            aria-label={t('仓库链接或 JSON', 'Repository links or JSON')}
-            placeholder={t('https://github.com/owner/repo\n[项目](https://github.com/owner/another-repo)', 'https://github.com/owner/repo\n[Project](https://github.com/owner/another-repo)')}
-          />
-          {inputHistory.length > 0 && (
-            <label className="block space-y-1 text-xs text-muted-foreground">
-              <span>{t('最近粘贴的输入', 'Recent pasted inputs')}</span>
-              <select
-                aria-label={t('最近粘贴的输入', 'Recent pasted inputs')}
-                value=""
-                onChange={(event) => {
-                  const historyInput = inputHistory[Number(event.target.value)];
-                  if (historyInput !== undefined) setInput(historyInput);
-                }}
-                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
-              >
-                <option value="">{t('选择一条输入以继续编辑', 'Select an input to edit')}</option>
-                {inputHistory.map((historyInput, index) => (
-                  <option key={`${index}-${historyInput.slice(0, 24)}`} value={index}>
-                    {historyInput.replace(/\s+/g, ' ').slice(0, 120)}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <label className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Checkbox
-                checked={translateDescriptions}
-                onCheckedChange={(checked) => setTranslateDescriptions(checked === true)}
-                disabled={busy}
-                aria-label={t('翻译仓库描述', 'Translate repository descriptions')}
-              />
-              {t('翻译仓库描述', 'Translate repository descriptions')}
-            </label>
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => void resolveInput(input, translateDescriptions)}
-              disabled={!githubToken || busy || !input.trim()}
-            >
-              {isResolving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {t('解析并检查', 'Parse and check')}
+    <>
+    <Modal
+      isOpen={isOpen && !readmeRepository}
+      onClose={() => { if (!locked) onClose(); }}
+      title={t('batchStar.title')}
+      maxWidth="max-w-3xl"
+      scrollable
+      footer={(
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <span className="text-sm text-muted-foreground">
+            {starredCount > 0 ? t('batchStar.completed', { count: starredCount }) : t('batchStar.selected', { count: selectedCount })}
+          </span>
+          <div className="flex gap-2">
+            <Button variant="outline" disabled={locked} onClick={onClose}>{t('batchStar.close')}</Button>
+            <Button disabled={busy || selectedCount === 0} onClick={() => void starSelected()}>
+              {isStarring ? t('batchStar.starring') : t('batchStar.star-selected', { count: selectedCount })}
             </Button>
           </div>
-          {!githubToken && <p className="text-sm text-destructive">{t('请先连接 GitHub。', 'Connect to GitHub first.')}</p>}
         </div>
-
-        {(rows.length > 0 || duplicates.length > 0 || invalid.length > 0) && (
-          <div className="space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-              <span className="text-muted-foreground">
-                {t(`${rows.length} 个仓库`, `${rows.length} repositories`)} · {t(`已选 ${selectedCount}`, `${selectedCount} selected`)}
-              </span>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => selectAllReady(!rows.some(row => row.selected && (row.status === 'ready' || row.status === 'star-error')))}
-                disabled={busy || !rows.some(row => row.status === 'ready' || row.status === 'star-error')}
-              >
-                {rows.some(row => row.selected && (row.status === 'ready' || row.status === 'star-error')) ? t('取消全选', 'Clear selection') : t('全选未 Star', 'Select unstarred')}
+      )}
+    >
+      <p className="mb-3 text-sm text-muted-foreground">{t('batchStar.hint')}</p>
+      <Textarea
+        aria-label={t('batchStar.input-label')}
+        value={text}
+        onChange={event => { setText(event.target.value); clearPreview(); }}
+        disabled={busy}
+        placeholder={t('batchStar.placeholder')}
+        className="min-h-32 resize-y"
+      />
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <Button variant="outline" disabled={busy || !text.trim()} onClick={() => { if (record(text, editingText)) setEditingText(text); void preview(text); }}>
+          {isResolving ? t('batchStar.checking') : t('batchStar.preview')}
+        </Button>
+        <Button variant="outline" disabled={busy} aria-expanded={historyOpen} onClick={() => setHistoryOpen(value => !value)}>
+          {t('batchStar.history')}
+        </Button>
+        {editingText !== undefined && <Button variant="outline" disabled={busy || !text.trim()} onClick={() => { if (edit(editingText, text)) setEditingText(text); }}>
+          {t('batchStar.save-history')}
+        </Button>}
+        {duplicateCount > 0 && <span className="text-sm text-muted-foreground">{t('batchStar.duplicates', { count: duplicateCount })}</span>}
+      </div>
+      {historyError && <p role="alert" className="mt-3 text-sm text-destructive">{t('batchStar.history-error')}</p>}
+      {historyOpen && <section className="mt-3 space-y-2" aria-label={t('batchStar.history')}>
+        <p className="text-sm text-muted-foreground">{t('batchStar.history-hint')}</p>
+        {history.length === 0 && <p className="text-sm text-muted-foreground">{t('batchStar.history-empty')}</p>}
+        {history.map(entry => <button key={entry.text} type="button" disabled={busy}
+          className="block w-full rounded-lg border border-border p-3 text-left hover:bg-muted"
+          onClick={() => { setText(entry.text); setEditingText(entry.text); clearPreview(); }}>
+          <time dateTime={new Date(entry.generatedAt).toISOString()} className="text-xs text-muted-foreground">{new Date(entry.generatedAt).toLocaleString()}</time>
+          <span className="mt-1 block whitespace-pre-wrap break-all line-clamp-2">{entry.text}</span>
+        </button>)}
+      </section>}
+      {inputError && <p role="alert" className="mt-3 text-sm text-destructive">{errorLabels[inputError] ?? inputError}</p>}
+      {syncError && <p role="alert" className="mt-3 text-sm text-destructive">{t('batchStar.sync-failed')}: {syncError}</p>}
+      {translationError && <p role="alert" className="mt-3 text-sm text-destructive">{t('batchStar.translation-failed')}: {translationError}</p>}
+      {rows.length > 0 && (
+        <div className="mt-5 space-y-2" aria-label={t('batchStar.results')}>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" disabled={busy || !hasSelectable} onClick={selectAll}>
+                {t('batchStar.select-all')}
+              </Button>
+              <Button variant="outline" size="sm" disabled={busy || !hasSelectable} onClick={invertSelection}>
+                {t('batchStar.invert-selection')}
               </Button>
             </div>
-            <div className="max-h-64 divide-y overflow-y-auto rounded-md border">
-              {rows.map(row => (
-                <div key={row.fullName.toLocaleLowerCase()} className="flex items-start gap-3 p-3">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy || !hasDescription}
+              onClick={() => void toggleTranslations()}
+            >
+              {isTranslating ? t('batchStar.translating') : translationsVisible ? t('batchStar.show-original') : t('batchStar.translate-descriptions')}
+            </Button>
+          </div>
+          {rows.map((row, index) => {
+            const renamed = row.detail && row.detail.full_name.toLowerCase() !== row.candidate.repositoryFullName.toLowerCase();
+            const label = row.detail?.full_name ?? (row.candidate.repositoryFullName || row.candidate.originalValue);
+            const statusKey = row.status === 'ready' && row.candidate.confidence === 'low'
+              ? 'check-name'
+              : row.status;
+            // 已 Star（含本次批处理刚 Star 成功）的仓库固定为选中禁用态，
+            // 与"无法再次 Star"的业务状态保持一致。
+            const rowStarred = row.status === 'already-starred' || row.status === 'starred';
+            const originalDescription = row.detail?.description || t('batchStar.no-description');
+            const translatedDescription = row.detail ? translations[row.detail.full_name] : undefined;
+            const description = translationsVisible && translatedDescription
+              ? translatedDescription
+              : originalDescription;
+            return (
+              <div key={`${row.candidate.originalValue}-${index}`} className="rounded-lg border border-border p-3">
+                <div className="flex items-start gap-3">
                   <Checkbox
-                    checked={row.selected}
-                    onCheckedChange={(checked) => toggleSelected(row.fullName, checked === true)}
-                    disabled={busy || (row.status !== 'ready' && row.status !== 'star-error')}
-                    aria-label={t(`选择 ${row.fullName}`, `Select ${row.fullName}`)}
+                    checked={rowStarred ? true : row.selected}
+                    disabled={busy || row.status !== 'ready'}
+                    onCheckedChange={() => toggleRow(index)}
+                    aria-label={t('batchStar.select-repository', { name: label })}
                     className="mt-1"
                   />
                   <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <a href={`https://github.com/${row.fullName}`} target="_blank" rel="noreferrer" className="truncate font-medium text-primary hover:underline">
-                        {row.fullName}
-                      </a>
-                      {row.repository && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 gap-1 px-2 text-xs"
-                          onClick={() => setReadmeRepository(row.repository ?? null)}
-                        >
-                          <BookOpen className="h-3.5 w-3.5" />
-                          {t('预览 README', 'Preview README')}
-                        </Button>
-                      )}
-                      <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs ${row.status === 'resolve-error' || row.status === 'star-error' ? 'bg-destructive/10 text-destructive' : row.status === 'success' ? 'bg-green-500/10 text-green-700 dark:text-green-400' : 'bg-muted text-muted-foreground'}`}>
-                        {row.status === 'success' ? <Check className="h-3 w-3" /> : row.status === 'resolve-error' || row.status === 'star-error' ? <AlertCircle className="h-3 w-3" /> : row.status === 'starred' ? <Star className="h-3 w-3" /> : null}
-                        {statusLabel(row.status, t)}
-                      </span>
+                    <button type="button" className="block w-full text-left hover:bg-muted rounded-md"
+                      aria-label={t('batchStar.view-readme', { name: label })}
+                      disabled={locked || !row.candidate.repositoryFullName || row.candidate.status === 'invalid'}
+                      onClick={() => {
+                        const fullName = row.detail?.full_name ?? row.candidate.repositoryFullName;
+                        setReadmeRepository(row.detail ?? {
+                          full_name: fullName, html_url: `https://github.com/${fullName}`,
+                          owner: { login: fullName.split('/')[0], avatar_url: '' },
+                        });
+                      }}>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      {row.detail ? (
+                        <span className="break-all font-medium hover:underline">
+                          {renamed ? `${row.candidate.repositoryFullName} → ${label}` : label}
+                        </span>
+                      ) : <span className="break-all font-medium">{label}</span>}
+                      <span className="text-xs text-muted-foreground">{t(`batchStar.${statusKey}`)}</span>
                     </div>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {row.repository?.description || t('无描述', 'No description')}
-                    </p>
-                    {row.translatedDescription && row.translatedDescription !== row.repository?.description && (
-                      <p className="mt-1 text-xs text-muted-foreground">{row.translatedDescription}</p>
+                    {row.detail && (
+                      <>
+                        <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">{row.detail.language || '—'} · ★ {row.detail.stargazers_count.toLocaleString()}</p>
+                      </>
                     )}
-                    {row.repository && (
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        ★ {row.repository.stargazers_count.toLocaleString()} · {row.repository.language || t('未知语言', 'Unknown language')}
-                      </p>
-                    )}
-                    {row.error && <p className="mt-1 break-words text-xs text-destructive">{row.error}</p>}
+                    {row.error && <p className="mt-1 break-all text-xs text-destructive">{row.error}</p>}
+                    </button>
+                    {row.detail && <a href={row.detail.html_url} target="_blank" rel="noopener noreferrer"
+                      aria-label={t('batchStar.open-github', { name: label })} className="mt-2 inline-flex text-muted-foreground hover:text-foreground">
+                      <ExternalLink className="h-4 w-4" aria-hidden="true" />
+                    </a>}
                   </div>
                 </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {(duplicates.length > 0 || invalid.length > 0) && (
-          <details className="rounded-md border p-3 text-sm">
-            <summary className="cursor-pointer font-medium">
-              {t(`忽略了 ${duplicates.length + invalid.length} 项`, `Skipped ${duplicates.length + invalid.length} items`)}
-            </summary>
-            <ul className="mt-2 max-h-24 space-y-1 overflow-y-auto text-xs text-muted-foreground">
-              {duplicates.map((value, index) => <li key={`duplicate-${index}`}>{value} — {t('重复', 'duplicate')}</li>)}
-              {invalid.map((issue, index) => <li key={`invalid-${index}`}>{issue.value} — {issue.reason}</li>)}
-            </ul>
-          </details>
-        )}
-
-        {translationError && <p className="text-sm text-destructive">{t('描述翻译失败，仍可使用原文。', 'Description translation failed; original descriptions are still available.')}</p>}
-        {syncError && <p className="text-sm text-destructive">{t('Star 已完成，但同步本地列表失败：', 'Repositories were starred, but local sync failed:')} {syncError}</p>}
-        {isStarring && (
-          <p className="text-sm text-muted-foreground" role="status">
-            {t(`正在添加：${starProgress.done}/${starProgress.total}`, `Starring: ${starProgress.done}/${starProgress.total}`)}
-          </p>
-        )}
-        {!isStarring && successfulCount > 0 && (
-          <p className="text-sm text-green-700 dark:text-green-400" role="status">
-            {t(`成功添加 ${successfulCount} 个仓库`, `Starred ${successfulCount} repositories`)}
-            {failedCount > 0 && ` · ${t(`失败 ${failedCount} 个`, `${failedCount} failed`)}`}
-          </p>
-        )}
-
-        <DialogFooter>
-          <Button type="button" variant="ghost" onClick={() => handleOpenChange(false)} disabled={busy}>
-            <X className="mr-2 h-4 w-4" />{t('关闭', 'Close')}
-          </Button>
-          <Button type="button" onClick={() => void starSelected()} disabled={busy || selectedCount === 0}>
-            {isStarring && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            <Star className="mr-2 h-4 w-4" />
-            {t(`Star 已选仓库 (${selectedCount})`, `Star selected (${selectedCount})`)}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-      {readmeRepository && (
-        <Suspense fallback={null}>
-          <LazyReadmeModal
-            isOpen={open}
-            repository={readmeRepository}
-            onClose={() => setReadmeRepository(null)}
-          />
-        </Suspense>
+              </div>
+            );
+          })}
+        </div>
       )}
-    </Dialog>
+    </Modal>
+    {readmeRepository && <ReadmeLoadBoundary
+      title={t('batchStar.view-readme', { name: readmeRepository.full_name })}
+      closeLabel={t('batchStar.close')}
+      errorMessage={t('batchStar.readme-load-error')}
+      onClose={() => setReadmeRepository(null)}
+    ><Suspense fallback={
+      <Modal isOpen onClose={() => setReadmeRepository(null)} title={t('batchStar.view-readme', { name: readmeRepository.full_name })}>
+        <p role="status">{t('batchStar.loading-readme')}</p>
+      </Modal>
+    }><LazyReadmeModal isOpen repository={readmeRepository} onClose={() => setReadmeRepository(null)} /></Suspense></ReadmeLoadBoundary>}
+    </>
   );
-};
+}

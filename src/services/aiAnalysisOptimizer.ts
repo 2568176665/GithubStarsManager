@@ -534,3 +534,7 @@ export class AIAnalysisOptimizer {
     };
   }
 }
+
+export function createOptimizedAIAnalyzer(config?: Partial<OptimizerConfig>): AIAnalysisOptimizer {
+  return new AIAnalysisOptimizer(config);
+}

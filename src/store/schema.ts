@@ -6,7 +6,9 @@ import type {
   DiscoveryChannel,
   GistSearchFilters,
   HeaderMenuId,
+  ProxyConfig,
   RpcDownloadConfig,
+  McpServiceConfig,
   SearchFilters,
   VectorSearchConfig,
   VectorSearchStatus,
@@ -14,6 +16,7 @@ import type {
 } from '../types';
 import { defaultRepositoryChatAgentBudget, defaultRepositoryChatSettings } from '../types/repositoryChat';
 import { EMBEDDING_FORMAT_VERSION } from '../services/vectorSearchService';
+import { MCP_DEFAULT_HOST, MCP_DEFAULT_PORT, normalizeMcpHost } from '../utils/mcpHost';
 import { PRESET_FILTERS } from '../constants/presetFilters';
 
 export const REQUIRED_HEADER_MENU_IDS: ReadonlySet<HeaderMenuId> = new Set(['repositories', 'settings']);
@@ -49,6 +52,8 @@ export type PersistedAppState = Partial<
     | 'user'
     | 'githubToken'
     | 'isAuthenticated'
+    | 'backendApiSecret'
+    | 'accountWorkspaces'
     | 'repositories'
     | 'gists'
     | 'starredGists'
@@ -59,6 +64,7 @@ export type PersistedAppState = Partial<
     | 'aiConfigs'
     | 'activeAIConfig'
     | 'repositoryChatSettings'
+    | 'themeTokens'
     | 'embeddingConfigs'
     | 'activeEmbeddingConfig'
     | 'vectorSearchConfig'
@@ -75,12 +81,17 @@ export type PersistedAppState = Partial<
     | 'collapsedSidebarCategoryCount'
     | 'categoryMatchMode'
     | 'assetFilters'
-    | 'theme'
-    | 'themePreset'
+    | 'trendingSnapshots'
+    | 'repositoryCardFields'
+    | 'repositoryCardActions'
+    | 'themeMode'
+    | 'themePresetLight'
+    | 'themePresetDark'
     | 'currentView'
     | 'selectedCategory'
     | 'language'
     | 'translationEngine'
+    | 'autoTranslateRepoDescription'
     | 'searchFilters'
     | 'isSidebarCollapsed'
     | 'repositoryViewMode'
@@ -108,6 +119,11 @@ export type PersistedAppState = Partial<
     | 'discoverySortBy'
     | 'discoverySortOrder'
     | 'discoverySelectedTopic'
+    | 'weeklyOnlyCollected'
+    | 'xTweetFollows'
+    | 'xTweetAuthRevision'
+    | 'telegramFollows'
+    | 'proxyConfig'
     | 'rpcDownloadConfig'
     | 'routeMode'
     | 'subscriptionRepos'
@@ -115,15 +131,14 @@ export type PersistedAppState = Partial<
     | 'subscriptionIsLoading'
     | 'subscriptionChannels'
     | 'headerMenuConfig'
+    | 'mcpConfig'
     | 'syncMode'
     | 'syncModeConfigured'
     | 'categoryListIdMap'
   >, 'gistSearchFilters' | 'searchFilters' | 'releaseExpandedRepositories' | 'forkExpandedRepositories'>> & {
   gistSearchFilters?: Pick<GistSearchFilters, 'sortBy' | 'sortOrder'>;
-  searchFilters?: Pick<
-    SearchFilters,
-    'sortBy' | 'sortOrder' | 'healthArchived' | 'healthRecentActivity' | 'healthHasLicense'
-  >;
+  searchFilters?: Pick<SearchFilters, 'sortBy' | 'sortOrder'>;
+  proxyConfig?: ProxyConfig;
   rpcDownloadConfig?: RpcDownloadConfig;
   releaseSubscriptions?: unknown;
   readReleases?: unknown;
@@ -170,7 +185,9 @@ export const normalizeRepositoryChatSettings = (value: unknown): RepositoryChatS
     streamingMode: record.streamingMode === 'off' ? 'off' : 'auto',
     taskDepth,
     enableWebTools: record.enableWebTools === true,
+    fastPath: record.fastPath !== false,
     enableAgentToolLoop: record.enableAgentToolLoop === true,
+    layout: record.layout === 'fullscreen' ? 'fullscreen' : 'sheet',
     retainSessionDays,
     maxToolsPerTurn: maxToolCalls,
     agentBudget,
@@ -235,6 +252,30 @@ export const normalizeVectorSearchStatus = (raw: unknown): VectorSearchStatus =>
       ? { lastSyncAt: status.lastSyncAt }
       : {}),
     ...(typeof status.error === 'string' ? { error: status.error } : {}),
+  };
+};
+
+export const defaultMcpConfig: McpServiceConfig = {
+  enabled: false,
+  host: MCP_DEFAULT_HOST,
+  port: MCP_DEFAULT_PORT,
+  token: '',
+};
+
+export const normalizeMcpConfig = (raw: unknown): McpServiceConfig => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ...defaultMcpConfig };
+  }
+  const config = raw as Record<string, unknown>;
+  const port =
+    typeof config.port === 'number' && Number.isInteger(config.port) && config.port >= 1 && config.port <= 65535
+      ? config.port
+      : defaultMcpConfig.port;
+  return {
+    enabled: config.enabled === true,
+    host: normalizeMcpHost(config.host),
+    port,
+    token: typeof config.token === 'string' ? config.token : '',
   };
 };
 
@@ -455,11 +496,43 @@ export const defaultDiscoveryChannels: DiscoveryChannel[] = [
     enabled: true,
   },
   {
+    id: 'x-tweet',
+    name: 'X 推文',
+    nameEn: 'X Tweets',
+    icon: 'tweet',
+    description: '关注 X 博主推文中分享的 GitHub 项目',
+    enabled: true,
+  },
+  {
+    id: 'telegram',
+    name: 'Telegram 频道',
+    nameEn: 'Telegram Channels',
+    icon: 'telegram',
+    description: '关注 Telegram 频道消息中分享的 GitHub 项目',
+    enabled: true,
+  },
+  {
+    id: 'weekly',
+    name: '阮一峰周刊',
+    nameEn: 'Ruanyifeng Weekly',
+    icon: 'weekly',
+    description: '阮一峰科技爱好者周刊的开源项目投稿精选',
+    enabled: true,
+  },
+  {
     id: 'search',
-    name: '搜索发现',
-    nameEn: 'Search',
+    name: '仓库搜索',
+    nameEn: 'Repo Search',
     icon: 'search',
     description: '自定义搜索发现新项目',
+    enabled: true,
+  },
+  {
+    id: 'code-search',
+    name: '代码搜索',
+    nameEn: 'Code Search',
+    icon: 'search',
+    description: '公开仓库代码全文检索，支持正则与仓库/路径/语言过滤',
     enabled: true,
   },
 ];

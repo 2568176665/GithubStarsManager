@@ -1,7 +1,6 @@
 import React, { useMemo } from 'react';
-import { AlertTriangle, Archive, Ban, PackageOpen } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
-import { zhCN } from 'date-fns/locale';
+import { AlertTriangle, Archive, Ban, PackageOpen } from 'lucide-react';
 import type { Release, Repository } from '../types';
 import type {
   RepositoryHealthFact,
@@ -9,118 +8,187 @@ import type {
   RepositoryHealthGroup,
   RepositoryHealthSignalId,
 } from '../types/health';
-import { deriveRepositoryHealthSnapshot, groupRepositoryHealthFacts } from '../utils/repositoryHealth';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from './ui/accordion';
 import { Badge } from './ui/badge';
+import { formatNumber, getDateFnsLocale } from '../i18n/format';
+import { useT, type TranslateFn } from '../i18n/useT';
+import type { AppLanguage } from '../i18n/languages';
+import {
+  deriveRepositoryHealthSnapshot,
+  groupRepositoryHealthFacts,
+} from '../utils/repositoryHealth';
 
+/**
+ * Repository Health 事实面板。
+ *
+ * 只展示客观事实与保守观测，**不展示任何健康总分或「健康 / 不健康」结论**——
+ * 主观评分属于插件（见 docs/plans/2026-09-17-product-roadmap.md §4.3）。
+ * 因此这里刻意不做颜色化的「好 / 坏」判定，未知事实显示为「未知」而不是猜测。
+ */
 interface RepositoryHealthPanelProps {
   repository: Repository;
-  /** 加载中或加载失败时传 undefined，避免把“尚未取得数据”误报为无 Release。 */
+  /** 该仓库的本地 Release；用于推导 Release 相关事实，缺失时对应事实为未知。 */
   releases?: Release[];
-  language: 'zh' | 'en';
+  /** 仅用于 date-fns 的本地化；界面文案一律走 i18n key。 */
+  language: AppLanguage;
 }
 
-const groupLabels: Record<RepositoryHealthGroup, [string, string]> = {
-  activity: ['活跃度', 'Activity'],
-  maintenance: ['维护状态', 'Maintenance'],
-  community: ['社区信息', 'Community'],
-  maturity: ['成熟度', 'Maturity'],
+/** 分组标题的 i18n key。 */
+const GROUP_KEYS: Record<RepositoryHealthGroup, string> = {
+  activity: 'repositoryHealthPanel.activity',
+  maintenance: 'repositoryHealthPanel.maintenance',
+  community: 'repositoryHealthPanel.community',
+  maturity: 'repositoryHealthPanel.maturity',
 };
 
-const factLabels: Record<RepositoryHealthFactId, [string, string]> = {
-  pushedAt: ['最近提交', 'Last push'],
-  hasReleases: ['有 Release', 'Has releases'],
-  latestReleaseAt: ['最近 Release', 'Latest release'],
-  archived: ['已归档', 'Archived'],
-  disabled: ['已禁用', 'Disabled'],
-  fork: ['Fork 仓库', 'Fork'],
-  template: ['模板仓库', 'Template'],
-  license: ['许可证', 'License'],
-  stars: ['星标数', 'Stars'],
-  forks: ['Fork 数', 'Forks'],
-  openIssues: ['开放 Issue', 'Open issues'],
-  createdAt: ['创建时间', 'Created'],
-  ageDays: ['仓库年龄', 'Repository age'],
-  releaseCount: ['Release 数', 'Releases'],
-  latestStableVersion: ['最新稳定版本', 'Latest stable version'],
+/** 事实标签的 i18n key。 */
+const FACT_KEYS: Record<RepositoryHealthFactId, string> = {
+  pushedAt: 'repositoryHealthPanel.last-push',
+  latestCommitAt: 'repositoryHealthPanel.latest-commit',
+  recentCommitCount: 'repositoryHealthPanel.recent-commits',
+  hasReleases: 'repositoryHealthPanel.has-releases',
+  latestReleaseAt: 'repositoryHealthPanel.latest-release',
+  archived: 'repositoryHealthPanel.archived',
+  disabled: 'repositoryHealthPanel.disabled',
+  fork: 'repositoryHealthPanel.fork',
+  template: 'repositoryHealthPanel.template',
+  license: 'repositoryHealthPanel.license',
+  hasSecurityPolicy: 'repositoryHealthPanel.security-policy',
+  hasCI: 'repositoryHealthPanel.ci-github-actions',
+  hasReadme: 'repositoryHealthPanel.readme',
+  hasDocs: 'repositoryHealthPanel.docs',
+  stars: 'repositoryHealthPanel.stars',
+  forks: 'repositoryHealthPanel.forks',
+  openIssues: 'repositoryHealthPanel.open-issues',
+  closedIssues: 'repositoryHealthPanel.closed-issues',
+  contributors: 'repositoryHealthPanel.contributors',
+  createdAt: 'repositoryHealthPanel.created',
+  ageDays: 'repositoryHealthPanel.repository-age',
+  releaseCount: 'repositoryHealthPanel.releases',
+  releasesPerYear: 'repositoryHealthPanel.release-frequency',
+  latestStableVersion: 'repositoryHealthPanel.latest-stable-version',
 };
 
-const signalLabels: Record<RepositoryHealthSignalId, [string, string]> = {
-  archived: ['已归档', 'Archived'],
-  disabled: ['已禁用', 'Disabled'],
-  'no-releases': ['暂无 Release', 'No releases'],
-  'no-recent-activity': ['近一年无提交', 'No pushes in 12 months'],
+/**
+ * 保守观测的 i18n key（图标见 {@link SIGNAL_ICONS}）。
+ * `no-recent-activity` 用中性文案与图标，避免暗示「不健康」。
+ */
+const SIGNAL_KEYS: Record<RepositoryHealthSignalId, string> = {
+  archived: 'repositoryHealthPanel.archived',
+  disabled: 'repositoryHealthPanel.disabled',
+  'no-releases': 'repositoryHealthPanel.no-releases',
+  'no-recent-activity': 'repositoryHealthPanel.no-pushes-in-12-months',
 };
 
-const signalIcons: Record<RepositoryHealthSignalId, React.ComponentType<{ className?: string }>> = {
+const SIGNAL_ICONS: Record<RepositoryHealthSignalId, React.ComponentType<{ className?: string }>> = {
   archived: Archive,
   disabled: Ban,
   'no-releases': PackageOpen,
   'no-recent-activity': AlertTriangle,
 };
 
-const translate = (language: 'zh' | 'en', [zh, en]: [string, string]): string => (
-  language === 'zh' ? zh : en
-);
+/** 千分位数字；非有限值原样回落，避免显示 NaN。 */
+function formatCount(value: number, language: AppLanguage): string {
+  return Number.isFinite(value) ? formatNumber(value, language) : '—';
+}
 
-const formatFactValue = (fact: RepositoryHealthFact, language: 'zh' | 'en'): { text: string; muted: boolean; title?: string } => {
-  if (fact.value === undefined) {
-    return { text: language === 'zh' ? '未知' : 'Unknown', muted: true };
-  }
-  if (fact.value === null) {
-    return { text: language === 'zh' ? '无' : 'None', muted: true };
-  }
-  if (fact.kind === 'boolean') {
-    return {
-      text: fact.value ? (language === 'zh' ? '是' : 'Yes') : (language === 'zh' ? '否' : 'No'),
-      muted: !fact.value,
-    };
-  }
-  if (fact.kind === 'count') {
-    return { text: Number(fact.value).toLocaleString(language === 'zh' ? 'zh-CN' : 'en-US'), muted: false };
-  }
-  if (fact.kind === 'duration') {
-    const days = Number(fact.value);
-    const years = Math.round((days / 365.25) * 10) / 10;
-    return {
-      text: language === 'zh' ? `${days.toLocaleString('zh-CN')} 天（约 ${years} 年）` : `${days.toLocaleString('en-US')} days (about ${years} years)`,
-      muted: false,
-    };
-  }
-  if (fact.kind === 'date') {
-    const raw = String(fact.value);
-    const timestamp = Date.parse(raw);
-    if (!Number.isFinite(timestamp)) return { text: raw, muted: false };
-    return {
-      text: formatDistanceToNow(timestamp, { addSuffix: true, locale: language === 'zh' ? zhCN : undefined }),
-      title: new Date(timestamp).toISOString().slice(0, 10),
-      muted: false,
-    };
-  }
-  return { text: String(fact.value), muted: false };
-};
+/** 绝对日期（YYYY-MM-DD），用于 tooltip 与相对时间的兜底。 */
+function formatAbsoluteDate(value: string): string {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return value;
+  return new Date(timestamp).toISOString().slice(0, 10);
+}
 
-export const RepositoryHealthPanel: React.FC<RepositoryHealthPanelProps> = ({ repository, releases, language }) => {
-  const { snapshot, groups } = useMemo(() => {
+/**
+ * 事实值的展示文本。`undefined` 一律显示「未知」，不做任何推断。
+ *
+ * `t` 由调用方传入而不是在这里 `useT()`：这是一个普通函数，可能被条件调用，
+ * 在函数内部调用 Hook 会违反 Hooks 规则。
+ */
+function formatFactValue(
+  fact: RepositoryHealthFact,
+  t: TranslateFn,
+  language: AppLanguage,
+): { text: string; title?: string; muted: boolean } {
+  const unknown = { text: t('repositoryHealthPanel.unknown'), muted: true };
+
+  if (fact.value === undefined) return unknown;
+
+  switch (fact.kind) {
+    case 'boolean':
+      if (fact.value === null) return { text: t('repositoryHealthPanel.none'), muted: true };
+      return fact.value
+        ? { text: t('repositoryHealthPanel.yes'), muted: false }
+        : { text: t('repositoryHealthPanel.no'), muted: true };
+    case 'count':
+      if (fact.value === null) return { text: '—', muted: true };
+      if (fact.id === 'releasesPerYear') {
+        return { text: t('repositoryHealthPanel.v1-year', { v1: formatCount(fact.value as number, language) }), muted: false };
+      }
+      return { text: formatCount(fact.value as number, language), muted: false };
+    case 'duration': {
+      if (fact.value === null) return { text: '—', muted: true };
+      const days = fact.value as number;
+      const years = Math.round((days / 365.25) * 10) / 10;
+      return {
+        text: t('repositoryHealthPanel.v1-days-years-years', { v1: formatCount(days, language), years: years }),
+        muted: false,
+      };
+    }
+    case 'date': {
+      if (fact.value === null) return { text: t('repositoryHealthPanel.none'), muted: true };
+      const raw = String(fact.value);
+      const timestamp = Date.parse(raw);
+      if (!Number.isFinite(timestamp)) return { text: raw, muted: false };
+      return {
+        text: formatDistanceToNow(timestamp, {
+          addSuffix: true,
+          locale: getDateFnsLocale(language),
+        }),
+        title: formatAbsoluteDate(raw),
+        muted: false,
+      };
+    }
+    case 'text':
+    default:
+      if (fact.value === null) return { text: t('repositoryHealthPanel.none'), muted: true };
+      return { text: String(fact.value), muted: false };
+  }
+}
+
+export const RepositoryHealthPanel: React.FC<RepositoryHealthPanelProps> = ({
+  repository,
+  releases,
+  language,
+}) => {
+  const t = useT('repositories');
+
+  // 纯函数推导：无网络请求，Release 未同步时相关事实自动成为「未知」。
+  const groups = useMemo(() => {
     const snapshot = deriveRepositoryHealthSnapshot(repository, releases);
-    return { snapshot, groups: groupRepositoryHealthFacts(snapshot) };
+    return { snapshot, views: groupRepositoryHealthFacts(snapshot) };
   }, [repository, releases]);
 
-  const title = language === 'zh' ? '仓库健康事实' : 'Repository health facts';
+  const { snapshot, views } = groups;
+
+  const title = t('repositoryHealthPanel.repository-health-facts');
 
   return (
-    <section className="mb-3 rounded-md border border-border bg-muted/20" aria-label={title}>
+    <section
+      className="mb-3 rounded-md border border-border bg-muted/20"
+      aria-label={title}
+    >
       <Accordion type="single" collapsible>
         <AccordionItem value="facts" className="border-0">
           <AccordionTrigger className="px-3 py-2 text-xs hover:no-underline">
             <span className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
               <span className="font-semibold">{title}</span>
               {snapshot.signals.map((signal) => {
-                const Icon = signalIcons[signal.id];
+                const Icon = SIGNAL_ICONS[signal.id];
                 return (
                   <Badge key={signal.id} variant="outline" className="gap-1 text-[11px] font-normal">
                     <Icon className="h-3 w-3" aria-hidden="true" />
-                    {translate(language, signalLabels[signal.id])}
+                    {t(SIGNAL_KEYS[signal.id])}
                   </Badge>
                 );
               })}
@@ -128,19 +196,22 @@ export const RepositoryHealthPanel: React.FC<RepositoryHealthPanelProps> = ({ re
           </AccordionTrigger>
           <AccordionContent className="px-3 pb-3">
             <div className="grid gap-3 sm:grid-cols-2">
-              {groups.map(({ group, facts }) => (
+              {views.map(({ group, facts }) => (
                 <div key={group}>
                   <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                    {translate(language, groupLabels[group])}
+                    {t(GROUP_KEYS[group])}
                   </p>
                   <dl className="space-y-0.5">
                     {facts.map((fact) => {
-                      const value = formatFactValue(fact, language);
+                      const formatted = formatFactValue(fact, t, language);
                       return (
                         <div key={fact.id} className="flex items-baseline justify-between gap-2 text-xs">
-                          <dt className="truncate text-muted-foreground">{translate(language, factLabels[fact.id])}</dt>
-                          <dd className={`shrink-0 text-right ${value.muted ? 'text-muted-foreground' : ''}`} title={value.title}>
-                            {value.text}
+                          <dt className="truncate text-muted-foreground">{t(FACT_KEYS[fact.id])}</dt>
+                          <dd
+                            className={`shrink-0 text-right ${formatted.muted ? 'text-muted-foreground' : ''}`}
+                            title={formatted.title}
+                          >
+                            {formatted.text}
                           </dd>
                         </div>
                       );
@@ -150,9 +221,7 @@ export const RepositoryHealthPanel: React.FC<RepositoryHealthPanelProps> = ({ re
               ))}
             </div>
             <p className="mt-2 text-[11px] text-muted-foreground">
-              {language === 'zh'
-                ? '这里展示可验证事实，不计算整体健康分数。'
-                : 'These are verifiable facts; no overall health score is calculated.'}
+              {t('repositoryHealthPanel.these-are-objective-facts-with-no-overall-score')}
             </p>
           </AccordionContent>
         </AccordionItem>

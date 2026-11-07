@@ -1,9 +1,15 @@
+
+
+
+
+import { useT } from '../i18n/useT';
 import React, { useState, useMemo } from 'react';
-import { Settings, Calendar, Search, Moon, Sun, LogOut, TrendingUp, GitFork, FileCode2, Menu, X } from 'lucide-react';
+import { Settings, Calendar, Search, Moon, Sun, LogOut, Compass, GitFork, FileCode2, Menu, X } from 'lucide-react';
 import { Button } from './ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from './ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { useAppStore } from '../store/useAppStore';
+import { resolveTheme } from '../store/selectors';
 import { useShallow } from 'zustand/react/shallow';
 import { useDialog } from '../hooks/useDialog';
 import { HeaderMenuId, AppState } from '../types';
@@ -17,30 +23,33 @@ const MENU_META: Record<HeaderMenuId, {
   gists: { icon: FileCode2, labelZh: 'Gist', labelEn: 'Gist' },
   releases: { icon: Calendar, labelZh: '发布', labelEn: 'Releases' },
   forks: { icon: GitFork, labelZh: '复刻', labelEn: 'Forks' },
-  subscription: { icon: TrendingUp, labelZh: '趋势', labelEn: 'Trending' },
+  subscription: { icon: Compass, labelZh: '发现', labelEn: 'Discover' },
   settings: { icon: Settings, labelZh: '设置', labelEn: 'Settings' },
 };
 
 export const Header: React.FC = () => {
   const {
     user,
-    theme,
+    themeMode,
+    systemTheme,
     currentView,
     headerMenuConfig,
-    setTheme,
+    setThemeMode,
     setCurrentView,
     logout,
-    language,
+
   } = useAppStore(useShallow((state) => ({
     user: state.user,
-    theme: state.theme,
+    themeMode: state.themeMode,
+    systemTheme: state.systemTheme,
     currentView: state.currentView,
     headerMenuConfig: state.headerMenuConfig,
-    setTheme: state.setTheme,
+    setThemeMode: state.setThemeMode,
     setCurrentView: state.setCurrentView,
     logout: state.logout,
     language: state.language,
   })));
+  const theme = resolveTheme(themeMode, systemTheme);
 
   const { confirm } = useDialog();
 
@@ -53,15 +62,15 @@ export const Header: React.FC = () => {
     [headerMenuConfig]
   );
 
-  const t = (zh: string, en: string) => language === 'zh' ? zh : en;
+  const t = useT('app');
 
   return (
-    <header className="linear-header sticky top-0 z-50 hd-drag lg:hd-drag relative">
-      <div className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="linear-header-inner flex h-14 items-center justify-between">
+    <header className="linear-header sticky top-0 z-(--app-z-header) hd-drag lg:hd-drag relative">
+      <div className="app-header-inner">
+        <div className="linear-header-inner flex items-center justify-between">
           {/* Logo and Title */}
           <div className="flex min-w-0 items-center space-x-3">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-card">
+            <div className="app-brand-mark flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-card">
               <img 
                 src="./icon.png" 
                 alt="GitHub Stars Manager" 
@@ -69,26 +78,26 @@ export const Header: React.FC = () => {
               />
             </div>
             <div className="min-w-0 hidden sm:block">
-              <h1 className="truncate text-sm font-semibold tracking-tight text-foreground">
+              <h1 className="app-brand-title truncate">
                 GitHub Stars Manager
               </h1>
-              <p className="truncate text-xs text-muted-foreground">
+              <p className="app-brand-subtitle truncate">
                 AI-powered repository management
               </p>
             </div>
             <div className="min-w-0 sm:hidden">
-              <h1 className="truncate text-sm font-semibold tracking-tight text-foreground">
+              <h1 className="app-brand-title truncate">
                 GitHub Stars
               </h1>
             </div>
           </div>
 
           {/* Navigation - Desktop & Tablet (≥768px) */}
-          <nav className="hidden items-center gap-1 hd-btns md:flex lg:hd-btns">
+          <nav className="app-header-nav hidden items-center gap-1 hd-btns md:flex lg:hd-btns">
             {visibleMenus.map(menuItem => {
-              const meta = MENU_META[menuItem.id];
+                        const meta = MENU_META[menuItem.id];
               const Icon = meta.icon;
-              const label = t(meta.labelZh, meta.labelEn);
+              const label = t(`header.menu-${menuItem.id}`);
               const isActive = currentView === menuItem.id;
               return (
                 <Button
@@ -117,14 +126,14 @@ export const Header: React.FC = () => {
                 variant="ghost"
                 size="icon"
                 className="md:hidden"
-                aria-label={t('菜单', 'Menu')}
+                aria-label={t('header.menu')}
               >
                 {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56 md:hidden">
               {visibleMenus.map(menuItem => {
-                const meta = MENU_META[menuItem.id];
+                            const meta = MENU_META[menuItem.id];
                 const Icon = meta.icon;
                 const isActive = currentView === menuItem.id;
                 return (
@@ -138,7 +147,7 @@ export const Header: React.FC = () => {
                     className={isActive ? 'bg-muted dark:bg-accent' : undefined}
                   >
                     <Icon className="mr-3 h-4 w-4" />
-                    {t(meta.labelZh, meta.labelEn)}
+                    {t(`header.menu-${menuItem.id}`)}
                   </DropdownMenuItem>
                 );
               })}
@@ -146,7 +155,7 @@ export const Header: React.FC = () => {
           </DropdownMenu>
 
           {/* User Actions */}
-          <div className="flex items-center gap-2 sm:gap-3 hd-btns lg:hd-btns">
+          <div className="app-header-actions flex items-center gap-2 sm:gap-3 hd-btns lg:hd-btns">
             {/* Theme Toggle */}
             <Tooltip>
               <TooltipTrigger asChild>
@@ -154,13 +163,13 @@ export const Header: React.FC = () => {
                   type="button"
                   variant="ghost"
                   size="icon"
-                  onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
-                  aria-label={t('切换主题', 'Toggle theme')}
+                  onClick={() => setThemeMode(theme === 'light' ? 'dark' : 'light')}
+                  aria-label={t('header.toggle-theme')}
                 >
                   {theme === 'light' ? <Moon className="h-5 w-5" /> : <Sun className="h-5 w-5" />}
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{t('切换主题', 'Toggle theme')}</TooltipContent>
+              <TooltipContent>{t('header.toggle-theme')}</TooltipContent>
             </Tooltip>
 
             {/* User Profile */}
@@ -172,7 +181,7 @@ export const Header: React.FC = () => {
                   className="w-8 h-8 rounded-full"
                 />
                 <div className="min-w-0 hidden sm:block">
-                  <p className="truncate text-sm font-medium text-foreground">
+                  <p className="app-header-user-name truncate">
                     {user.name || user.login}
                   </p>
                 </div>
@@ -184,22 +193,20 @@ export const Header: React.FC = () => {
                       size="icon"
                       onClick={async () => {
                         const confirmed = await confirm(
-                          t('退出登录确认', 'Logout Confirmation'),
-                          language === 'zh'
-                            ? '退出后您的 AI 配置、WebDAV 设置、自定义分类等数据仍会保留。如需完全清除所有数据，请前往「设置 → 数据管理」。'
-                            : 'Your AI configs, WebDAV settings, custom categories and other data will be preserved. To completely clear all data, please go to "Settings → Data Management".',
+                          t('header.logout-confirmation'),
+                          t('header.logout-only-clears-credentials-repositories-ai-a'),
                           { type: 'warning' }
                         );
                         if (confirmed) {
                           logout();
                         }
                       }}
-                      aria-label={t('退出登录', 'Logout')}
+                      aria-label={t('header.logout')}
                     >
                       <LogOut className="h-4 w-4" />
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent>{t('退出登录', 'Logout')}</TooltipContent>
+                  <TooltipContent>{t('header.logout')}</TooltipContent>
                 </Tooltip>
               </div>
             )}

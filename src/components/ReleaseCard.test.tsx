@@ -3,12 +3,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ReleaseCard from './ReleaseCard';
 import type { Release } from '../types';
 
+const storeState: Record<string, unknown> = {
+  rpcDownloadConfig: { enabled: true, host: '', port: 6800 },
+  backendApiSecret: null,
+  aiConfigs: [],
+  activeAIConfig: null,
+  language: 'zh',
+};
+
 vi.mock('../store/useAppStore', () => ({
-  useAppStore: vi.fn(() => ({
-    rpcDownloadConfig: { enabled: true, host: '', port: 6800 },
-    aiConfigs: [],
-    activeAIConfig: null,
-  })),
+  useAppStore: vi.fn((selector?: (state: Record<string, unknown>) => unknown) =>
+    selector ? selector(storeState) : storeState),
 }));
 
 vi.mock('../hooks/useDialog', () => ({
@@ -61,8 +66,6 @@ const buildCardProps = (props: Partial<Parameters<typeof ReleaseCard>[0]> = {}):
   isReleaseNotesExpanded: false,
   isFullContent: false,
   truncatedBody: '',
-  matchesActiveFilters: () => true,
-  selectedFilters: [],
   onToggleAssets: () => {},
   onToggleReleaseNotes: () => {},
   onToggleFullContent: () => {},
@@ -81,6 +84,8 @@ const renderCard = (props: Partial<Parameters<typeof ReleaseCard>[0]> = {}) => {
 describe('ReleaseCard asset updated indicator', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // 模块级 store 状态被所有用例共享：英文用例设置的 en 不得泄漏到后续用例
+    storeState.language = 'zh';
   });
 
   it('shows container-level and per-asset indicators from the same source (updated_asset_ids)', () => {
@@ -189,6 +194,7 @@ describe('ReleaseCard asset updated indicator', () => {
   });
 
   it('renders all five English header controls when body and download links exist', () => {
+    storeState.language = 'en';
     renderCard({
       language: 'en',
       release: makeRelease(1, { body: 'release notes', updated_asset_ids: [101] }),
@@ -241,4 +247,87 @@ describe('ReleaseCard asset updated indicator', () => {
     const assetRow = screen.getByRole('button', { name: /app\.dmg/ });
     expect(within(assetRow).queryByText(/前$/)).not.toBeInTheDocument();
   });
+
+describe('ReleaseCard asset list filtering', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // 前面的用例会把 store 语言切成 en（模块级共享状态），这里复位到 zh
+    storeState.language = 'zh';
+  });
+
+  const links = [
+    { name: 'app.dmg', url: 'https://example.com/app.dmg', size: 1000, downloadCount: 5, assetId: 101 },
+    { name: 'app.exe', url: 'https://example.com/app.exe', size: 1000, downloadCount: 0, assetId: 102 },
+    { name: 'app.AppImage', url: 'https://example.com/app.AppImage', size: 1000, downloadCount: 0, assetId: 103 },
+  ];
+
+  it('lists only the filtered assets and can reveal the rest via the show-all toggle', () => {
+    renderCard({ downloadLinks: [links[0]], allDownloadLinks: links });
+
+    expect(screen.getByText('app.dmg')).toBeInTheDocument();
+    expect(screen.queryByText('app.exe')).not.toBeInTheDocument();
+    expect(screen.queryByText('app.AppImage')).not.toBeInTheDocument();
+    // 标题计数跟随可见资产数
+    expect(screen.getByText('(1)')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '显示全部 3 个' }));
+    expect(screen.getByText('app.exe')).toBeInTheDocument();
+    expect(screen.getByText('app.AppImage')).toBeInTheDocument();
+    expect(screen.getByText('(3)')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '仅显示命中的 1 个' }));
+    expect(screen.queryByText('app.exe')).not.toBeInTheDocument();
+    expect(screen.getByText('(1)')).toBeInTheDocument();
+  });
+
+  it('falls back to the filtered list when the match set changes (filter switched or edited)', () => {
+    const view = renderCard({ downloadLinks: [links[0]], allDownloadLinks: links });
+
+    fireEvent.click(screen.getByRole('button', { name: '显示全部 3 个' }));
+    expect(screen.getByText('app.exe')).toBeInTheDocument();
+
+    // 过滤器被切换或关键词被编辑（命中集合变化）→ 自动回到「只显示命中的资产」，
+    // 不让旧的展开态继续展示未命中的文件
+    view.rerender(<ReleaseCard {...buildCardProps({ downloadLinks: [links[1]], allDownloadLinks: links })} />);
+    expect(screen.queryByText('app.dmg')).not.toBeInTheDocument();
+    expect(screen.getByText('app.exe')).toBeInTheDocument();
+    expect(screen.queryByText('app.AppImage')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '显示全部 3 个' })).toBeInTheDocument();
+  });
+
+  it('renders every asset without a toggle when nothing was filtered out', () => {
+    renderCard({ downloadLinks: links });
+
+    expect(screen.getByText('app.dmg')).toBeInTheDocument();
+    expect(screen.getByText('app.exe')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /显示全部/ })).not.toBeInTheDocument();
+  });
+});
+
+describe('ReleaseCard current-system asset badges', () => {
+  it('renders recommended, emulated and unverified badges with tooltips', () => {
+    const links = [
+      { name: 'App.dmg', url: 'https://example.com/App.dmg', size: 1, downloadCount: 0, assetId: 201 },
+      { name: 'App-x64.dmg', url: 'https://example.com/App-x64.dmg', size: 1, downloadCount: 0, assetId: 202 },
+      { name: 'App.zip', url: 'https://example.com/App.zip', size: 1, downloadCount: 0, assetId: 203 },
+    ];
+    renderCard({
+      downloadLinks: links,
+      assetBadges: new Map([
+        [links[0].url, 'recommended'],
+        [links[1].url, 'emulated'],
+        [links[2].url, 'unverified'],
+      ]),
+      currentPlatform: 'macos',
+    });
+
+    expect(screen.getByText('推荐')).toHaveAttribute('title', '与当前系统和架构精确匹配');
+    expect(screen.getByText('需转译')).toHaveAttribute('title', '将通过 Rosetta 2 运行');
+    expect(screen.getByText('平台未确认')).toHaveAttribute(
+      'title',
+      '文件名未声明平台，也无法根据同版本资产或仓库信息推断',
+    );
+  });
+});
+
 });

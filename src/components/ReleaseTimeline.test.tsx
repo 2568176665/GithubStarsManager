@@ -9,8 +9,6 @@ import type { AssetFilter, Release, Repository } from '../types';
 const { markAllReleasesOnBackend } = vi.hoisted(() => ({
   markAllReleasesOnBackend: vi.fn(),
 }));
-
-// 设备检测结果由用例注入：useDeviceTarget 依赖真实 navigator UA，测试不可控。
 const deviceState = vi.hoisted(() => ({
   current: {
     platform: null as 'windows' | 'macos' | 'linux' | 'android' | null,
@@ -133,11 +131,12 @@ const baseStoreState = () => ({
   setReleaseIsRefreshing: vi.fn(),
   includePreRelease: false,
   setIncludePreRelease: vi.fn(),
-  releaseShowMode: 'unread' as 'all' | 'unread',
+  releaseShowMode: 'unread' as 'unread' | 'all',
   setReleaseShowMode: vi.fn(),
   releaseLatestMode: 'all' as const,
   setReleaseLatestMode: vi.fn(),
   rpcDownloadConfig: { enabled: false, host: '', secret: '' },
+  backendApiSecret: '',
   aiConfigs: [] as Array<{ id: string }>,
   activeAIConfig: null as string | null,
 });
@@ -149,33 +148,63 @@ const createStoreState = (overrides: Partial<ReturnType<typeof baseStoreState>> 
 
 const mockUseAppStore = vi.mocked(useAppStore);
 
+const getMainContent = () => document.querySelector('.workspace-content') as HTMLElement;
+
+const expectMainText = async (text: string) => {
+  expect((await within(getMainContent()).findAllByText(text)).length).toBeGreaterThan(0);
+};
+
+const queryMainByText = (text: string) => {
+  const matches = within(getMainContent()).queryAllByText(text);
+  return matches.length > 0 ? matches[0] : null;
+};
+
+const wireStoreMocks = () => {
+  storeState = createStoreState();
+
+  mockUseAppStore.mockImplementation(((selector?: (s: typeof storeState) => unknown) =>
+    selector ? selector(storeState) : storeState) as unknown as typeof useAppStore);
+  Object.assign(mockUseAppStore, {
+    getState: vi.fn(() => storeState),
+    setState: vi.fn((update: Partial<typeof storeState>) => Object.assign(storeState, update)),
+  });
+
+  // 复刻真实 store 的 markReleaseAsRead 行为：标记已读并清空
+  // updated_asset_ids 时会生成新的 releases 数组（引用变化）。
+  markAllReleasesOnBackend.mockResolvedValue(undefined);
+  storeState.markAllReleasesAsRead = vi.fn(() => {
+    storeState.readReleases = new Set(storeState.releases.map(release => release.id));
+  });
+  storeState.markReleaseAsRead = vi.fn((releaseId: number) => {
+    storeState.readReleases = new Set(storeState.readReleases);
+    storeState.readReleases.add(releaseId);
+    storeState.releases = storeState.releases.map(r =>
+      r.id === releaseId && (r.updated_asset_ids?.length ?? 0) > 0
+        ? { ...r, updated_asset_ids: [] }
+        : r
+    );
+  }) as unknown as typeof storeState.markReleaseAsRead;
+};
+
+beforeEach(() => {
+  deviceState.current = {
+    platform: null,
+    architecture: undefined,
+    architectureSource: 'none',
+    architectureSettled: true,
+  };
+});
+
 describe('ReleaseTimeline unread snapshot', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    storeState = createStoreState();
-
-    mockUseAppStore.mockImplementation(((selector?: (s: typeof storeState) => unknown) =>
-      selector ? selector(storeState) : storeState) as unknown as typeof useAppStore);
-    Object.assign(mockUseAppStore, {
-      getState: vi.fn(() => storeState),
-      setState: vi.fn((update: Partial<typeof storeState>) => Object.assign(storeState, update)),
-    });
-
-    // 复刻真实 store 的 markReleaseAsRead 行为：标记已读并清空
-    // updated_asset_ids 时会生成新的 releases 数组（引用变化）。
-    markAllReleasesOnBackend.mockResolvedValue(undefined);
-    storeState.markAllReleasesAsRead = vi.fn(() => {
-      storeState.readReleases = new Set(storeState.releases.map(release => release.id));
-    });
-    storeState.markReleaseAsRead = vi.fn((releaseId: number) => {
-      storeState.readReleases = new Set(storeState.readReleases);
-      storeState.readReleases.add(releaseId);
-      storeState.releases = storeState.releases.map(r =>
-        r.id === releaseId && (r.updated_asset_ids?.length ?? 0) > 0
-          ? { ...r, updated_asset_ids: [] }
-          : r
-      );
-    }) as unknown as typeof storeState.markReleaseAsRead;
+    deviceState.current = {
+      platform: null,
+      architecture: undefined,
+      architectureSource: 'none',
+      architectureSettled: true,
+    };
+    wireStoreMocks();
   });
 
   it('restores the prior read state when backend bulk mark-all fails', async () => {
@@ -212,173 +241,632 @@ describe('ReleaseTimeline unread snapshot', () => {
     // 展开确实生效：资产行可见
     expect(await screen.findByText('app.zip')).toBeInTheDocument();
   });
-
-  it('shows only matching assets by default and can reveal all assets per card', async () => {
-    const user = userEvent.setup();
-    const release = createRelease();
-    release.assets = [
-      release.assets[0],
-      {
-        ...release.assets[0],
-        id: 502,
-        name: 'notes.txt',
-        browser_download_url: 'https://github.com/owner/repo/releases/download/v1.0.0/notes.txt',
-      },
-    ];
-    release.zipball_url = 'https://api.github.com/repos/owner/repo/zipball/v1.0.0';
-    storeState = createStoreState({
-      releases: [release],
-      readReleases: new Set([release.id]),
-      releaseSelectedFilters: ['app-filter'],
-      assetFilters: [{ id: 'app-filter', name: 'App', keywords: ['app'] }],
-      releaseViewMode: 'timeline',
-      releaseShowMode: 'all',
-    });
-    mockUseAppStore.mockImplementation(((selector?: (s: typeof storeState) => unknown) =>
-      selector ? selector(storeState) : storeState) as unknown as typeof useAppStore);
-    Object.assign(mockUseAppStore, {
-      getState: vi.fn(() => storeState),
-      setState: vi.fn((update: Partial<typeof storeState>) => Object.assign(storeState, update)),
-    });
-
-    render(<ReleaseTimeline />);
-    await user.click(screen.getByRole('button', { name: '显示下载资产' }));
-
-    expect(await screen.findByText('app.zip')).toBeInTheDocument();
-    expect(screen.queryByText('notes.txt')).not.toBeInTheDocument();
-    expect(screen.queryByText(/Source code \(v1\.0\.0\.zip\)/)).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole('button', { name: '显示全部资产' }));
-    expect(await screen.findByText('notes.txt')).toBeInTheDocument();
-    expect(screen.getByText(/Source code \(v1\.0\.0\.zip\)/)).toBeInTheDocument();
-  });
 });
 
-describe('ReleaseTimeline 当前系统筛选', () => {
-  const makeRelease = (id: number, assetNames: string[]): Release => ({
-    id,
-    tag_name: `v${id}`,
-    name: null,
-    body: null,
-    published_at: '2026-08-20T00:00:00.000Z',
-    html_url: `https://github.com/owner/repo/releases/tag/v${id}`,
-    prerelease: false,
-    repository: {
-      id: repository.id,
-      full_name: repository.full_name,
-      name: repository.name,
-    },
-    // 资产 id/url 由文件名派生，保证每个候选资产都有稳定标识。
-    assets: assetNames.map((assetName, assetIndex) => ({
-      id: 600 + assetIndex,
-      name: assetName,
-      size: 1024,
-      download_count: 0,
-      browser_download_url: `https://github.com/owner/repo/releases/download/v${id}/${assetName}`,
-      content_type: 'application/octet-stream',
-      created_at: '2026-08-21T00:00:00.000Z',
-      updated_at: '2026-08-21T00:00:00.000Z',
-    })),
-  });
+const makeRepo = (id: number, name: string, fullName: string): Repository => ({
+  ...repository,
+  id,
+  name,
+  full_name: fullName,
+});
 
-  const activate = (overrides: Partial<ReturnType<typeof baseStoreState>> = {}) => {
-    storeState = createStoreState({
-      releaseSelectedFilters: ['builtin-current-system'],
-      releaseShowMode: 'all',
-      releaseViewMode: 'list',
-      releaseLatestMode: 'all',
-      ...overrides,
-    });
-    mockUseAppStore.mockImplementation(((selector?: (s: typeof storeState) => unknown) =>
-      selector ? selector(storeState) : storeState) as unknown as typeof useAppStore);
-    Object.assign(mockUseAppStore, {
-      getState: vi.fn(() => storeState),
-      setState: vi.fn((update: Partial<typeof storeState>) => Object.assign(storeState, update)),
-    });
+const makeRepoRelease = (id: number, repo: Repository, assetNames: string[]): Release => ({
+  id,
+  tag_name: `v${id}`,
+  name: null,
+  body: null,
+  published_at: '2026-08-20T00:00:00.000Z',
+  html_url: `https://github.com/${repo.full_name}/releases/tag/v${id}`,
+  prerelease: false,
+  repository: { id: repo.id, full_name: repo.full_name, name: repo.name },
+  assets: assetNames.map((name, index) => ({
+    id: id * 100 + index,
+    name,
+    size: 1024,
+    download_count: 0,
+    browser_download_url: `https://github.com/${repo.full_name}/releases/download/v${id}/${name}`,
+    content_type: 'application/zip',
+    created_at: '2026-08-20T00:00:00.000Z',
+    updated_at: '2026-08-20T00:00:00.000Z',
+  })),
+});
+
+describe('ReleaseTimeline asset filter matching', () => {
+  const beta = makeRepo(8, 'beta', 'owner/beta');
+  const gamma = makeRepo(9, 'gamma', 'owner/gamma');
+
+  // 复刻 issue #404 场景：Portable 过滤器；beta 的 Release 不含 Portable 字眼，
+  // 但被加入「始终包含」列表，启用过滤器时必须照常出现。
+  const portableFilter: AssetFilter = {
+    id: 'f1',
+    name: 'Portable',
+    keywords: ['portable'],
+    includeRepos: ['owner/beta'],
+  };
+
+  const activateFilter = (filter: AssetFilter = portableFilter) => {
+    storeState.assetFilters = [filter];
+    storeState.releaseSelectedFilters = ['f1'];
+    storeState.releaseViewMode = 'timeline';
+    storeState.releaseShowMode = 'all';
   };
 
   beforeEach(() => {
     vi.clearAllMocks();
-    deviceState.current = {
-      platform: null,
-      architecture: undefined,
-      architectureSource: 'none',
-      architectureSettled: true,
-    };
+    wireStoreMocks();
   });
 
-  it('侧栏始终渲染内置行，且不提供编辑/删除操作', () => {
-    activate({ releaseSelectedFilters: [] });
+  it('shows releases whose repo is on the include list even without keyword hits', async () => {
+    storeState.repositories = [beta];
+    storeState.releaseSubscriptions = new Set([beta.id]);
+    storeState.releases = [makeRepoRelease(201, beta, ['beta-1.0.zip'])];
+    activateFilter();
+
     render(<ReleaseTimeline />);
-
-    const row = document.querySelector('#asset-filter-panel')!.firstElementChild as HTMLElement;
-    expect(within(row).getByText('当前系统')).toBeInTheDocument();
-    expect(within(row).getByText('内置')).toBeInTheDocument();
-    expect(within(row).queryByTitle('编辑')).not.toBeInTheDocument();
-    expect(within(row).queryByTitle('删除')).not.toBeInTheDocument();
+    await expectMainText('owner/beta');
   });
 
-  it('按检测到的设备平台过滤 Release 与默认展示的资产', async () => {
+  it('hides releases that neither hit keywords nor sit on the include list', async () => {
+    storeState.repositories = [gamma];
+    storeState.releaseSubscriptions = new Set([gamma.id]);
+    storeState.releases = [makeRepoRelease(301, gamma, ['tool-1.0.exe'])];
+    activateFilter();
+
+    render(<ReleaseTimeline />);
+    expect(await screen.findByText('当前过滤器没有匹配到任何资产，请尝试其他过滤条件')).toBeInTheDocument();
+    expect(queryMainByText('owner/gamma')).not.toBeInTheDocument();
+  });
+
+  it('shows keyword-matching releases when the filter is active', async () => {
+    const alpha = makeRepo(7, 'alpha', 'owner/alpha');
+    storeState.repositories = [alpha];
+    storeState.releaseSubscriptions = new Set([alpha.id]);
+    storeState.releases = [makeRepoRelease(101, alpha, ['app-portable.zip'])];
+    activateFilter();
+
+    render(<ReleaseTimeline />);
+    await expectMainText('owner/alpha');
+  });
+
+  it('lists only the keyword-matching assets and reveals the rest on demand', async () => {
     const user = userEvent.setup();
-    deviceState.current = {
-      platform: 'macos',
-      architecture: 'arm64',
-      architectureSource: 'ua-ch',
-      architectureSettled: true,
-    };
-    activate({ releases: [makeRelease(801, ['App-arm64.dmg', 'App-setup.exe', 'App-x86_64.AppImage'])] });
+    const alpha = makeRepo(7, 'alpha', 'owner/alpha');
+    storeState.repositories = [alpha];
+    storeState.releaseSubscriptions = new Set([alpha.id]);
+    // app-setup.exe 不命中 portable 关键词：默认不列出，但可用「显示全部」展开
+    storeState.releases = [makeRepoRelease(101, alpha, ['app-portable.zip', 'app-setup.exe'])];
+    activateFilter();
 
     render(<ReleaseTimeline />);
-    await user.click(screen.getByRole('button', { name: '显示下载资产' }));
+    const assetToggles = await screen.findAllByRole('button', { name: '显示下载资产' });
+    await user.click(assetToggles[0]);
 
+    expect(await screen.findByText('app-portable.zip')).toBeInTheDocument();
+    expect(screen.queryByText('app-setup.exe')).not.toBeInTheDocument();
+
+    // 卡片提供展开全部资产的入口，并在展开后允许收回
+    await user.click(screen.getByRole('button', { name: '显示全部 2 个' }));
+    expect(await screen.findByText('app-setup.exe')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '仅显示命中的 1 个' }));
+    expect(screen.queryByText('app-setup.exe')).not.toBeInTheDocument();
+  });
+
+  it('keeps only assets whose names hit the include keywords (macos / arm64), source archives excluded', async () => {
+    const user = userEvent.setup();
+    const alpha = makeRepo(7, 'alpha', 'owner/alpha');
+    const release = makeRepoRelease(601, alpha, [
+      'koreader-macos-11.0-arm64-v1.7z',
+      'koreader-android-x86-v1.apk',
+      'koreader-appimage-aarch64-latest-nightly',
+    ]);
+    // GitHub 为每个 Release 自动生成的源码归档伪资产：含 zip/mac 的都不该被展示
+    release.zipball_url = 'https://github.com/owner/alpha/zipball/v601';
+    release.tarball_url = 'https://github.com/owner/alpha/tarball/v601';
+    storeState.repositories = [alpha];
+    storeState.releaseSubscriptions = new Set([alpha.id]);
+    storeState.releases = [release];
+    activateFilter({ id: 'f1', name: 'macOS', keywords: ['macos', 'arm64'] });
+
+    render(<ReleaseTimeline />);
+    const assetToggles = await screen.findAllByRole('button', { name: '显示下载资产' });
+    await user.click(assetToggles[0]);
+
+    // 只保留名称含 macos 或 arm64 的那一项
+    expect(await screen.findByText('koreader-macos-11.0-arm64-v1.7z')).toBeInTheDocument();
+    expect(screen.queryByText('koreader-android-x86-v1.apk')).not.toBeInTheDocument();
+    expect(screen.queryByText('koreader-appimage-aarch64-latest-nightly')).not.toBeInTheDocument();
+    expect(screen.queryByText('Source code (v601.zip)')).not.toBeInTheDocument();
+    expect(screen.queryByText('Source code (v601.tar.gz)')).not.toBeInTheDocument();
+    // 3 个真实资产 + 2 个源码归档被折叠，计数跟随可见项
+    expect(screen.getByText('(1)')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '显示全部 5 个' })).toBeInTheDocument();
+  });
+
+  it('shows every asset of an always-included repository even when keywords miss them', async () => {
+    const user = userEvent.setup();
+    const beta = makeRepo(8, 'beta', 'owner/beta');
+    storeState.repositories = [beta];
+    storeState.releaseSubscriptions = new Set([beta.id]);
+    storeState.releases = [makeRepoRelease(201, beta, ['beta-1.0.zip', 'beta-1.0.exe'])];
+    // includeRepos 绕过关键词判断：该仓库的 Release 不受资产级裁剪
+    activateFilter({ id: 'f1', name: 'Portable', keywords: ['portable'], includeRepos: ['owner/beta'] });
+
+    render(<ReleaseTimeline />);
+    const assetToggles = await screen.findAllByRole('button', { name: '显示下载资产' });
+    await user.click(assetToggles[0]);
+
+    expect(await screen.findByText('beta-1.0.zip')).toBeInTheDocument();
+    expect(screen.getByText('beta-1.0.exe')).toBeInTheDocument();
+    expect(within(getMainContent()).queryByRole('button', { name: /显示全部/ })).not.toBeInTheDocument();
+  });
+
+  it('ignores the auto-generated source archives when matching include keywords', async () => {
+    const alpha = makeRepo(7, 'alpha', 'owner/alpha');
+    const beta = makeRepo(8, 'beta', 'owner/beta');
+    // 复刻线上误报：GitHub 给每个 Release 都挂 "Source code (<tag>.zip)"，
+    // 于是只要关键词里有 zip，零资产或纯 .whl 的 Release 也会出现在过滤结果里。
+    const whlOnly = makeRepoRelease(101, alpha, ['mineru-4.0.0-py3-none-any.whl']);
+    whlOnly.zipball_url = 'https://github.com/owner/alpha/zipball/v101';
+    whlOnly.tarball_url = 'https://github.com/owner/alpha/tarball/v101';
+    const realZip = makeRepoRelease(201, beta, ['app-1.0.zip']);
+    realZip.zipball_url = 'https://github.com/owner/beta/zipball/v201';
+
+    storeState.repositories = [alpha, beta];
+    storeState.releaseSubscriptions = new Set([alpha.id, beta.id]);
+    storeState.releases = [whlOnly, realZip];
+    activateFilter({ id: 'f1', name: 'Zip', keywords: ['zip'] });
+
+    render(<ReleaseTimeline />);
+    await expectMainText('owner/beta');
+    expect(queryMainByText('owner/alpha')).not.toBeInTheDocument();
+  });
+});
+
+describe('ReleaseTimeline per-filter repository exclusions', () => {
+  const beta = makeRepo(8, 'beta', 'owner/beta');
+  const gamma = makeRepo(9, 'gamma', 'owner/gamma');
+  const alpha = makeRepo(7, 'alpha', 'owner/alpha');
+
+  const activate = (filters: AssetFilter[], selectedIds: string[]) => {
+    storeState.assetFilters = filters;
+    storeState.releaseSelectedFilters = selectedIds;
+    storeState.releaseViewMode = 'timeline';
+    storeState.releaseShowMode = 'all';
+    storeState.releaseLatestMode = 'all';
+  };
+
+  const expectVisible = async (fullName: string) => {
+    await expectMainText(fullName);
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    wireStoreMocks();
+  });
+
+  it('hides a release whose repo is always-excluded even with keyword hits and include listing', async () => {
+    storeState.repositories = [alpha];
+    storeState.releaseSubscriptions = new Set([alpha.id]);
+    storeState.releases = [makeRepoRelease(101, alpha, ['app.zip'])];
+    activate(
+      [{ id: 'f1', name: 'Zip', keywords: ['zip'], includeRepos: ['owner/alpha'], alwaysExcludeRepos: ['owner/alpha'] }],
+      ['f1'],
+    );
+
+    render(<ReleaseTimeline />);
+    await expectVisible('当前过滤器没有匹配到任何资产，请尝试其他过滤条件');
+    expect(queryMainByText('owner/alpha')).not.toBeInTheDocument();
+  });
+
+  it('lets always-include bypass the same filter\u2019s exclude keywords', async () => {
+    storeState.repositories = [beta];
+    storeState.releaseSubscriptions = new Set([beta.id]);
+    // 资产名同时命中包含词与排除词，但仓库被始终包含 → 绕过关键词判断
+    storeState.releases = [makeRepoRelease(201, beta, ['beta-app.zip'])];
+    activate(
+      [{ id: 'f1', name: 'App', keywords: ['app'], excludeKeywords: ['beta'], includeRepos: ['owner/beta'] }],
+      ['f1'],
+    );
+
+    render(<ReleaseTimeline />);
+    await expectVisible('owner/beta');
+  });
+
+  it('shows only whitelisted repositories for a pure includeRepos filter', async () => {
+    storeState.repositories = [beta, gamma];
+    storeState.releaseSubscriptions = new Set([beta.id, gamma.id]);
+    storeState.releases = [
+      makeRepoRelease(201, beta, ['beta-1.0.zip']),
+      makeRepoRelease(301, gamma, ['gamma-1.0.zip']),
+    ];
+    activate([{ id: 'f1', name: 'Beta only', keywords: [], includeRepos: ['owner/beta'] }], ['f1']);
+
+    render(<ReleaseTimeline />);
+    await expectVisible('owner/beta');
+    expect(queryMainByText('owner/gamma')).not.toBeInTheDocument();
+  });
+
+  it('shows every other repository for a pure alwaysExcludeRepos filter', async () => {
+    storeState.repositories = [beta, gamma];
+    storeState.releaseSubscriptions = new Set([beta.id, gamma.id]);
+    storeState.releases = [
+      makeRepoRelease(201, beta, ['beta-1.0.zip']),
+      makeRepoRelease(301, gamma, ['gamma-1.0.zip']),
+    ];
+    activate([{ id: 'f1', name: 'No gamma', keywords: [], alwaysExcludeRepos: ['owner/gamma'] }], ['f1']);
+
+    render(<ReleaseTimeline />);
+    await expectVisible('owner/beta');
+    expect(queryMainByText('owner/gamma')).not.toBeInTheDocument();
+  });
+
+  it('hides releases whose real assets are all excluded, even when pseudo assets survive', async () => {
+    const excluded = makeRepoRelease(401, alpha, ['app-setup.exe']);
+    excluded.zipball_url = 'https://github.com/owner/alpha/zipball/v401';
+    const noRealAssets = makeRepoRelease(402, beta, []);
+    noRealAssets.zipball_url = 'https://github.com/owner/beta/zipball/v402';
+    const surviving = makeRepoRelease(403, gamma, ['app.zip', 'app-setup.exe']);
+    surviving.zipball_url = 'https://github.com/owner/gamma/zipball/v403';
+
+    storeState.repositories = [alpha, beta, gamma];
+    storeState.releaseSubscriptions = new Set([alpha.id, beta.id, gamma.id]);
+    storeState.releases = [excluded, noRealAssets, surviving];
+    activate([{ id: 'f1', name: 'No setup', keywords: [], excludeKeywords: ['setup'] }], ['f1']);
+
+    render(<ReleaseTimeline />);
+    await expectVisible('owner/gamma');
+    expect(queryMainByText('owner/alpha')).not.toBeInTheDocument();
+    expect(queryMainByText('owner/beta')).not.toBeInTheDocument();
+  });
+
+  it('keeps pseudo-asset name matching when include keywords are present (preset-source regression)', async () => {
+    const release = makeRepoRelease(501, alpha, ['binary.bin']);
+    release.zipball_url = 'https://github.com/owner/alpha/zipball/v501';
+
+    storeState.repositories = [alpha];
+    storeState.releaseSubscriptions = new Set([alpha.id]);
+    storeState.releases = [release];
+    // preset-source 不在 assetFilters 中时由 PRESET_FILTERS 常量兜底
+    activate([], ['preset-source']);
+
+    render(<ReleaseTimeline />);
+    await expectVisible('owner/alpha');
+  });
+
+  it('does not let one filter\u2019s exclusion veto another filter\u2019s match (OR across filters)', async () => {
+    storeState.repositories = [alpha];
+    storeState.releaseSubscriptions = new Set([alpha.id]);
+    storeState.releases = [makeRepoRelease(101, alpha, ['app-portable.zip'])];
+    activate(
+      [
+        { id: 'f1', name: 'Portable', keywords: ['portable'] },
+        { id: 'f2', name: 'No alpha', keywords: [], alwaysExcludeRepos: ['owner/alpha'] },
+      ],
+      ['f1', 'f2'],
+    );
+
+    render(<ReleaseTimeline />);
+    await expectVisible('owner/alpha');
+  });
+
+  it('hides a release only when every selected filter misses it', async () => {
+    storeState.repositories = [alpha];
+    storeState.releaseSubscriptions = new Set([alpha.id]);
+    storeState.releases = [makeRepoRelease(101, alpha, ['app.zip'])];
+    activate(
+      [
+        { id: 'f1', name: 'Deb only', keywords: ['deb'] },
+        { id: 'f2', name: 'No alpha', keywords: [], alwaysExcludeRepos: ['owner/alpha'] },
+      ],
+      ['f1', 'f2'],
+    );
+
+    render(<ReleaseTimeline />);
+    await expectVisible('当前过滤器没有匹配到任何资产，请尝试其他过滤条件');
+    expect(queryMainByText('owner/alpha')).not.toBeInTheDocument();
+  });
+
+  it('matches repository keys case-insensitively for exclusions and includes', async () => {
+    storeState.repositories = [alpha, beta];
+    storeState.releaseSubscriptions = new Set([alpha.id, beta.id]);
+    storeState.releases = [
+      makeRepoRelease(101, alpha, ['alpha-1.0.zip']),
+      makeRepoRelease(201, beta, ['beta-1.0.zip']),
+    ];
+    activate(
+      [{ id: 'f1', name: 'Case', keywords: [], includeRepos: ['OWNER/BETA'], alwaysExcludeRepos: ['OWNER/ALPHA'] }],
+      ['f1'],
+    );
+
+    render(<ReleaseTimeline />);
+    await expectVisible('owner/beta');
+    expect(queryMainByText('owner/alpha')).not.toBeInTheDocument();
+  });
+
+  it('hides repositories outside both lists when a filter combines include and exclude repos', async () => {
+    const delta = makeRepo(10, 'delta', 'owner/delta');
+    storeState.repositories = [alpha, beta, delta];
+    storeState.releaseSubscriptions = new Set([alpha.id, beta.id, delta.id]);
+    storeState.releases = [
+      makeRepoRelease(101, alpha, ['alpha-1.0.zip']),
+      makeRepoRelease(201, beta, ['beta-1.0.zip']),
+      makeRepoRelease(401, delta, ['delta-1.0.zip']),
+    ];
+    activate(
+      [{ id: 'f1', name: 'Beta minus alpha', keywords: [], includeRepos: ['owner/beta'], alwaysExcludeRepos: ['owner/alpha'] }],
+      ['f1'],
+    );
+
+    render(<ReleaseTimeline />);
+    // 包含列表内的仓库显示；排除列表与两组之外的仓库都隐藏
+    await expectVisible('owner/beta');
+    expect(queryMainByText('owner/alpha')).not.toBeInTheDocument();
+    expect(queryMainByText('owner/delta')).not.toBeInTheDocument();
+  });
+});
+
+describe('ReleaseTimeline context sidebar migration', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    wireStoreMocks();
+  });
+
+  it('renders exactly one releases sidebar with inbox controls while main content keeps its own tools', () => {
+    render(<ReleaseTimeline />);
+
+    const sidebars = document.querySelectorAll('[data-context-sidebar="releases"]');
+    expect(sidebars).toHaveLength(1);
+
+    const sidebar = sidebars[0];
+    expect(within(sidebar as HTMLElement).getByRole('button', { name: /^全部 Release/ })).toHaveAttribute('aria-pressed', 'false');
+    expect(within(sidebar as HTMLElement).getByRole('button', { name: /^未读/ })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(sidebar as HTMLElement).getByRole('button', { name: '显示全部版本' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(sidebar as HTMLElement).getByRole('button', { name: /^仅显示最新版本/ })).toHaveAttribute('aria-pressed', 'false');
+    expect(sidebar.querySelector('[role="switch"][aria-label="包含 Pre-release"]')).toBeNull();
+    expect(sidebar.querySelectorAll('button[title="Release 来源设置"]')).toHaveLength(1);
+
+    const mainContent = document.querySelector('.workspace-content');
+    expect(mainContent).not.toBeNull();
+    expect(mainContent?.querySelector('input[placeholder="搜索Release…"]')).not.toBeNull();
+    expect(mainContent?.querySelector('[aria-label="视图模式"]')).not.toBeNull();
+    expect(within(mainContent as HTMLElement).getByRole('switch', { name: '包含 Pre-release' })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: '全部已读' })).toHaveLength(1);
+    expect(within(sidebar as HTMLElement).getByRole('button', { name: '新建过滤器' })).toBeInTheDocument();
+    expect(within(mainContent as HTMLElement).queryByRole('button', { name: '新建过滤器' })).not.toBeInTheDocument();
+    expect(within(mainContent as HTMLElement).queryAllByText('来源设置')).toHaveLength(0);
+    expect(screen.queryAllByText('仓库分类')).toHaveLength(0);
+  });
+
+  it('routes Display range changes through the store action', async () => {
+    const user = userEvent.setup();
+    render(<ReleaseTimeline />);
+
+    const sidebar = document.querySelector('[data-context-sidebar="releases"]') as HTMLElement;
+    await user.click(within(sidebar).getByRole('button', { name: /^全部 Release/ }));
+
+    expect(storeState.setReleaseShowMode).toHaveBeenCalledWith('all');
+  });
+
+  it('expands and collapses the release source list', async () => {
+    const user = userEvent.setup();
+    render(<ReleaseTimeline />);
+
+    const sidebar = document.querySelector('[data-context-sidebar="releases"]') as HTMLElement;
+    const sourceList = sidebar.querySelector('#release-source-list');
+    expect(sourceList).not.toBeNull();
+
+    const collapseButton = within(sidebar).getByRole('button', { name: '收起来源' });
+    expect(collapseButton).toHaveAttribute('aria-expanded', 'true');
+    await user.click(collapseButton);
+
+    expect(within(sidebar).getByRole('button', { name: '展开来源' })).toHaveAttribute('aria-expanded', 'false');
+    expect(sidebar.querySelector('#release-source-list')).toBeNull();
+
+    await user.click(within(sidebar).getByRole('button', { name: '展开来源' }));
+    expect(sidebar.querySelector('#release-source-list')).not.toBeNull();
+  });
+
+  it('filters a release source by exact normalized repository name and counts by name', async () => {
+    const user = userEvent.setup();
+    const alpha = makeRepo(7, 'alpha', 'owner/alpha');
+    const beta = makeRepo(8, 'beta', 'owner/beta');
+    const alphaRelease = makeRepoRelease(101, alpha, ['alpha.zip']);
+    const betaRelease = makeRepoRelease(201, beta, ['beta.zip']);
+    betaRelease.body = 'This release mentions owner/alpha in its body.';
+    alphaRelease.repository.id = -1001;
+    betaRelease.repository.id = -1002;
+    storeState.repositories = [alpha, beta];
+    storeState.releaseSubscriptions = new Set([alpha.id, beta.id]);
+    storeState.releases = [alphaRelease, betaRelease];
+    storeState.releaseShowMode = 'all';
+
+    render(<ReleaseTimeline />);
+
+    const sidebar = document.querySelector('[data-context-sidebar="releases"]') as HTMLElement;
+    const alphaSource = sidebar.querySelector('button[title="owner/alpha"]') as HTMLButtonElement;
+    expect(alphaSource).toHaveTextContent('1');
+    expect(within(getMainContent()).getAllByText('owner/beta').length).toBeGreaterThan(0);
+
+    await user.click(alphaSource);
+
+    expect(alphaSource).toHaveAttribute('aria-pressed', 'true');
+    expect(within(getMainContent()).getAllByText('owner/alpha').length).toBeGreaterThan(0);
+    expect(within(getMainContent()).queryAllByText('owner/beta')).toHaveLength(0);
+
+    await user.click(alphaSource);
+
+    expect(alphaSource).toHaveAttribute('aria-pressed', 'false');
+    expect(within(getMainContent()).getAllByText('owner/beta').length).toBeGreaterThan(0);
+  });
+
+  it('keeps the sidebar controls disabled in the no-subscription empty state', () => {
+    storeState.releases = [];
+    storeState.releaseSubscriptions = new Set<number>();
+
+    render(<ReleaseTimeline />);
+
+    const sidebar = document.querySelector('[data-context-sidebar="releases"]');
+    expect(sidebar).not.toBeNull();
+
+    const displayButton = within(sidebar as HTMLElement).getByRole('button', { name: /^全部 Release/ });
+    const versionButton = within(sidebar as HTMLElement).getByRole('button', { name: '显示全部版本' });
+    const mainContent = document.querySelector('.workspace-content') as HTMLElement;
+    const preReleaseSwitch = within(mainContent).getByRole('switch', { name: '包含 Pre-release' });
+    const sourceButton = sidebar?.querySelector('button[title="Release 来源设置"]') as HTMLElement;
+    expect(displayButton).toHaveAttribute('disabled');
+    expect(versionButton).toHaveAttribute('disabled');
+    expect(preReleaseSwitch).toHaveAttribute('disabled');
+    expect(sourceButton).not.toHaveAttribute('disabled');
+
+    expect(screen.getByRole('heading', { level: 1, name: 'Release时间线' })).toBeInTheDocument();
+    expect(screen.getByText('没有Release订阅')).toBeInTheDocument();
+    expect(document.querySelectorAll('[data-context-sidebar="releases"]')).toHaveLength(1);
+  });
+
+  it('keeps the sidebar controls disabled in the subscribed-but-no-releases empty state', () => {
+    storeState.releases = [];
+
+    render(<ReleaseTimeline />);
+
+    const sidebar = document.querySelector('[data-context-sidebar="releases"]');
+    expect(sidebar).not.toBeNull();
+
+    const displayButton = within(sidebar as HTMLElement).getByRole('button', { name: /^全部 Release/ });
+    const versionButton = within(sidebar as HTMLElement).getByRole('button', { name: '显示全部版本' });
+    const mainContent = document.querySelector('.workspace-content') as HTMLElement;
+    const preReleaseSwitch = within(mainContent).getByRole('switch', { name: '包含 Pre-release' });
+    const sourceButton = sidebar?.querySelector('button[title="Release 来源设置"]') as HTMLElement;
+    expect(displayButton).not.toHaveAttribute('disabled');
+    expect(versionButton).not.toHaveAttribute('disabled');
+    expect(preReleaseSwitch).not.toHaveAttribute('disabled');
+    expect(sourceButton).not.toHaveAttribute('disabled');
+
+    expect(screen.getByText('没有最近的Release')).toBeInTheDocument();
+    expect(within(mainContent).getByRole('button', { name: '刷新' })).toBeInTheDocument();
+    expect(document.querySelectorAll('[data-context-sidebar="releases"]')).toHaveLength(1);
+  });
+});
+
+describe('ReleaseTimeline current-system built-in filter', () => {
+  const alpha = makeRepo(7, 'alpha', 'owner/alpha');
+  const macDevice = {
+    platform: 'macos' as const,
+    architecture: 'arm64' as const,
+    architectureSource: 'ua-ch' as const,
+    architectureSettled: true,
+  };
+
+  const activateCurrentSystem = () => {
+    storeState.repositories = [alpha];
+    storeState.releaseSubscriptions = new Set([alpha.id]);
+    storeState.releaseSelectedFilters = ['builtin-current-system'];
+    storeState.releaseShowMode = 'all';
+    storeState.releaseViewMode = 'timeline';
+    storeState.releaseLatestMode = 'all';
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    wireStoreMocks();
+  });
+
+  it('renders the built-in row first with its badge and no edit/delete actions', () => {
+    render(<ReleaseTimeline />);
+    const panel = document.querySelector('#asset-filter-panel') as HTMLElement;
+    const firstRow = panel.querySelector('.app-side-filter-row') as HTMLElement;
+
+    expect(firstRow).toHaveTextContent('当前系统');
+    expect(within(firstRow).getByText('内置')).toBeInTheDocument();
+    expect(within(firstRow).queryByTitle('编辑')).not.toBeInTheDocument();
+    expect(within(firstRow).queryByTitle('删除')).not.toBeInTheDocument();
+  });
+
+  it('keeps the device line on its own row so the fixed-height row cannot clip it', () => {
+    deviceState.current = macDevice;
+    render(<ReleaseTimeline />);
+    const firstRow = document.querySelector('.app-side-filter-row') as HTMLElement;
+    const deviceLine = within(firstRow).getByText(/macOS/);
+
+    expect(deviceLine).toHaveClass('truncate');
+    expect(firstRow.querySelector('.app-side-item')).toHaveClass('app-side-multiline-label');
+  });
+
+  it('filters both releases and default assets by the detected device', async () => {
+    const user = userEvent.setup();
+    deviceState.current = macDevice;
+    activateCurrentSystem();
+    storeState.releases = [
+      makeRepoRelease(701, alpha, ['App-arm64.dmg', 'App-setup.exe', 'App-x86_64.AppImage']),
+    ];
+
+    render(<ReleaseTimeline />);
+    const sidebar = document.querySelector('[data-context-sidebar="releases"]') as HTMLElement;
+    expect(within(sidebar).getByRole('button', { name: /当前系统/ })).toHaveAttribute('aria-pressed', 'true');
+
+    await user.click(await screen.findByRole('button', { name: '显示下载资产' }));
     expect(await screen.findByText('App-arm64.dmg')).toBeInTheDocument();
     expect(screen.queryByText('App-setup.exe')).not.toBeInTheDocument();
     expect(screen.queryByText('App-x86_64.AppImage')).not.toBeInTheDocument();
   });
 
-  it('设备平台无法识别时不会清空列表', async () => {
-    activate({ releases: [makeRelease(802, ['App-setup.exe'])] });
-    render(<ReleaseTimeline />);
+  it('never empties the list when the device platform cannot be detected', async () => {
+    activateCurrentSystem();
+    storeState.releases = [makeRepoRelease(702, alpha, ['App-setup.exe'])];
 
-    // 平台未知时不按内置筛选裁剪：Release 与资产都照常渲染。
-    expect((await screen.findAllByText('owner/repo')).length).toBeGreaterThan(0);
-    await userEvent.setup().click(screen.getByRole('button', { name: '显示下载资产' }));
-    expect(await screen.findByText('App-setup.exe')).toBeInTheDocument();
+    render(<ReleaseTimeline />);
+    await expectMainText('owner/alpha');
   });
 
-  it('与普通过滤器在 Release 级取 OR，资产级取并集', async () => {
+  it('takes the OR of the built-in filter and regular filters at release level', async () => {
     const user = userEvent.setup();
-    deviceState.current = {
-      platform: 'macos',
-      architecture: 'arm64',
-      architectureSource: 'ua-ch',
-      architectureSettled: true,
-    };
-    activate({
-      releaseSelectedFilters: ['builtin-current-system', 'preset-windows'],
-      releases: [makeRelease(803, ['App-arm64.dmg', 'App-setup.exe'])],
-    });
+    deviceState.current = macDevice;
+    activateCurrentSystem();
+    storeState.releaseSelectedFilters = ['builtin-current-system', 'preset-windows'];
+    storeState.releases = [
+      makeRepoRelease(703, alpha, ['App-arm64.dmg', 'App-setup.exe']),
+    ];
 
     render(<ReleaseTimeline />);
-    await user.click(screen.getByRole('button', { name: '显示下载资产' }));
-
+    await expectMainText('owner/alpha');
+    await user.click(await screen.findByRole('button', { name: '显示下载资产' }));
     expect(await screen.findByText('App-arm64.dmg')).toBeInTheDocument();
     expect(await screen.findByText('App-setup.exe')).toBeInTheDocument();
   });
 
-  it('空态给出设备专属文案并可一键关闭该过滤器', async () => {
+  it('clears the built-in selection with clear-all', async () => {
     const user = userEvent.setup();
-    deviceState.current = {
-      platform: 'macos',
-      architecture: 'arm64',
-      architectureSource: 'ua-ch',
-      architectureSettled: true,
-    };
-    activate({ releases: [makeRelease(804, ['App-setup.exe'])] });
+    deviceState.current = macDevice;
+    activateCurrentSystem();
+    storeState.releases = [makeRepoRelease(704, alpha, ['App-arm64.dmg'])];
+
+    render(<ReleaseTimeline />);
+    const sidebar = document.querySelector('[data-context-sidebar="releases"]') as HTMLElement;
+    await user.click(within(sidebar).getByTitle('清除所有筛选'));
+    expect(storeState.clearReleaseSelectedFilters).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows a device-specific empty state with a turn-off action', async () => {
+    const user = userEvent.setup();
+    deviceState.current = macDevice;
+    activateCurrentSystem();
+    storeState.releases = [makeRepoRelease(705, alpha, ['App-setup.exe'])];
 
     render(<ReleaseTimeline />);
     expect(await screen.findByText('没有找到适用于 macOS · Apple Silicon 的资产')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '关闭「当前系统」过滤器' }));
     expect(storeState.toggleReleaseSelectedFilter).toHaveBeenCalledWith('builtin-current-system');
+  });
+
+  it('does not blame the device filter when the search box hides everything', async () => {
+    deviceState.current = macDevice;
+    activateCurrentSystem();
+    storeState.releases = [makeRepoRelease(706, alpha, ['App-arm64.dmg'])];
+    storeState.releaseSearchQuery = 'no-such-release';
+
+    render(<ReleaseTimeline />);
+    expect(await screen.findByText('当前过滤器没有匹配到任何资产，请尝试其他过滤条件'))
+      .toBeInTheDocument();
+    expect(screen.queryByText(/没有找到适用于/)).not.toBeInTheDocument();
   });
 });

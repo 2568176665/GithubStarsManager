@@ -30,6 +30,12 @@ const MAX_ISSUE_BODY_CHARS = 2_500;
 const MAX_ISSUE_COMMENT_CHARS = 1_200;
 const MAX_ISSUE_COMMENT_LINES = 8;
 
+/**
+ * Generates a unique identifier for meta source evidence records.
+ *
+ * @param prefix - The prefix string for the evidence ID.
+ * @returns A cryptographically secure unique identifier string.
+ */
 const createId = (prefix: string): string => createSecureId(prefix);
 
 // eslint-disable-next-line no-control-regex -- 控制字符清理与 aiService.sanitizeForPrompt 同规则

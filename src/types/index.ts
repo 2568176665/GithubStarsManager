@@ -1,8 +1,21 @@
 import type { ThemePresetId } from '../constants/themePresets';
+import type { AppLanguage } from '../i18n/languages';
 
+import type { RepositoryCardFields } from './repositoryCardFields';
+export type { RepositoryCardFieldId, RepositoryCardFields } from './repositoryCardFields';
+import type { RepositoryCardActionPreference } from './repositoryCardActions';
+export type { RepositoryCardActionId, RepositoryCardActionPreference } from './repositoryCardActions';
 import type { RepositoryChatSettings } from './repositoryChat';
 export type { RepositoryChatSettings } from './repositoryChat';
+import type { ThemeTokens } from './themeTokens';
+export type { ThemeTokens } from './themeTokens';
+
+/** 显示模式偏好：system = 跟随操作系统深浅设置 */
+export type ThemeMode = 'light' | 'dark' | 'system';
+import type { TrendingSnapshot } from './trendingSnapshot';
+export type { TrendingSnapshot } from './trendingSnapshot';
 export type {
+  RepositoryHealthEnrichment,
   RepositoryHealthFact,
   RepositoryHealthFactId,
   RepositoryHealthFactKind,
@@ -33,7 +46,14 @@ export interface Repository {
     avatar_url: string;
   };
   topics: string[];
-  /** GitHub 原生状态字段；旧缓存和后端返回可能缺失，因此保持可选。 */
+  /**
+   * GitHub 原生状态字段。`/user/starred` 原始响应本就包含这些字段，
+   * 这里把它们纳入类型以便 Repository Health 与筛选复用。
+   *
+   * 后端不持久化这些字段，因此 `src/utils/repositoryMerge.ts` 把它们同时列入
+   * `CLIENT_ONLY_REPOSITORY_FIELDS`（不参与后端同步指纹，避免 Issue #304 的哈希抖动）
+   * 与 `LOCAL_REPOSITORY_FIELDS`（拉取时保留本地值，不被后端响应清空）。
+   */
   archived?: boolean;
   disabled?: boolean;
   fork?: boolean;
@@ -51,6 +71,10 @@ export interface Repository {
   custom_tags?: string[];
   custom_category?: string;
   category_locked?: boolean;
+  /** 描述显示偏好：follow=跟随列表页"显示内容"开关（默认），ai=固定显示AI总结，original=固定显示原始描述 */
+  description_display?: 'follow' | 'ai' | 'original';
+  /** 标签显示偏好：follow=跟随列表页"显示内容"开关（默认），ai=固定显示AI标签，topics=固定显示Topics */
+  tags_display?: 'follow' | 'ai' | 'topics';
   last_edited?: string;
   vector_indexed_at?: string;  // ISO timestamp of last successful vector indexing
   /** 上次向量索引时采用的 license（SPDX id / null）。增量谓词据此判断 license 是否变化以触发重索引。 */
@@ -289,6 +313,17 @@ export interface VectorIndexingState {
   result: { indexed: number; skipped: number; errors: number; error?: string } | null;
 }
 
+/** Local (Electron) / client-side MCP service preferences. Server is source of truth when backend is on. */
+export interface McpServiceConfig {
+  enabled: boolean;
+  /** Local bind host for Electron standalone MCP (default 127.0.0.1) */
+  host: string;
+  /** Local bind port for Electron standalone MCP (default 3927) */
+  port: number;
+  /** Plaintext MCP bearer token — viewable anytime; regenerate via reset */
+  token: string;
+}
+
 // 相似仓库视图状态：进入"查找相似仓库"后保存当前上下文，重置时恢复
 export interface SimilarViewState {
   active: boolean;
@@ -319,6 +354,8 @@ export interface AIConfig {
   concurrency?: number; // AI分析并发数，默认为1
   requestsPerMinute?: number; // 每分钟 AI 请求数上限（供批量分析的共享限流器使用），0/缺省=不限制
   reasoningEffort?: AIReasoningEffort; // OpenAI GPT-5/Responses 可选 reasoning 强度
+  /** 问答内部 JSON 步骤（理解/规划/gate）是否关闭思考；默认 true，不暴露 UI。仅对有请求级关闭开关的供应商生效：OpenAI gpt-5.1+ 发送 reasoning.effort:'none'，DeepSeek/MiMo 发送 thinking:'disabled'；其余供应商无关闭参数，保持原有请求形态（Claude 默认不开启思考；Gemini 2.5 默认开启且当前请求不发送 thinkingConfig）。 */
+  disableThinkingForInternalSteps?: boolean;
   mimoPlan?: MiMoPlan; // MiMo 渠道：api（按量付费）或 token-plan（订阅制）
   supportsToolCalls?: boolean; // 端点/模型支持 OpenAI 风格 function calling（仓库问答工具循环用，默认关闭）
   apiKeyStatus?: SecretStatus;
@@ -332,11 +369,24 @@ export interface WebDAVConfig {
   password: string;
   path: string;
   isActive: boolean;
+  /** 部分服务（如 CSTCloud 数据胶囊）按 User-Agent 校验客户端，空值保持默认行为 */
+  customUserAgent?: string;
   passwordStatus?: SecretStatus;
 }
 
+export type ProxyType = 'http' | 'socks5';
+
 /** GitHub/Release 数据面请求出口偏好；仅影响本设备，不参与后端/autoSync 同步。 */
 export type RouteMode = 'auto' | 'backend' | 'browser';
+
+export interface ProxyConfig {
+  enabled: boolean;
+  type: ProxyType;
+  host: string;
+  port: number;
+  username?: string;
+  password?: string;
+}
 
 export interface RpcDownloadConfig {
   enabled: boolean;
@@ -361,6 +411,12 @@ export interface SearchFilters {
   analysisFailed?: boolean; // 新增：分析是否失败
   /** SPDX id 过滤；过滤面板可采用 `NO_LICENSE_SENTINEL` 表示「无/未声明 license」。 */
   licenses: string[]; // 新增：开源许可过滤
+  /**
+   * Repository Health 客观事实施加的筛选（见 `src/utils/repositoryHealth.ts`）。
+   * 仅使用本地已存在的 `Repository` 字段，不触发额外网络请求；
+   * 依赖 Release 的事实（是否有 Release、最新版本）由 Health 面板与 MCP/AI 复用，
+   * 不进列表筛选——列表筛选器拿不到 Release 数组，硬塞会产生全量重渲染。
+   */
   healthArchived?: boolean;
   healthRecentActivity?: boolean;
   healthHasLicense?: boolean;
@@ -381,11 +437,23 @@ export interface AssetFilter {
   id: string;
   name: string;
   keywords: string[];
-  /** 资源名称中不允许出现的关键词。 */
+  /**
+   * 黑名单关键词：资产文件名命中任一关键词时，即使命中 keywords 也不匹配。
+   * 用于在同平台过滤器内剔除安装包等噪声（如 "setup"、"installer"）。
+   */
   excludeKeywords?: string[];
-  /** 仅匹配这些仓库（owner/repo，不区分大小写）。 */
+  /**
+   * 始终包含的仓库（Repository.full_name）：该过滤器启用时，这些仓库的 Release
+   * 无需命中关键词也会出现在筛选结果中（用于 Release 不含过滤器关键词的仓库，
+   * 如仅发布 zip 或源码归档的项目）；未选过滤器时列表不受影响，也不影响订阅。
+   */
   includeRepos?: string[];
-  /** 永远不匹配这些仓库（owner/repo，不区分大小写）。 */
+  /**
+   * 始终排除的仓库（Repository.full_name）：仅作用于所属过滤器。该过滤器启用时，
+   * 这些仓库的 Release 不通过本过滤器（优先于本过滤器的关键词与 includeRepos），
+   * 但不会否决其它已启用过滤器的命中。不复用 #405 遗留的 `excludeRepos` 键，
+   * 避免历史数据被重新解释为该语义。
+   */
   alwaysExcludeRepos?: string[];
   isPreset?: boolean;
   icon?: string;
@@ -408,12 +476,34 @@ export const defaultHeaderMenuConfig: HeaderMenuItem[] = [
   { id: 'settings', visible: true, order: 5 },
 ];
 
+export interface AccountWorkspace {
+  repositories: Repository[];
+  lastSync: string | null;
+  gists: Gist[];
+  starredGists: Gist[];
+  selectedGistCategory: GistCategoryId;
+  releases: Release[];
+  releaseSubscriptions: number[];
+  releaseSourceSettings: ReleaseSourceSettings;
+  readReleases: number[];
+  forks: ForkRepo[];
+  readForks: number[];
+  customCategories: Category[];
+  hiddenDefaultCategoryIds: string[];
+  categoryOrder: string[];
+  defaultCategoryOverrides: Record<string, Partial<Category>>;
+  categoryListIdMap: Record<string, string>;
+  syncMode: SyncMode;
+  syncModeConfigured: boolean;
+}
+
 export interface AppState {
   // Auth
   user: GitHubUser | null;
   githubToken: string | null;
   isAuthenticated: boolean;
   hasHydrated: boolean;
+  accountWorkspaces: Record<string, AccountWorkspace>;
   
   // Repositories
   repositories: Repository[];
@@ -422,6 +512,13 @@ export interface AppState {
   lastSync: string | null;
   analyzingRepositoryIds: Set<number>;
   repositoryViewMode: 'grid' | 'list';
+  /** 仓库卡片显示哪些字段（开发守则 §14）：只保存声明式开关 */
+  repositoryCardFields: RepositoryCardFields;
+  /** Quick-action order and toolbar visibility; hidden actions remain in the menu. */
+  repositoryCardActions: RepositoryCardActionPreference[];
+
+  // Theme tokens（开发守则 §14）：声明式外观偏好，落到 <html> 的 CSS 变量上
+  themeTokens: ThemeTokens;
 
   // Gists
   gists: Gist[];
@@ -475,14 +572,20 @@ export interface AppState {
   assetFilters: AssetFilter[]; // 新增：资源过滤器
   
   // UI
-  theme: 'light' | 'dark';
+  /** 显示模式偏好：跟随系统时由 systemTheme 解析出实际深浅 */
+  themeMode: ThemeMode;
+  /** 操作系统当前深浅偏好（不持久化，仅跟随 system 模式使用） */
+  systemTheme: 'light' | 'dark';
   /** 主题配色预设（默认 + 内置精选），见 constants/themePresets */
-  themePreset: ThemePresetId;
+  themePresetLight: ThemePresetId;
+  themePresetDark: ThemePresetId;
   currentView: 'repositories' | 'gists' | 'releases' | 'forks' | 'settings' | 'subscription';
   selectedCategory: string;
-  language: 'zh' | 'en';
+  language: AppLanguage;
   /** README 文档翻译引擎（微软 / Google / AI），见 TranslationEngine */
   translationEngine: TranslationEngine;
+  /** 自动翻译卡片上的仓库原始描述为界面语言（默认关闭；同语言/失败时显示原文） */
+  autoTranslateRepoDescription: boolean;
   isSidebarCollapsed: boolean;
   readmeModalOpen: boolean;
   headerMenuConfig: HeaderMenuItem[];
@@ -493,7 +596,14 @@ export interface AppState {
   // Analysis Progress
   analysisProgress: AnalysisProgress
 
-  // Worker data plane
+  // Backend
+  backendApiSecret: string | null;
+
+  // MCP (local Electron prefs; backend uses SQLite settings when available)
+  mcpConfig: McpServiceConfig;
+
+  // Network Proxy
+  proxyConfig: ProxyConfig;
   rpcDownloadConfig: RpcDownloadConfig;
   /** 本地路由偏好；不参与后端/autoSync 同步 */
   routeMode: RouteMode;
@@ -535,12 +645,44 @@ export interface AppState {
   discoverySortBy: SortBy;
   discoverySortOrder: SortOrder;
   discoverySearchQuery: string;
+  /** 仓库搜索模式：keyword=关键词（默认，行为不变）；semantic=AI 语义（全网仓库） */
+  discoverySearchMode: 'keyword' | 'semantic';
+  /** 语义搜索当前阶段（会话级，不持久化；原始阶段 id：expanding/recalling/enriching/reranking，null=不在搜索中） */
+  discoverySearchPhase: string | null;
+  /** 当前阶段的补充明细（如补全计数 "30/60"；会话级，不持久化） */
+  discoverySearchPhaseDetail: string | null;
+  /** 语义搜索空态原因（会话级，不持久化；recall_empty=召回为空，ai_empty=AI 判定空） */
+  discoverySearchEmptyReason: 'recall_empty' | 'ai_empty' | null;
   discoverySelectedTopic: TopicCategory | null;
   discoveryHasMore: Record<DiscoveryChannelId, boolean>;
   discoveryNextPage: Record<DiscoveryChannelId, number>;
   discoveryTotalCount: Record<DiscoveryChannelId, number>;
   discoveryScrollPositions: Record<DiscoveryChannelId, number>;
   trendingTimeRange: TrendingTimeRange;
+  /**
+   * Trending 快照历史（开发守则 §7）：本地记录每次看到的榜单，用于算排名变化、首次上榜与
+   * 连续上榜。按「周期 × 语言 × 自然日」去重，条数与天数都有上限。
+   */
+  trendingSnapshots: TrendingSnapshot[];
+  /** 周刊频道过滤器：仅显示已被周刊收录（issue labels 含 'weekly'）的条目 */
+  weeklyOnlyCollected: boolean;
+  /** 周刊频道同步进度（会话级，不持久化） */
+  weeklySyncStatus: WeeklySyncStatus | null;
+  /** X 推文频道：关注博主列表（handle 不含 @，初始化含 geekbb） */
+  xTweetFollows: XTweetFollow[];
+  /**
+   * X 推文频道：可选登录鉴权 Cookie（配置后走 GraphQL 抓取 + 历史翻页）。
+   * 仅内存态，不持久化到 IndexedDB/localStorage（明文 Cookie 防同源脚本读取）。
+   */
+  xTweetAuth: XTweetAuth | null;
+  /** X 鉴权修订号：每次 set/clear 递增的非敏感计数器，用于请求失效判定与列表刷新 */
+  xTweetAuthRevision: number;
+  /** X 推文频道同步/详情补全进度（会话级，不持久化） */
+  xTweetSyncStatus: WeeklySyncStatus | null;
+  /** Telegram 频道：关注频道列表（channel 不含 @，初始化含 geekhub23） */
+  telegramFollows: TelegramFollow[];
+  /** Telegram 频道同步/详情补全进度（会话级，不持久化） */
+  telegramSyncStatus: WeeklySyncStatus | null;
 
   // Subscription
   subscriptionRepos: Record<string, SubscriptionRepo[]>;
@@ -607,9 +749,78 @@ export type SortBy = 'BestMatch' | 'MostStars' | 'MostForks';
 
 export type SortOrder = 'Descending' | 'Ascending';
 
-export type DiscoveryChannelId = 'trending' | 'hot-release' | 'most-popular' | 'topic' | 'search';
+export type DiscoveryChannelId = 'trending' | 'hot-release' | 'most-popular' | 'topic' | 'x-tweet' | 'telegram' | 'weekly' | 'search' | 'code-search' | `external:${string}`;
 
-export type DiscoveryChannelIcon = 'trending' | 'rocket' | 'star' | 'tag' | 'search';
+export type DiscoveryChannelIcon = 'trending' | 'rocket' | 'star' | 'tag' | 'tweet' | 'telegram' | 'weekly' | 'search';
+
+/** 阮一峰周刊频道：来源 issue 的引用信息（周刊收录 = labels 含 'weekly'） */
+export interface WeeklyIssueRef {
+  number: number;
+  title: string;
+  html_url: string;
+  labels: string[];
+  createdAt: string;
+}
+
+/** 周刊频道同步/详情补全进度 */
+export interface WeeklySyncStatus {
+  phase: 'syncing' | 'enriching';
+  current: number;
+  total: number;
+}
+
+/** X 推文频道：一条关注配置（handle 不含 @） */
+export interface XTweetFollow {
+  handle: string;
+  addedAt: string;
+}
+
+/**
+ * X 推文频道：可选的登录态鉴权 Cookie（用户在设置中自行填写）。
+ * 配置后改走 x.com GraphQL 接口：每位博主每页约 20 条推文且支持游标回溯
+ * 历史翻页；留空则退回未登录抓取（每次仅最新一小批、无历史翻页）。
+ */
+export interface XTweetAuth {
+  authToken: string;
+  ct0: string;
+}
+
+/** X 推文频道：仓库来源推文的引用信息（正文缓存供"查看原贴"离线渲染） */
+export interface XTweetRef {
+  tweetId: string;
+  /** 博主 handle（不含 @） */
+  handle: string;
+  displayName: string;
+  /** 推文正文（RSS 输出的 HTML 片段） */
+  content: string;
+  /** 推文链接（https://x.com/<handle>/status/<id>） */
+  html_url: string;
+  createdAt: string;
+}
+
+/** Telegram 频道：一条关注配置（channel 不含 @） */
+export interface TelegramFollow {
+  channel: string;
+  addedAt: string;
+}
+
+/** Telegram 频道：仓库来源消息的引用信息（正文缓存供"查看消息原文"离线渲染） */
+export interface TelegramRef {
+  /** 复合 ID `<channel>/<messageId>` */
+  messageId: string;
+  /** 频道名（不含 @） */
+  channel: string;
+  /** 频道显示名 */
+  displayName: string;
+  /** 消息正文（t.me 公开预览输出的 HTML 片段） */
+  content: string;
+  /** 消息链接（https://t.me/<channel>/<id>） */
+  html_url: string;
+  createdAt: string;
+}
+
+/** User-configured external discovery source formats. */
+export type ExternalFeedKind = 'json' | 'rss';
 
 export interface DiscoveryChannel {
   id: DiscoveryChannelId;
@@ -618,6 +829,10 @@ export interface DiscoveryChannel {
   icon: DiscoveryChannelIcon;
   description: string;
   enabled: boolean;
+  /** User-configured, public feed; only present for external channels. */
+  sourceUrl?: string;
+  /** Feed format of `sourceUrl`; omitted means the default JSON format. */
+  sourceKind?: ExternalFeedKind;
 }
 
 export interface PaginatedDiscoveryRepositories {
@@ -631,6 +846,12 @@ export interface DiscoveryRepo extends Repository {
   rank: number;
   channel: DiscoveryChannelId;
   platform: DiscoveryPlatform;
+  /** 仅 weekly 频道：该仓库对应的周刊投稿 issue */
+  weeklyIssue?: WeeklyIssueRef;
+  /** 仅 x-tweet 频道：该仓库来源的推文 */
+  xTweet?: XTweetRef;
+  /** 仅 telegram 频道：该仓库来源的频道消息 */
+  telegram?: TelegramRef;
 }
 
 export type TrendingTimeRange = 'daily' | 'weekly' | 'monthly';

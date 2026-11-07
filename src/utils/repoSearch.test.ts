@@ -2,9 +2,6 @@ import { describe, it, expect } from 'vitest';
 import type { Repository } from '../types';
 import {
   performBasicTextSearch,
-  classifyLocalSearchQuality,
-  mergeHybridSearchResults,
-  performWeightedTextSearch,
   applyRepoFilters,
   searchRepositories,
   projectRepoForAgent,
@@ -82,30 +79,6 @@ describe('performBasicTextSearch', () => {
   });
 });
 
-describe('weighted repository search', () => {
-  it('ranks names above descriptions and searches AI fields', () => {
-    const repos = [
-      makeRepo({ id: 10, name: 'plain', full_name: 'acme/plain', description: 'vector database' }),
-      makeRepo({ id: 11, name: 'vector-database', full_name: 'acme/vector-database', description: '' }),
-      makeRepo({ id: 12, name: 'summary', full_name: 'acme/summary', ai_summary: 'A vector database toolkit' }),
-    ];
-    expect(performWeightedTextSearch(repos, 'vector database').map((repo) => repo.id)).toEqual([11, 10, 12]);
-  });
-
-  it('classifies strong repository identity separately from weak text', () => {
-    expect(classifyLocalSearchQuality(sample, 'acme/alpha')).toBe('identity');
-    expect(classifyLocalSearchQuality(sample, 'alp')).toBe('identity');
-    expect(classifyLocalSearchQuality(sample, 'CRDT library')).toBe('weak-text');
-    expect(classifyLocalSearchQuality([], 'missing')).toBe('no-results');
-  });
-
-  it('merges lexical and vector ranks with reciprocal rank fusion', () => {
-    const lexical = [sample[0], sample[1]];
-    const vector = [{ id: '2', score: 0.99 }, { id: '3', score: 0.98 }];
-    expect(mergeHybridSearchResults(sample, lexical, vector).map((repo) => repo.id)).toEqual([2, 1, 3]);
-  });
-});
-
 describe('applyRepoFilters', () => {
   it('filters by language and min stars', () => {
     const hits = applyRepoFilters(sample, { languages: ['Rust'], minStars: 100 });
@@ -132,16 +105,6 @@ describe('applyRepoFilters', () => {
     expect(hits.map((repository) => repository.id)).toEqual([11, 10]);
   });
 
-  it('sorts repositories by creation time', () => {
-    const repositories = [
-      makeRepo({ id: 12, name: 'older', full_name: 'acme/older', created_at: '2020-01-01T00:00:00Z' }),
-      makeRepo({ id: 13, name: 'newer', full_name: 'acme/newer', created_at: '2025-01-01T00:00:00Z' }),
-    ];
-
-    expect(applyRepoFilters(repositories, { sortBy: 'created', sortOrder: 'desc' }).map((repo) => repo.id))
-      .toEqual([13, 12]);
-  });
-
   it('falls back to updated_at when pushed_at is missing', () => {
     const repositories = [
       makeRepo({ id: 20, name: 'no-push', full_name: 'acme/no-push', updated_at: '2026-06-01T00:00:00Z', pushed_at: '' }),
@@ -165,18 +128,6 @@ describe('applyRepoFilters', () => {
   it('filters by SPDX id license', () => {
     const hits = applyRepoFilters(sample, { licenses: ['MIT'] });
     expect(hits.map((r) => r.id)).toEqual([1]);
-  });
-
-  it('filters by repository health facts without treating missing status as false', () => {
-    const repositories = [
-      makeRepo({ id: 40, name: 'archived', full_name: 'acme/archived', archived: true, license: 'MIT' }),
-      makeRepo({ id: 41, name: 'active', full_name: 'acme/active', archived: false, license: 'Apache-2.0' }),
-      makeRepo({ id: 42, name: 'unknown', full_name: 'acme/unknown', license: null }),
-    ];
-
-    expect(applyRepoFilters(repositories, { healthArchived: true }).map((repo) => repo.id)).toEqual([40]);
-    expect(applyRepoFilters(repositories, { healthArchived: false }).map((repo) => repo.id)).toEqual([41]);
-    expect(applyRepoFilters(repositories, { healthHasLicense: false }).map((repo) => repo.id)).toEqual([42]);
   });
 
   it('aggregates no-license repos via the sentinel', () => {

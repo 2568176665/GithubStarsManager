@@ -16,9 +16,6 @@ export const useSearchShortcuts = ({
   onToggleFilters
 }: UseSearchShortcutsProps) => {
   const isListening = useRef(true);
-  const callbacksRef = useRef({ onFocusSearch, onClearSearch, onToggleFilters });
-
-  callbacksRef.current = { onFocusSearch, onClearSearch, onToggleFilters };
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -32,27 +29,27 @@ export const useSearchShortcuts = ({
       // Ctrl/Cmd + K: 聚焦搜索框
       if ((event.ctrlKey || event.metaKey) && event.key === 'k') {
         event.preventDefault();
-        callbacksRef.current.onFocusSearch();
+        onFocusSearch();
         return;
       }
 
       // Escape: 清除搜索（仅在搜索框中时）
       if (event.key === 'Escape' && isInInput) {
-        callbacksRef.current.onClearSearch();
+        onClearSearch();
         return;
       }
 
       // Ctrl/Cmd + Shift + F: 切换过滤器
       if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'F') {
         event.preventDefault();
-        callbacksRef.current.onToggleFilters();
+        onToggleFilters();
         return;
       }
 
       // / 键: 快速聚焦搜索框（仅在非输入状态下）
       if (event.key === '/' && !isInInput) {
         event.preventDefault();
-        callbacksRef.current.onFocusSearch();
+        onFocusSearch();
         return;
       }
     };
@@ -62,8 +59,7 @@ export const useSearchShortcuts = ({
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
     };
-    // Callbacks are read via callbacksRef so the listener remains registered once.
-  }, []);
+  }, [onFocusSearch, onClearSearch, onToggleFilters]);
 
   // 提供暂停/恢复监听的方法
   const pauseListening = () => {
@@ -85,28 +81,33 @@ export const useSearchShortcuts = ({
  */
 export const searchShortcuts = [
   {
+    id: 'focus-search',
     key: 'Ctrl/Cmd + K',
     description: '聚焦搜索框',
     descriptionEn: 'Focus search box'
   },
   {
+    id: 'clear-search',
     key: 'Escape',
     description: '清除搜索',
     descriptionEn: 'Clear search'
   },
   {
+    id: 'toggle-filters',
     key: 'Ctrl/Cmd + Shift + F',
     description: '切换过滤器',
     descriptionEn: 'Toggle filters'
   },
   {
+    id: 'quick-search',
     key: '/',
     description: '快速搜索',
     descriptionEn: 'Quick search'
   },
   {
+    id: 'ai-search',
     key: 'Enter',
-    description: '深度搜索',
-    descriptionEn: 'Deep search'
+    description: 'AI搜索',
+    descriptionEn: 'AI search'
   }
 ];

@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('./aiService', () => ({
   AIService: class {
     generateChatText = mocks.generateChatText;
+    generateChatTextDetailed = async (...args: Parameters<typeof mocks.generateChatText>) => ({ text: await mocks.generateChatText(...args), finishReason: 'stop' });
     generateChatTextStream = mocks.generateChatTextStream;
     generateWithTools = mocks.generateWithTools;
   },
@@ -99,6 +100,8 @@ const turnInput = (question = 'What does this project do?') => ({
   aiConfig,
   language: 'en' as const,
   maxToolsPerTurn: 12,
+  // 本套件覆盖完整取证循环的确定性行为；README 快速路径由 loop.fastPath.test.ts 单独覆盖。
+  fastPath: false,
   agentBudget: { maxTurns: 4, maxToolCalls: 12, maxReadFiles: 8, maxCodeReads: 3, maxNoProgressRounds: 2, maxDurationMs: 90_000 },
 });
 
@@ -270,9 +273,177 @@ describe('runRepositoryChatTurn progressive evidence loop', () => {
       agentBudget: { maxTurns: 4, maxToolCalls: 12, maxReadFiles: 8, maxCodeReads: 3, maxNoProgressRounds: 2, maxDurationMs: 90_000 },
     });
 
-    expect(readPaths()).toEqual(['README.md']);
-    expect(mocks.generateChatText).toHaveBeenCalledTimes(5);
-    expect(result.content).toContain('2 consecutive rounds');
+    // 重复目标被过滤后先读回退文档，随后没有剩余候选即停止，不足结果被保留。
+    expect(readPaths()).toEqual(['README.md', 'docs/configuration.md']);
+    expect(mocks.generateChatText).toHaveBeenCalledTimes(4);
+    expect(result.content).toContain('No relevant repository files remain');
+  });
+
+  it('keeps keyword evidence when the planner returns prose instead of a retrieval plan', async () => {
+    const workflow = [
+      'name: Build',
+      'jobs:',
+      '  release:',
+      '    steps:',
+      '      - name: Build normal and offline apps',
+      '        run: |',
+      '          xcodebuild SWIFT_ACTIVE_COMPILATION_CONDITIONS="OFFLINE" PRODUCT_NAME="macshot Offline"',
+    ].join('\n');
+    configureTreeAndFiles({
+      'README.md': README,
+      '.github/workflows/build-release.yml': workflow,
+    });
+    const workflowRef = '/.github/workflows/build-release.yml - 1-7';
+    mocks.generateChatText
+      .mockResolvedValueOnce('我先看发布流程和文档里对 release 资产的说明，确认带 offline 和不带 offline 的区别。')
+      .mockResolvedValueOnce('我先在发布说明和构建配置里查 offline 资产是怎么定义的。')
+      .mockResolvedValueOnce(gate({
+        sufficient: true,
+        requirements: [requirement('directly answer the user question', 'verified', [workflowRef])],
+        nextAction: 'answer',
+      }))
+      .mockResolvedValueOnce(answer('The offline asset is built with the OFFLINE compilation condition.', workflowRef, 'Release assets'));
+
+    const result = await runRepositoryChatTurn(turnInput('What is the difference between offline and non-offline release assets?'));
+
+    expect(readPaths()).toEqual(['README.md', '.github/workflows/build-release.yml']);
+    expect(result.content).toContain(workflowRef);
+    expect(result.content).not.toContain('consecutive rounds');
+  });
+
+  it('extracts a headingless workflow downloaded before the planner times out', async () => {
+    const workflow = [
+      'name: Build',
+      'jobs:',
+      '  release:',
+      '    steps:',
+      '      - name: Build normal and offline apps',
+      '        run: |',
+      '          xcodebuild SWIFT_ACTIVE_COMPILATION_CONDITIONS="OFFLINE" PRODUCT_NAME="macshot Offline"',
+    ].join('\n');
+    configureTreeAndFiles({
+      'README.md': README,
+      '.github/workflows/build-release.yml': workflow,
+      'CHANGELOG.md': '# Changelog\n\n## Added\n\nUnrelated notes.',
+    });
+    const workflowRef = '/.github/workflows/build-release.yml - 1-7';
+    mocks.generateChatText
+      .mockResolvedValueOnce(understanding({
+        entities: ['offline', 'Release assets'],
+        search_concepts: ['offline release asset'],
+        information_scope: 'both',
+        explicit_requirements: ['difference between offline and non-offline release assets'],
+        initial_targets: ['README.md', '.github/workflows/build-release.yml', 'CHANGELOG.md'],
+        target: 'offline release assets',
+      }))
+      .mockRejectedValueOnce(new DOMException('Repository chat model step timed out.', 'TimeoutError'))
+      .mockRejectedValueOnce(new DOMException('Repository chat model step timed out.', 'TimeoutError'))
+      .mockResolvedValueOnce(gate({
+        sufficient: true,
+        requirements: [requirement('difference between offline and non-offline release assets', 'verified', [workflowRef])],
+        nextAction: 'answer',
+      }))
+      .mockResolvedValueOnce(answer('The offline asset is a separate OFFLINE build.', workflowRef, 'Release assets'));
+
+    const result = await runRepositoryChatTurn(turnInput('What is the difference between offline and non-offline release assets?'));
+
+    expect(readPaths()[0]).toBe('README.md');
+    expect(readPaths()).toContain('.github/workflows/build-release.yml');
+    expect(result.content).toContain(workflowRef);
+  });
+
+  it('finds a Chinese term beyond the first 240 lines of a long headingless file', async () => {
+    const workflow = `${Array.from({ length: 260 }, () => 'name: unrelated').join('\n')}\n超时时间: 30 秒`;
+    configureTreeAndFiles({
+      'README.md': README,
+      '.github/workflows/build-release.yml': workflow,
+    });
+    mocks.generateChatText
+      .mockResolvedValueOnce(understanding({
+        information_scope: 'documentation',
+        explicit_requirements: ['超时时间'],
+        initial_targets: ['.github/workflows/build-release.yml'],
+        target: '超时时间',
+      }))
+      .mockResolvedValueOnce(plan(target('.github/workflows/build-release.yml', [], '超时时间')))
+      .mockImplementationOnce(async ({ user }: { user: string }) => {
+        expect(user).toContain('超时时间: 30 秒');
+        return gate({
+          sufficient: true,
+          requirements: [requirement('超时时间', 'verified', ['/.github/workflows/build-release.yml - 1-261'])],
+          nextAction: 'answer',
+        });
+      })
+      .mockResolvedValueOnce(answer('配置中的超时时间是 30 秒。', '/.github/workflows/build-release.yml - 1-261', '超时时间'));
+
+    const result = await runRepositoryChatTurn(turnInput('构建配置里的超时时间是多少？'));
+
+    expect(result.content).toContain('/.github/workflows/build-release.yml - 1-261');
+  });
+
+  it('keeps a headingless file distinct from a colon-suffixed sibling path', async () => {
+    const headingless = `${Array.from({ length: 260 }, () => 'unrelated '.repeat(12).trim()).join('\n')}\nonly-headingless-marker`;
+    configureTreeAndFiles({
+      'README.md': README,
+      'docs/a.md': headingless,
+      'docs/a.md:extra.md': '# Extra\n\nSibling-only marker.',
+    });
+    mocks.generateChatText
+      .mockResolvedValueOnce(understanding({
+        explicit_requirements: ['headingless marker'],
+        initial_targets: ['docs/a.md', 'docs/a.md:extra.md'],
+        target: 'headingless marker',
+      }))
+      .mockResolvedValueOnce(plan(target('docs/a.md:extra.md', ['Extra'], 'read sibling first')))
+      .mockRejectedValueOnce(new DOMException('Repository chat model step timed out.', 'TimeoutError'))
+      .mockRejectedValueOnce(new DOMException('Repository chat model step timed out.', 'TimeoutError'))
+      .mockImplementationOnce(async ({ user }: { user: string }) => {
+        const evidenceStart = user.indexOf('BEGIN UNTRUSTED REPOSITORY CONTENT');
+        expect(evidenceStart).toBeGreaterThanOrEqual(0);
+        expect(user.slice(evidenceStart)).toContain('only-headingless-marker');
+        expect(user.slice(evidenceStart)).toContain('Sibling-only marker');
+        return gate({
+          sufficient: true,
+          requirements: [requirement('headingless marker', 'verified', ['/docs/a.md - 237-261'])],
+          nextAction: 'answer',
+        });
+      })
+      .mockResolvedValueOnce(answer('The headingless file contains its own marker.', '/docs/a.md - 237-261', 'Headingless evidence'));
+
+    const result = await runRepositoryChatTurn(turnInput('Where is the headingless marker documented?'));
+
+    expect(readPaths()).toEqual(expect.arrayContaining(['docs/a.md:extra.md', 'docs/a.md']));
+    expect(result.content).toContain('/docs/a.md - 237-261');
+  });
+
+  it('keeps a late question term when earlier terms fill the old twelve-term limit', async () => {
+    const filler = Array.from({ length: 20 }, (_, index) => `filler${index}`).join(' ');
+    const workflow = `${Array.from({ length: 260 }, () => 'unrelated '.repeat(12).trim()).join('\n')}\nlate-unique-term`;
+    configureTreeAndFiles({
+      'README.md': README,
+      '.github/workflows/build-release.yml': workflow,
+    });
+    mocks.generateChatText
+      .mockResolvedValueOnce(understanding({
+        explicit_requirements: ['late unique term'],
+        initial_targets: ['.github/workflows/build-release.yml'],
+        target: 'late unique term',
+      }))
+      .mockResolvedValueOnce(plan(target('.github/workflows/build-release.yml', [], 'late unique term')))
+      .mockImplementationOnce(async ({ user }: { user: string }) => {
+        // Gate 阶段的证据按设计截断到 3000 字符，不再携带完整原文，但来源引用仍在。
+        expect(user).toContain('SOURCE: /.github/workflows/build-release.yml - 237-261');
+        return gate({
+          sufficient: true,
+          requirements: [requirement('late unique term', 'verified', ['/.github/workflows/build-release.yml - 237-261'])],
+          nextAction: 'answer',
+        });
+      })
+      .mockResolvedValueOnce(answer('The late term is present.', '/.github/workflows/build-release.yml - 237-261', 'Late term'));
+
+    const result = await runRepositoryChatTurn(turnInput(`${filler} late-unique-term`));
+
+    expect(result.content).toContain('/.github/workflows/build-release.yml - 237-261');
   });
 
   it('honors the configured maximum evidence rounds before starting another retrieval plan', async () => {
@@ -317,6 +488,68 @@ describe('runRepositoryChatTurn progressive evidence loop', () => {
     expect(result.content).toContain('insufficient');
   });
 
+  it('accepts the HAR R2 gate response with annotated evidence and ends the loop in that round', async () => {
+    // HAR R2 的 gate 原文把注释写进 evidence 数组；宽松提取后引用仍可核验，
+    // 且 gate 以高置信度判定可回答时直接结束循环，不再进入下一轮规划。
+    const harGateResponse = JSON.stringify({
+      sufficient: true,
+      confidence: 0.85,
+      reason: 'The README installation section directly answers the explicit requirement.',
+      requirements: [
+        { requirement_id: 'explicit-1', requirement: 'install the project', status: 'verified', evidence: ['/README.md - 9-11（## Install：Install dependencies with `pnpm install`。）'] },
+      ],
+      next_action: 'answer',
+      recommended_targets: [],
+    });
+    mocks.generateChatText
+      .mockResolvedValueOnce(understanding({ intent: 'usage', explicit_requirements: ['install the project'], necessary_requirements: [] }))
+      .mockResolvedValueOnce(plan(target('README.md', ['Installation'], 'install the project')))
+      .mockResolvedValueOnce(harGateResponse)
+      .mockResolvedValueOnce(answer('Install dependencies with `pnpm install`.', installRef, 'Installation'));
+
+    const result = await runRepositoryChatTurn(turnInput('How do I install this project?'));
+
+    expect(readPaths()).toEqual(['README.md']);
+    expect(mocks.generateChatText).toHaveBeenCalledTimes(4);
+    expect(result.content).toContain(installRef);
+    expect(result.content).not.toContain('insufficient');
+  });
+
+  it('keeps researching when the gate approves but one explicit requirement is still missing', async () => {
+    // 采纳 gate 的整体判定必须复用逐项核验的阻断规则：存在 missing 的
+    // explicit 要求时，即使 gate 声称 sufficient 也不能结束检索。
+    configureTreeAndFiles({
+      'README.md': README,
+      'docs/configuration.md': '# Environment\n\nUse APP_PORT for local configuration.',
+    });
+    mocks.generateChatText
+      .mockResolvedValueOnce(understanding({ explicit_requirements: ['install the project', 'configure the port'] }))
+      .mockResolvedValueOnce(plan(target('README.md', ['Installation'], 'install the project')))
+      .mockResolvedValueOnce(gate({
+        sufficient: true,
+        requirements: [
+          requirement('install the project', 'verified', [installRef]),
+          requirement('configure the port', 'missing'),
+        ],
+        nextAction: 'answer',
+      }))
+      .mockResolvedValueOnce(plan(target('README.md', ['Quick Start'], 'configure the port')))
+      .mockResolvedValueOnce(gate({
+        sufficient: true,
+        requirements: [
+          requirement('install the project', 'verified', [installRef]),
+          requirement('configure the port', 'verified', [quickStartRef]),
+        ],
+        nextAction: 'answer',
+      }))
+      .mockResolvedValueOnce(answer('Install with pnpm, then set APP_PORT.', installRef, quickStartRef));
+
+    const result = await runRepositoryChatTurn(turnInput('How do I install and configure this project?'));
+
+    expect(readPaths()).toEqual(['README.md']);
+    expect(result.content).toContain(quickStartRef);
+  });
+
   it('answers vector-search usage after its explicit steps are evidenced and ignores optional tuning invented by the gate', async () => {
     configureTreeAndFiles({
       'README.md': [
@@ -335,7 +568,7 @@ describe('runRepositoryChatTurn progressive evidence loop', () => {
         intent: 'usage',
         explicit_requirements: ['how to use vector search'],
         necessary_requirements: ['the basic vector-search steps'],
-        optional_enrichment: ['threshold and topK tuning', 'agent connection details', 'source implementation'],
+        optional_enrichment: ['threshold and topK tuning', 'MCP connection details', 'source implementation'],
         target: 'vector-search usage',
       }))
       .mockResolvedValueOnce(plan(target('README.md', ['Vector search'], 'basic vector-search steps')))
@@ -346,7 +579,7 @@ describe('runRepositoryChatTurn progressive evidence loop', () => {
           requirement('the basic vector-search steps', 'verified', [vectorUsageRef]),
           requirement('threshold and topK tuning', 'missing'),
         ],
-        missing: ['threshold and topK tuning', 'agent connection details'],
+        missing: ['threshold and topK tuning', 'MCP connection details'],
         nextAction: 'retrieve_more',
         recommendedTargets: [target('README.md', ['Advanced tuning'], 'threshold and topK tuning')],
       }))
@@ -511,7 +744,7 @@ describe('runRepositoryChatTurn progressive evidence loop', () => {
     expect(result.content).toContain(codeRef);
   });
 
-  it('clearly reports missing repository evidence instead of making up an unsupported capability', async () => {
+  it('falls back to verified sources when every answer paragraph is unverified', async () => {
     mocks.generateChatText
       .mockResolvedValueOnce(understanding({ expected_answer: ['Kubernetes automatic deployment'], target: 'Kubernetes automatic deployment' }))
       .mockResolvedValueOnce(plan(target('README.md', ['Overview'], 'deployment documentation')))
@@ -526,10 +759,12 @@ describe('runRepositoryChatTurn progressive evidence loop', () => {
 
     const result = await runRepositoryChatTurn(turnInput('Does this project support automatic Kubernetes deployment?'));
 
-    expect(result.content).toContain('Automatic Kubernetes deployment was not confirmed');
+    expect(result.content).toContain('Verified sources');
     expect(result.content).toContain(overviewRef);
     expect(result.content).not.toContain('insufficient');
-    expect(mocks.generateChatText).toHaveBeenCalledTimes(4);
+    expect(result.content).not.toContain('Unverified or missing information');
+    // 原回答 + 两次“未核验段落补引用”的修复尝试；仍不干净时回退来源清单。
+    expect(mocks.generateChatText).toHaveBeenCalledTimes(6);
   });
 
   it('repairs invalid synthesis once without re-running retrieval', async () => {
@@ -630,6 +865,46 @@ describe('runRepositoryChatTurn progressive evidence loop', () => {
     expect(mocks.generateChatText).toHaveBeenCalledTimes(4);
   });
 
+  it('keeps a partial streamed answer when the stream fails after emitting citable text', async () => {
+    mocks.generateChatText
+      .mockResolvedValueOnce(understanding())
+      .mockResolvedValueOnce(plan(target('README.md', ['Overview'], 'project overview')))
+      .mockResolvedValueOnce(gate({ sufficient: true, requirements: [requirement('project overview', 'verified', [overviewRef])], nextAction: 'answer' }));
+    const partial = `## Overview\n\nA documented example project. \`${overviewRef}\``;
+    mocks.generateChatTextStream.mockImplementation(async ({ onChunk }: { onChunk: (delta: string) => void }) => {
+      onChunk(partial);
+      throw new Error('stream closed');
+    });
+    const chunks: string[] = [];
+
+    const result = await runRepositoryChatTurn({
+      ...turnInput(),
+      streaming: true,
+      onAnswerChunk: (fullText) => chunks.push(fullText),
+    });
+
+    expect(chunks).toEqual([partial]);
+    expect(result.content).toContain(overviewRef);
+    expect(mocks.generateChatText).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not let an uncitable streamed fragment block the full answer fallback', async () => {
+    mocks.generateChatText
+      .mockResolvedValueOnce(understanding())
+      .mockResolvedValueOnce(plan(target('README.md', ['Overview'], 'project overview')))
+      .mockResolvedValueOnce(gate({ sufficient: true, requirements: [requirement('project overview', 'verified', [overviewRef])], nextAction: 'answer' }))
+      .mockResolvedValueOnce(answer('The project is a documented example for repository research.', overviewRef, 'Overview'));
+    mocks.generateChatTextStream.mockImplementation(async ({ onChunk }: { onChunk: (delta: string) => void }) => {
+      onChunk('## Overview\n\n');
+      throw new Error('stream closed');
+    });
+
+    const result = await runRepositoryChatTurn({ ...turnInput(), streaming: true, onAnswerChunk: () => undefined });
+
+    expect(result.content).toContain(overviewRef);
+    expect(mocks.generateChatText).toHaveBeenCalledTimes(4);
+  });
+
   it('automatically escalates to code reads when documentation stalls', async () => {
     const codeRef = '/src/engine.ts - 1';
     const events: RepositoryChatToolEvent[] = [];
@@ -653,7 +928,7 @@ describe('runRepositoryChatTurn progressive evidence loop', () => {
 
     // 文档停滞一轮后自动解锁代码取证，第二轮读到代码并完成回答。
     expect(events.some((event) => event.toolName === 'escalate_to_code')).toBe(true);
-    expect(readPaths()).toEqual(['README.md', 'src/engine.ts']);
+    expect(readPaths()).toEqual(['README.md', 'docs/configuration.md', 'src/engine.ts']);
     expect(result.content).toContain(codeRef);
   });
 
@@ -781,7 +1056,7 @@ describe('runRepositoryChatTurn progressive evidence loop', () => {
     expect(chunks.length).toBeGreaterThan(0);
   });
 
-  it('demotes uncited sections instead of discarding the whole answer', async () => {
+  it('drops uncited sections while keeping the verified content', async () => {
     mocks.generateChatText
       .mockResolvedValueOnce(understanding())
       .mockResolvedValueOnce(plan(target('README.md', ['Overview'], 'project overview')))
@@ -794,16 +1069,16 @@ describe('runRepositoryChatTurn progressive evidence loop', () => {
         '',
         '## Extra notes',
         '',
-        'Uncited prose without any reference.',
+        'Version 2.0 is uncited prose without any reference.',
       ].join('\n'));
 
     const result = await runRepositoryChatTurn(turnInput());
 
-    // 剪枝降级：有引用的小节保留，未引用段落显式移入“未证实”区块而不是丢弃。
+    // 方案 §2.3：不向用户展示“未证实”小节，只保留有引用的小节。
     expect(result.content).toContain('A documented example for repository research.');
     expect(result.content).toContain(overviewRef);
-    expect(result.content).toContain('Uncited prose without any reference.');
-    expect(result.content).toContain('Unverified or missing information');
+    expect(result.content).not.toContain('Version 2.0 is uncited prose without any reference.');
+    expect(result.content).not.toContain('Unverified or missing information');
     expect(result.content).not.toContain('Verified sources');
     expect(result.content).not.toContain('insufficient');
   });
@@ -826,26 +1101,36 @@ describe('runRepositoryChatTurn progressive evidence loop', () => {
   });
 
   it('lets the unlimited task-depth preset exceed the default budget clamps', async () => {
+    // 每轮计划都读取一个新章节（有进展），gate 始终判定缺口未补：预算差异
+    // 只能通过轮数上限体现（unlimited 8 轮 vs 默认档 4 轮）。
+    const sections = Array.from({ length: 8 }, (_, index) => `## Topic ${index + 1}\n\nDetail ${index + 1} lives here.`);
     configureTreeAndFiles({
-      'README.md': README,
+      'README.md': ['# Example Project', '', ...sections].join('\n'),
       'docs/configuration.md': '# Environment\n\nUse APP_PORT for local configuration.',
     });
-    mocks.generateChatText
-      .mockResolvedValueOnce(understanding({ expected_answer: ['missing feature documentation'], target: 'missing feature' }));
-    // 按 plan → gate 交替注册 5 轮；unlimited 档 maxNoProgressRounds=4，应执行满 4 轮（默认档 2 轮即停）。
-    for (let round = 0; round < 5; round += 1) {
-      mocks.generateChatText.mockResolvedValueOnce(plan(target('README.md', ['Not a real heading'], 'recheck missing feature documentation')));
-      mocks.generateChatText.mockResolvedValueOnce(gate({
-        sufficient: false,
-        requirements: [requirement('missing feature documentation', 'missing')],
-        nextAction: 'retrieve_more',
-      }));
-    }
+    const queueRoundMocks = (): void => {
+      for (let round = 0; round < 8; round += 1) {
+        mocks.generateChatText.mockResolvedValueOnce(plan(target('README.md', [`Topic ${round + 1}`], 'missing feature documentation')));
+        mocks.generateChatText.mockResolvedValueOnce(gate({
+          sufficient: false,
+          requirements: [requirement('missing feature documentation', 'missing')],
+          nextAction: 'retrieve_more',
+        }));
+      }
+    };
 
+    mocks.generateChatText.mockResolvedValueOnce(understanding({ expected_answer: ['missing feature documentation'], target: 'missing feature' }));
+    queueRoundMocks();
     const result = await runRepositoryChatTurn({ ...turnInput('Where is the missing feature documented?'), taskDepth: 'unlimited' });
-
-    expect(mocks.generateChatText).toHaveBeenCalledTimes(9);
+    expect(mocks.generateChatText).toHaveBeenCalledTimes(1 + 8 * 2);
     expect(result.content).toContain('insufficient');
+
+    const callsBeforeDefault = mocks.generateChatText.mock.calls.length;
+    mocks.generateChatText.mockResolvedValueOnce(understanding({ expected_answer: ['missing feature documentation'], target: 'missing feature' }));
+    queueRoundMocks();
+    const defaultResult = await runRepositoryChatTurn({ ...turnInput('Where is the missing feature documented?'), taskDepth: 'default' });
+    expect(mocks.generateChatText.mock.calls.length - callsBeforeDefault).toBe(1 + 4 * 2);
+    expect(defaultResult.content).toContain('insufficient');
   });
 });
 
@@ -999,6 +1284,7 @@ describe('runRepositoryChatTurn meta sources (releases / issues)', () => {
 
   it('keeps round 1 documentation-only even when the planner proposes meta targets', async () => {
     const events: RepositoryChatToolEvent[] = [];
+    mocks.getRepositoryReleases.mockResolvedValue(releasesPayload);
     mocks.generateChatText
       .mockResolvedValueOnce(understanding({ entities: ['releases'], expected_answer: ['recent release notes'], target: 'recent updates' }))
       .mockResolvedValueOnce(plan(
@@ -1006,14 +1292,18 @@ describe('runRepositoryChatTurn meta sources (releases / issues)', () => {
         target('README.md', ['Overview'], 'project overview'),
       ))
       .mockResolvedValueOnce(gate({ sufficient: true, requirements: [requirement('recent release notes', 'verified', [overviewRef])], nextAction: 'answer' }))
+      .mockResolvedValueOnce(plan(target('@meta/releases', [], 'recent release notes', 'meta')))
+      .mockResolvedValueOnce(gate({ sufficient: true, requirements: [requirement('recent release notes', 'verified', [overviewRef])], nextAction: 'answer' }))
       .mockResolvedValueOnce(answer('The README overview documents the project scope.', overviewRef, 'Overview'));
 
     const result = await runRepositoryChatTurn({ ...turnInput('这个仓库最近更新了什么？'), onToolEvent: (event) => events.push(event as RepositoryChatToolEvent) });
 
-    // README 优先是硬规则：第 1 轮的 meta 目标被拒绝，回退到文档读取。
-    expect(mocks.getRepositoryReleases).not.toHaveBeenCalled();
-    expect(events.some((event) => event.toolName === 'escalate_to_meta')).toBe(false);
-    expect(readPaths()).toEqual(['README.md']);
+    // README 优先是硬规则：第 1 轮只读文档；meta 意图的 Release 来源在
+    // 第 2 轮补拉后再回答，避免沿用过期的 README 版本信息。
+    expect(readPaths()[0]).toBe('README.md');
+    expect(mocks.getRepositoryReleases).toHaveBeenCalledTimes(1);
+    expect(events.some((event) => event.toolName === 'escalate_to_meta')).toBe(true);
+    expect(events.some((event) => event.toolName === 'read_releases' && event.status === 'success')).toBe(true);
     expect(result.content).toContain(overviewRef);
   });
 

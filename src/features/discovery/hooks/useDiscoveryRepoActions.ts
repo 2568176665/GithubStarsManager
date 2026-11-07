@@ -1,12 +1,14 @@
+import { useT } from "../../../i18n/useT";
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import type { DiscoveryRepo, Repository } from '../../../types';
 import { useAppStore, getAllCategories } from '../../../store/useAppStore';
 import { analyzeRepository, createFailedAnalysisResult } from '../../../services/aiAnalysisHelper';
 import { forceSyncToBackend } from '../../../services/autoSync';
-import { GitHubApiService } from '../../../services/githubApi';
+import { createGitHubApiService } from '../../../services/githubApiFactory';
 import { useDialog } from '../../../hooks/useDialog';
 import { applyDiscoveryAnalysisFailure, applyDiscoveryAnalysisSuccess } from '../../repositories/application/discoveryRepoPatches';
+import { findIdentityMatch } from '../../../utils/repositoryIdentity';
 
 export interface UseDiscoveryRepoActionsOptions {
   repo: DiscoveryRepo;
@@ -58,7 +60,7 @@ export const useDiscoveryRepoActions = ({ repo }: UseDiscoveryRepoActionsOptions
 
   const { toast } = useDialog();
 
-  const t = useCallback((zh: string, en: string) => language === 'zh' ? zh : en, [language]);
+  const t = useT('discovery');
 
   const [isStarring, setIsStarring] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -72,10 +74,13 @@ export const useDiscoveryRepoActions = ({ repo }: UseDiscoveryRepoActionsOptions
     };
   }, []);
 
-  // 检查仓库是否已在本地存在（已被Star）
+  // 检查仓库是否已在本地存在（已被Star）。
+  // 必须按 GitHub 身份判定（id 优先，合成 id 的名称兜底），不能只比 full_name：
+  // 旧仓库被改名/删除后，其旧名可能被另一个仓库复用，仅比名称会把后者误判为
+  // 已 Star，从而挡住用户 Star 它的操作。
   const isStarredComputed = useMemo(() => {
-    return repositories.some(r => r.full_name === repo.full_name);
-  }, [repositories, repo.full_name]);
+    return findIdentityMatch(repo, repositories) !== undefined;
+  }, [repositories, repo]);
 
   // 优先使用乐观状态，否则使用计算状态
   const isStarred = optimisticStarred !== null ? optimisticStarred : isStarredComputed;
@@ -88,7 +93,7 @@ export const useDiscoveryRepoActions = ({ repo }: UseDiscoveryRepoActionsOptions
     setIsStarring(true);
 
     try {
-      const githubApi = new GitHubApiService(githubToken);
+      const githubApi = createGitHubApiService(githubToken);
       const [owner, name] = repo.full_name.split('/');
 
       // 乐观更新：立即更新UI状态
@@ -96,8 +101,11 @@ export const useDiscoveryRepoActions = ({ repo }: UseDiscoveryRepoActionsOptions
 
       await githubApi.unstarRepository(owner, name);
 
-      // 从本地删除
-      const existingRepo = repositories.find(r => r.full_name === repo.full_name);
+      // 从本地删除。
+      // 必须按 GitHub 身份定位待删记录：只比 full_name 会删错 ——
+      // 旧仓库改名/删除后其旧名被另一个仓库复用时，命中的是旧记录，
+      // 结果删掉无关记录而真正取消 Star 的那条仍留在库里。
+      const existingRepo = findIdentityMatch(repo, repositories);
       if (existingRepo) {
         deleteRepository(existingRepo.id);
       }
@@ -110,7 +118,7 @@ export const useDiscoveryRepoActions = ({ repo }: UseDiscoveryRepoActionsOptions
       // 操作失败，回滚乐观状态
       setOptimisticStarred(null);
       console.error('Failed to unstar repository:', error);
-      const errorMessage = t('取消 Star 失败，请检查网络连接或 GitHub Token 权限。', 'Failed to unstar repository. Please check your network connection or GitHub Token permissions.');
+      const errorMessage = t('useDiscoveryRepoActions.failed-to-unstar-repository-please-check-your-ne');
       toast(errorMessage, 'error');
     } finally {
       setIsStarring(false);
@@ -124,7 +132,7 @@ export const useDiscoveryRepoActions = ({ repo }: UseDiscoveryRepoActionsOptions
     setIsStarring(true);
 
     try {
-      const githubApi = new GitHubApiService(githubToken);
+      const githubApi = createGitHubApiService(githubToken);
       const [owner, name] = repo.full_name.split('/');
 
       // 乐观更新：立即更新UI状态
@@ -143,12 +151,12 @@ export const useDiscoveryRepoActions = ({ repo }: UseDiscoveryRepoActionsOptions
       // 操作成功，清除乐观状态
       setOptimisticStarred(null);
 
-      toast(t('已成功添加 Star', 'Successfully starred'), 'success');
+      toast(t('useDiscoveryRepoActions.successfully-starred'), 'success');
     } catch (error) {
       // 操作失败，回滚乐观状态
       setOptimisticStarred(null);
       console.error('Failed to star repository:', error);
-      const errorMessage = t('Star 操作失败，请检查网络连接或 GitHub Token 权限。', 'Failed to star repository. Please check your network connection or GitHub Token permissions.');
+      const errorMessage = t('useDiscoveryRepoActions.failed-to-star-repository-please-check-your-netw');
       toast(errorMessage, 'error');
     } finally {
       setIsStarring(false);
@@ -158,23 +166,23 @@ export const useDiscoveryRepoActions = ({ repo }: UseDiscoveryRepoActionsOptions
   // 单卡 AI 分析（无 forceSync、成功无 toast、重新分析无 confirm——与 RepositoryCard 不同，勿"补齐"）
   const analyze = useCallback(async (onAnalyzed?: (repo: DiscoveryRepo) => void) => {
     if (!githubToken) {
-      toast(t('GitHub Token 未找到，请重新登录。', 'GitHub token not found. Please login again.'), 'error');
+      toast(t('useDiscoveryRepoActions.github-token-not-found-please-login-again'), 'error');
       return;
     }
 
     const activeConfig = aiConfigs.find(c => c.id === activeAIConfig);
     if (!activeConfig) {
-      toast(t('请先在设置中配置AI服务。', 'Please configure AI service in settings first.'), 'error');
+      toast(t('useDiscoveryRepoActions.please-configure-ai-service-in-settings-first'), 'error');
       return;
     }
 
     if (activeConfig.apiKeyStatus === 'decrypt_failed' || activeConfig.apiKeyStatus === 'empty') {
-      toast(t('AI服务的API密钥无法解密或为空，请在设置中重新输入并保存该配置。', 'The AI service API key could not be decrypted or is empty. Please re-enter and save the configuration in settings.'), 'error');
+      toast(t('useDiscoveryRepoActions.the-ai-service-api-key-could-not-be-decrypted-or'), 'error');
       return;
     }
 
     if (!activeConfig.baseUrl || !activeConfig.apiKey || !activeConfig.model) {
-      toast(t('AI服务配置不完整，请检查API端点、密钥和模型名称。', 'AI service configuration is incomplete. Please check the API endpoint, key, and model name.'), 'error');
+      toast(t('useDiscoveryRepoActions.ai-service-configuration-is-incomplete-please-ch'), 'error');
       return;
     }
 
@@ -217,7 +225,7 @@ export const useDiscoveryRepoActions = ({ repo }: UseDiscoveryRepoActionsOptions
         console.error('AI analysis error:', error);
         const errorMsg = error instanceof Error && error.message
           ? error.message
-          : t('AI分析失败，请检查AI配置和网络连接', 'AI analysis failed, please check AI configuration and network connection');
+          : t('useDiscoveryRepoActions.ai-analysis-failed-please-check-ai-configuration');
         const failedResult = createFailedAnalysisResult(errorMsg);
         const failedRepo = applyDiscoveryAnalysisFailure(repo, {
           analyzedAt: failedResult.analyzed_at,
@@ -225,7 +233,7 @@ export const useDiscoveryRepoActions = ({ repo }: UseDiscoveryRepoActionsOptions
           analysisError: failedResult.analysis_error,
         });
         updateDiscoveryRepo(failedRepo);
-        toast(t('AI分析失败，请检查AI配置。', 'AI analysis failed. Please check your AI configuration.'), 'error');
+        toast(t('useDiscoveryRepoActions.ai-analysis-failed-please-check-your-ai-configur'), 'error');
       }
     } finally {
       if (!controller.signal.aborted) {

@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { beforeEach } from 'vitest';
 import type { Category, Repository } from '../../types';
-import { defaultCategories } from '../schema';
+import { defaultCategories, initialSearchFilters } from '../schema';
 import { createRepositorySlice } from './repositorySlice';
 import { logger } from '../../services/logger';
+import { GITHUB_LISTS_MAX_COUNT, GITHUB_LISTS_NAME_MAX_LENGTH } from '../helpers/listsPushPlan';
 
 vi.mock('../../services/logger', () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), errorFromError: vi.fn() },
@@ -52,17 +53,19 @@ function makeSliceHarness(options: {
   currentLists: Array<{ id: string; name: string; items: string[] }>;
   categoryListIdMap?: Record<string, string>;
   repositories?: Repository[];
-  defaultCategoryOverrides?: Record<string, Partial<Category>>;
+  customCategories?: Category[];
+  nodeIdMap?: Map<string, string>;
+  hiddenDefaultCategoryIds?: string[];
 }) {
   const state: HarnessState = {
     listsPush: { isRunning: false, total: 0, done: 0, currentLabel: null, message: null, error: null },
     githubToken: 'token',
     user: { login: 'octocat' },
     repositories: options.repositories ?? [makeRepo()],
-    customCategories: [],
+    customCategories: options.customCategories ?? [],
     language: 'en',
-    hiddenDefaultCategoryIds: defaultCategories.filter(c => c.id !== 'devtools').map(c => c.id),
-    defaultCategoryOverrides: options.defaultCategoryOverrides ?? {},
+    hiddenDefaultCategoryIds: options.hiddenDefaultCategoryIds ?? defaultCategories.filter(c => c.id !== 'devtools').map(c => c.id),
+    defaultCategoryOverrides: {},
     categoryListIdMap: options.categoryListIdMap ?? {},
   };
   const set = (partial: unknown) => {
@@ -77,10 +80,10 @@ function makeSliceHarness(options: {
     createUserList: vi.fn().mockResolvedValue('L_new'),
     updateUserList: vi.fn().mockResolvedValue(undefined),
     updateUserListsForItem: vi.fn().mockResolvedValue(undefined),
-    resolveRepositoryNodeIds: vi.fn().mockResolvedValue(new Map()),
+    resolveRepositoryNodeIds: vi.fn().mockResolvedValue(options.nodeIdMap ?? new Map()),
   };
   const slice = createRepositorySlice(set as never, get as never);
-  const push = () => slice.pushCategoriesToLists(api as never);
+  const push = (categoryIds?: string[]) => slice.pushCategoriesToLists(api as never, categoryIds);
   return { push, api, state };
 }
 
@@ -161,53 +164,55 @@ describe('pushCategoriesToLists 语言切换自动重命名', () => {
   });
 });
 
-describe('pushCategoriesToLists GitHub Lists 限制预检', () => {
-  const makeExistingLists = (count: number) => Array.from({ length: count }, (_, index) => ({
-    id: `L_${index}`,
-    name: `Existing ${index}`,
-    items: [],
-  }));
+describe('similar repository view sorting', () => {
+  it('preserves the user sort while clearing filters when entering and exiting similar view', () => {
+    const state: Record<string, unknown> = {
+      searchFilters: {
+        ...initialSearchFilters,
+        query: 'react',
+        languages: ['TypeScript'],
+        sortBy: 'updated',
+        sortOrder: 'asc',
+      },
+      searchResults: [makeRepo({ id: 2 })],
+      similarView: null,
+    };
+    const set = (partial: unknown) => {
+      const next = typeof partial === 'function'
+        ? (partial as (current: Record<string, unknown>) => Record<string, unknown>)(state)
+        : partial as Record<string, unknown>;
+      Object.assign(state, next);
+    };
+    const slice = createRepositorySlice(set as never, (() => state) as never);
 
-  it('现有 31 个 list 时允许创建第 32 个', async () => {
-    const { push, api, state } = makeSliceHarness({ currentLists: makeExistingLists(31) });
+    slice.enterSimilarView([makeRepo()], makeRepo());
 
-    await push();
+    expect(state.searchFilters).toMatchObject({
+      query: '',
+      languages: [],
+      sortBy: 'updated',
+      sortOrder: 'asc',
+    });
 
-    expect(api.createUserList).toHaveBeenCalledWith('Development Tools', true);
-    expect(state.listsPush.error).toBeNull();
+    slice.exitSimilarView();
+
+    expect(state.searchFilters).toMatchObject({
+      sortBy: 'updated',
+      sortOrder: 'asc',
+    });
+  });
+});
+
+describe('pushCategoriesToLists GitHub Lists 硬限制预校验', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
-  it.each([32, 33])('现有 %i 个 list 时拒绝创建新 list，并保持零写入', async (count) => {
-    const { push, api, state } = makeSliceHarness({ currentLists: makeExistingLists(count) });
-
-    await push();
-
-    expect(api.createUserList).not.toHaveBeenCalled();
-    expect(api.updateUserList).not.toHaveBeenCalled();
-    expect(api.updateUserListsForItem).not.toHaveBeenCalled();
-    expect(api.resolveRepositoryNodeIds).not.toHaveBeenCalled();
-    expect(state.listsPush.error).toContain('32');
-  });
-
-  it('允许长度恰好为 32 的新 list 名称', async () => {
-    const name = 'A'.repeat(32);
+  it('分类名称超过 32 字符时中止推送、零写入，并在错误中列出该名称', async () => {
+    const longName = 'x'.repeat(GITHUB_LISTS_NAME_MAX_LENGTH + 1);
     const { push, api, state } = makeSliceHarness({
       currentLists: [],
-      defaultCategoryOverrides: { devtools: { name } },
-    });
-
-    await push();
-
-    expect(api.createUserList).toHaveBeenCalledWith(name, true);
-    expect(state.listsPush.error).toBeNull();
-  });
-
-  it('拒绝长度为 33 的重命名，并保持零写入', async () => {
-    const name = 'A'.repeat(33);
-    const { push, api, state } = makeSliceHarness({
-      currentLists: [{ id: 'L_devtools', name: 'Development Tools', items: [] }],
-      categoryListIdMap: { devtools: 'L_devtools' },
-      defaultCategoryOverrides: { devtools: { name } },
+      customCategories: [{ id: 'custom-long', name: longName, icon: '📦', keywords: [] }],
     });
 
     await push();
@@ -215,7 +220,154 @@ describe('pushCategoriesToLists GitHub Lists 限制预检', () => {
     expect(api.createUserList).not.toHaveBeenCalled();
     expect(api.updateUserList).not.toHaveBeenCalled();
     expect(api.updateUserListsForItem).not.toHaveBeenCalled();
-    expect(api.resolveRepositoryNodeIds).not.toHaveBeenCalled();
-    expect(state.listsPush.error).toContain(name);
+    expect(state.listsPush.error).toContain(longName);
+    expect(state.listsPush.error).toContain(String(GITHUB_LISTS_NAME_MAX_LENGTH));
+  });
+
+  it('远端已有 32 个 list 且还需新建时中止推送（数量上限）', async () => {
+    const currentLists = Array.from({ length: GITHUB_LISTS_MAX_COUNT }, (_, i) => ({
+      id: `L_${i}`,
+      name: `Unrelated List ${i}`,
+      items: [] as string[],
+    }));
+    const { push, api, state } = makeSliceHarness({ currentLists });
+
+    await push();
+
+    expect(api.createUserList).not.toHaveBeenCalled();
+    expect(api.updateUserListsForItem).not.toHaveBeenCalled();
+    expect(state.listsPush.error).not.toBeNull();
+  });
+
+  it('远端已有 32 个 list 但分类全部可复用时正常推送（复用不占额度）', async () => {
+    const currentLists = [
+      ...Array.from({ length: GITHUB_LISTS_MAX_COUNT - 1 }, (_, i) => ({
+        id: `L_${i}`,
+        name: `Unrelated List ${i}`,
+        items: [] as string[],
+      })),
+      { id: 'L_devtools', name: 'Development Tools', items: [] },
+    ];
+    const { push, api, state } = makeSliceHarness({
+      currentLists,
+      categoryListIdMap: { devtools: 'L_devtools' },
+    });
+
+    await push();
+
+    expect(api.createUserList).not.toHaveBeenCalled();
+    expect(state.listsPush.error).toBeNull();
+  });
+});
+
+describe('pushCategoriesToLists 隐藏分类不参与回写', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('隐藏分类既有映射原样保留，不做改名/新建', async () => {
+    const { push, api, state } = makeSliceHarness({
+      currentLists: [{ id: 'L_web', name: 'Web应用', items: [] }],
+      categoryListIdMap: { web: 'L_web' },
+    });
+
+    await push();
+
+    expect(api.updateUserList).not.toHaveBeenCalled();
+    expect(api.createUserList).toHaveBeenCalledWith('Development Tools', true);
+    expect(state.categoryListIdMap.web).toBe('L_web');
+  });
+
+  it('仓库在隐藏分类 list 中的既有成员关系不被移除（保留为非托管成员）', async () => {
+    const { push, api } = makeSliceHarness({
+      currentLists: [{ id: 'L_web', name: 'Web应用', items: ['owner/my-cli-app'] }],
+      categoryListIdMap: { web: 'L_web' },
+      nodeIdMap: new Map([['owner/my-cli-app', 'node_1']]),
+    });
+
+    await push();
+
+    // 仓库加入 devtools list 的同时，保留其在隐藏分类 list（L_web）中的成员关系
+    expect(api.updateUserListsForItem).toHaveBeenCalledWith('node_1', ['L_web', 'L_new']);
+  });
+});
+
+describe('pushCategoriesToLists 仅推送选中分类', () => {
+  const alpha: Category = { id: 'custom-alpha', name: 'Alpha', icon: '📁', keywords: ['alpha'], isCustom: true };
+
+  const thingRepo = (topics: string[]) => makeRepo({ name: 'thing', full_name: 'owner/thing', html_url: 'https://github.com/owner/thing', topics });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('只为选中分类新建 list，并保留仓库在未选中托管 list 中的成员关系', async () => {
+    const { push, api, state } = makeSliceHarness({
+      currentLists: [{ id: 'L_dev', name: 'Development Tools', items: ['owner/thing'] }],
+      categoryListIdMap: { devtools: 'L_dev' },
+      customCategories: [alpha],
+      repositories: [thingRepo(['alpha'])],
+      nodeIdMap: new Map([['owner/thing', 'node_1']]),
+    });
+
+    await push(['custom-alpha']);
+
+    expect(api.createUserList).toHaveBeenCalledTimes(1);
+    expect(api.createUserList).toHaveBeenCalledWith('Alpha', true);
+    expect(api.updateUserList).not.toHaveBeenCalled();
+    expect(api.updateUserListsForItem).toHaveBeenCalledWith('node_1', ['L_dev', 'L_new']);
+    expect(state.categoryListIdMap).toEqual({ devtools: 'L_dev', 'custom-alpha': 'L_new' });
+    expect(state.listsPush.error).toBeNull();
+  });
+
+  it('过期成员清理仅作用于选中分类的 list', async () => {
+    const { push, api } = makeSliceHarness({
+      currentLists: [
+        { id: 'L_dev', name: 'Development Tools', items: ['owner/thing'] },
+        { id: 'L_alpha', name: 'Alpha', items: ['owner/thing'] },
+      ],
+      categoryListIdMap: { devtools: 'L_dev', 'custom-alpha': 'L_alpha' },
+      customCategories: [alpha],
+      repositories: [thingRepo([])],
+      nodeIdMap: new Map([['owner/thing', 'node_1']]),
+    });
+
+    await push(['custom-alpha']);
+
+    expect(api.updateUserListsForItem).toHaveBeenCalledTimes(1);
+    expect(api.updateUserListsForItem).toHaveBeenCalledWith('node_1', ['L_dev']);
+  });
+
+  it('选中分类与未选分类共享同一 list 时，共享 list 的成员关系不被清理', async () => {
+    // 历史映射重叠：devtools（未选）与 custom-alpha（选中）指向同一个 list。
+    // thing 仅因 devtools 而在 L_shared 中，不命中选中的 alpha，
+    // 若共享 list 被当作选中分类的托管 list 清空，thing 的成员关系会被误删。
+    const { push, api, state } = makeSliceHarness({
+      currentLists: [{ id: 'L_shared', name: 'Alpha', items: ['owner/thing'] }],
+      categoryListIdMap: { devtools: 'L_shared', 'custom-alpha': 'L_shared' },
+      customCategories: [alpha],
+      repositories: [thingRepo([])],
+      nodeIdMap: new Map([['owner/thing', 'node_1']]),
+    });
+
+    await push(['custom-alpha']);
+
+    expect(api.updateUserListsForItem).not.toHaveBeenCalled();
+    expect(api.updateUserList).not.toHaveBeenCalled();
+    expect(api.createUserList).not.toHaveBeenCalled();
+    expect(state.listsPush.error).toBeNull();
+  });
+
+  it.each([
+    ['空数组', [] as string[]],
+    ['未知/隐藏分类 id', ['missing', 'web']],
+  ])('选中集合为%s时报错且不发起任何请求', async (_label, ids) => {
+    const { push, api, state } = makeSliceHarness({ currentLists: [] });
+
+    await push(ids);
+
+    expect(api.getUserLists).not.toHaveBeenCalled();
+    expect(state.listsPush.isRunning).toBe(false);
+    expect(state.listsPush.error).toBe('No categories selected to push');
   });
 });

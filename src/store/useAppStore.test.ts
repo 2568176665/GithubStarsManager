@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AIConfig, EmbeddingConfig, Release, Repository, VectorSearchConfig, VectorSearchStatus, defaultReleaseSourceSettings } from '../types';
+import { EmbeddingConfig, Release, Repository, VectorSearchConfig, VectorSearchStatus, defaultReleaseSourceSettings } from '../types';
 import { EMBEDDING_FORMAT_VERSION, indexAllRepos } from '../services/vectorSearchService';
 import { CUSTOM_RELEASE_SOURCE_ID, createCustomReleaseRepository } from '../utils/releaseSources';
 import { findReleasesWithChangedAssets, shouldShowAssetsUpdatedIndicator } from '../utils/releaseAssets';
@@ -41,72 +41,48 @@ const createRepository = (id: number, overrides: Partial<Repository> = {}): Repo
   ...overrides,
 });
 
-const createAIConfig = (id: string): AIConfig => ({
-  id,
-  name: `AI ${id}`,
-  baseUrl: 'https://ai.example.test/v1',
-  apiKey: 'secret',
-  model: 'model',
-  isActive: false,
-});
-
-describe('useAppStore AI configuration selection', () => {
+describe('discovery channel visibility', () => {
   beforeEach(() => {
-    useAppStore.setState({ aiConfigs: [], activeAIConfig: null });
+    useAppStore.setState({
+      discoveryChannels: useAppStore.getInitialState().discoveryChannels.map(channel => ({ ...channel })),
+      selectedDiscoveryChannel: 'telegram',
+    });
   });
 
-  it('activates the first configuration added to an empty list', () => {
-    useAppStore.getState().addAIConfig(createAIConfig('first'));
+  it('hides a channel and selects another visible channel', () => {
+    useAppStore.getState().toggleDiscoveryChannel('telegram');
 
-    expect(useAppStore.getState().activeAIConfig).toBe('first');
+    const state = useAppStore.getState();
+    expect(state.discoveryChannels.find(channel => channel.id === 'telegram')?.enabled).toBe(false);
+    expect(state.selectedDiscoveryChannel).toBe('trending');
   });
 
-  it('falls back to the first config when replacing the list invalidates the active id', () => {
-    useAppStore.setState({ activeAIConfig: 'missing' });
-    useAppStore.getState().setAIConfigs([createAIConfig('first'), createAIConfig('second')]);
+  it('keeps the last visible channel available', () => {
+    useAppStore.setState({
+      discoveryChannels: useAppStore.getState().discoveryChannels.map(channel => ({
+        ...channel,
+        enabled: channel.id === 'trending',
+      })),
+      selectedDiscoveryChannel: 'trending',
+    });
 
-    expect(useAppStore.getState().activeAIConfig).toBe('first');
+    useAppStore.getState().toggleDiscoveryChannel('trending');
+
+    expect(useAppStore.getState().discoveryChannels.find(channel => channel.id === 'trending')?.enabled).toBe(true);
   });
 
-  it('selects a remaining config when the active config is deleted', () => {
-    const first = createAIConfig('first');
-    const second = createAIConfig('second');
-    useAppStore.setState({ aiConfigs: [first, second], activeAIConfig: 'first' });
+  it('restores a visible selection from persisted channel settings', () => {
+    const discoveryChannels = useAppStore.getInitialState().discoveryChannels.map(channel => ({
+      ...channel,
+      enabled: channel.id !== 'telegram',
+    }));
+    const normalized = normalizePersistedState(
+      { discoveryChannels, selectedDiscoveryChannel: 'telegram' },
+      useAppStore.getState()
+    );
 
-    useAppStore.getState().deleteAIConfig('first');
-
-    expect(useAppStore.getState().activeAIConfig).toBe('second');
-  });
-
-  it('restores the first config when a persisted active id is missing', () => {
-    const first = createAIConfig('first');
-    const second = createAIConfig('second');
-    const normalized = normalizePersistedState({
-      aiConfigs: [first, second],
-      activeAIConfig: 'missing',
-    }, useAppStore.getInitialState());
-
-    expect(normalized.activeAIConfig).toBe('first');
-  });
-
-  it('preserves a valid persisted active config', () => {
-    const first = createAIConfig('first');
-    const second = createAIConfig('second');
-    const normalized = normalizePersistedState({
-      aiConfigs: [first, second],
-      activeAIConfig: 'second',
-    }, useAppStore.getInitialState());
-
-    expect(normalized.activeAIConfig).toBe('second');
-  });
-
-  it('keeps in-memory AI configs when a persisted snapshot omits the field', () => {
-    const first = createAIConfig('first');
-    const currentState = { ...useAppStore.getInitialState(), aiConfigs: [first], activeAIConfig: 'first' };
-    const normalized = normalizePersistedState({}, currentState);
-
-    expect(normalized.aiConfigs).toEqual([first]);
-    expect(normalized.activeAIConfig).toBe('first');
+    expect(normalized.discoveryChannels?.find(channel => channel.id === 'telegram')?.enabled).toBe(false);
+    expect(normalized.selectedDiscoveryChannel).toBe('trending');
   });
 });
 
@@ -686,6 +662,212 @@ describe('useAppStore repository performance guards', () => {
     expect(useAppStore.getState().searchResults).toBe(refreshed);
   });
 
+  it('keeps the real GitHub id when adding a new repository so later syncs match', () => {
+    // 回归：批量从链接 Star 的仓库自带 GitHub id。若换成合成 id，后续「同步」
+    // 按 GitHub id 匹配不到本地记录，会用裸 GitHub 数据覆盖掉 AI 分析与分类标签。
+    useAppStore.setState({ repositories: [createRepository(1)], searchResults: [] });
+    const batchStarred = createRepository(765_432_1, { full_name: 'owner/from-links' });
+
+    useAppStore.getState().addRepository(batchStarred);
+
+    const added = useAppStore.getState().repositories.find(r => r.full_name === 'owner/from-links');
+    expect(added?.id).toBe(765_432_1);
+  });
+
+  it('updates a renamed repository by its real GitHub id instead of adding a duplicate', () => {
+    // 回归（CodeRabbit r4145581832）：id 是权威身份，改名只换 full_name。
+    // 同一 id 却不同名时必须就地更新，否则同一仓库会出现两条记录。
+    const existing = createRepository(1, {
+      full_name: 'owner/old',
+      ai_summary: '旧仓库分析',
+      custom_category: '工具',
+      category_locked: true,
+    });
+    useAppStore.setState({ repositories: [existing], searchResults: [] });
+
+    useAppStore.getState().addRepository(createRepository(1, {
+      full_name: 'owner/new',
+      description: '改名后的描述',
+    }));
+
+    const repositories = useAppStore.getState().repositories;
+    expect(repositories).toHaveLength(1);
+    expect(repositories[0]).toMatchObject({
+      id: 1,
+      full_name: 'owner/new',
+      description: '改名后的描述',
+      // 本地 AI 分析与自定义字段保留
+      ai_summary: '旧仓库分析',
+      custom_category: '工具',
+      category_locked: true,
+    });
+  });
+
+  it('keeps AI analysis and custom category when re-adding an existing repository', () => {
+    // 入参来自 GitHub 详情 / 发现页数据，不带 AI 字段，直接展开会清空已有分析结果。
+    // 合成 id 的历史记录（批量 Star 遗留）缺失权威身份，应继续被认领。
+    const analyzed = createRepository(1_700_000_000_005, {
+      ai_summary: 'AI 摘要',
+      ai_tags: ['ai-tag'],
+      ai_platforms: ['cli'],
+      analyzed_at: '2026-02-01T00:00:00.000Z',
+      custom_category: '工具',
+      category_locked: true,
+    });
+    useAppStore.setState({ repositories: [analyzed], searchResults: [] });
+
+    // 同一 full_name，但 id 不同、且不带任何 AI 字段
+    useAppStore.getState().addRepository(createRepository(999, {
+      full_name: analyzed.full_name,
+      description: '来自 GitHub 的新描述',
+    }));
+
+    expect(useAppStore.getState().repositories).toHaveLength(1);
+    expect(useAppStore.getState().repositories[0]).toMatchObject({
+      id: analyzed.id,
+      description: '来自 GitHub 的新描述',
+      ai_summary: 'AI 摘要',
+      ai_tags: ['ai-tag'],
+      ai_platforms: ['cli'],
+      analyzed_at: '2026-02-01T00:00:00.000Z',
+      custom_category: '工具',
+      category_locked: true,
+    });
+  });
+
+  it('keeps AI analysis when re-adding with the same GitHub id', () => {
+    // 同一 GitHub 身份（id 相同）⇒ 无论是否合成 id，都应保留 AI 分析
+    const analyzed = createRepository(555, { ai_summary: 'AI 摘要', ai_tags: ['ai-tag'] });
+    useAppStore.setState({ repositories: [analyzed], searchResults: [] });
+
+    useAppStore.getState().addRepository(createRepository(555, {
+      full_name: analyzed.full_name,
+      description: '来自 GitHub 的新描述',
+    }));
+
+    expect(useAppStore.getState().repositories[0]).toMatchObject({
+      id: 555,
+      description: '来自 GitHub 的新描述',
+      ai_summary: 'AI 摘要',
+      ai_tags: ['ai-tag'],
+    });
+  });
+
+  it('adds a name-reusing repo as a separate record instead of overwriting the old id', () => {
+    // 回归（CodeRabbit r4145277692）：本地记录带**真实 GitHub id**（id:5），
+    // 原仓库已改名/删除，入参是复用旧名的新仓库（id:999）。
+    // 绝不能把新仓库写到旧仓库的 id 下 —— 否则用户对新仓库做完 AI 分析后，
+    // 下次同步按 GitHub id 匹配不到本地记录（名称兜底只认领合成 id 记录），
+    // 分析结果会再次丢失，即本 PR 要修的原始问题。
+    const old = createRepository(5, {
+      ai_summary: '旧仓库分析',
+      custom_category: '内部工具',
+      category_locked: true,
+    });
+    useAppStore.setState({ repositories: [old], searchResults: [] });
+
+    useAppStore.getState().addRepository(createRepository(999, {
+      full_name: old.full_name,
+      description: '一个完全不同的新项目',
+    }));
+
+    const repositories = useAppStore.getState().repositories;
+    // 旧记录原样保留，新仓库作为独立记录加入
+    expect(repositories).toHaveLength(2);
+    expect(repositories[0]).toMatchObject({
+      id: 5,
+      ai_summary: '旧仓库分析',
+      custom_category: '内部工具',
+      category_locked: true,
+    });
+    const added = repositories.find(r => r.id === 999);
+    expect(added).toBeDefined();
+    expect(added).toMatchObject({
+      id: 999,
+      full_name: old.full_name,
+      description: '一个完全不同的新项目',
+    });
+    // 新仓库不得继承旧仓库的 AI 分析
+    expect(added?.ai_summary).toBeUndefined();
+    expect(added?.custom_category).toBeUndefined();
+  });
+
+  it('updates the identity-matching record instead of appending a duplicate', () => {
+    // 回归（CodeRabbit 5367214192）：列表里已存在「旧真实 id + 新真实 id」的同名
+    // 记录时，再次添加新仓库必须更新 id 999 那条，而不是追加重复记录。
+    const old = createRepository(5, { full_name: 'owner/old' });
+    const current = createRepository(999, {
+      full_name: 'owner/old',
+      description: '旧描述',
+      ai_summary: '新仓库的分析结果',
+      ai_tags: ['新标签'],
+    });
+    useAppStore.setState({ repositories: [old, current], searchResults: [] });
+
+    useAppStore.getState().addRepository(createRepository(999, {
+      full_name: 'owner/old',
+      description: '刷新后的描述',
+    }));
+
+    const repositories = useAppStore.getState().repositories;
+    // 不得出现重复 id
+    expect(repositories.map(r => r.id)).toEqual([5, 999]);
+    // id 999 的记录被就地更新，且保留其 AI 分析
+    const updated = repositories.find(r => r.id === 999)!;
+    expect(updated.description).toBe('刷新后的描述');
+    expect(updated.ai_summary).toBe('新仓库的分析结果');
+    expect(updated.ai_tags).toEqual(['新标签']);
+  });
+
+  it('prefers the legacy synthetic record when no exact identity match exists', () => {
+    // 同名 + 合成 id 的历史记录仍应被认领并就地更新（正向场景不被误伤）
+    const legacy = createRepository(1_700_000_000_123, {
+      full_name: 'owner/legacy',
+      ai_summary: 'AI 摘要',
+    });
+    useAppStore.setState({ repositories: [legacy], searchResults: [] });
+
+    useAppStore.getState().addRepository(createRepository(42, {
+      full_name: 'owner/legacy',
+      description: '来自 GitHub 的描述',
+    }));
+
+    const repositories = useAppStore.getState().repositories;
+    expect(repositories).toHaveLength(1);
+    expect(repositories[0]).toMatchObject({
+      id: 1_700_000_000_123,
+      description: '来自 GitHub 的描述',
+      ai_summary: 'AI 摘要',
+    });
+  });
+
+  it('keeps the new repo id after AI analysis so the next sync can still match it', () => {
+    // 完整链路：复用旧名 → 独立记录 → AI 分析 → 同步仍能按 GitHub id 命中
+    const old = createRepository(5, { full_name: 'owner/old' });
+    useAppStore.setState({ repositories: [old], searchResults: [] });
+
+    useAppStore.getState().addRepository(createRepository(999, {
+      full_name: 'owner/old',
+      description: '新项目',
+    }));
+
+    // 用户对新仓库做 AI 分析
+    const analyzed = useAppStore.getState().repositories.find(r => r.id === 999)!;
+    useAppStore.getState().updateRepository({
+      ...analyzed,
+      ai_summary: '新仓库的分析结果',
+      ai_tags: ['新标签'],
+    });
+
+    // 同步时 GitHub 返回真实 id 999 ⇒ 必须按 id 命中，分析结果得以保留
+    const storeRepos = useAppStore.getState().repositories;
+    const matched = storeRepos.find(r => r.id === 999);
+    expect(matched?.ai_summary).toBe('新仓库的分析结果');
+    expect(matched?.ai_tags).toEqual(['新标签']);
+    // 旧仓库的记录未被污染
+    expect(storeRepos.find(r => r.id === 5)?.ai_summary).toBeUndefined();
+  });
+
   it('preserves an active search result set when addRepository runs (Issue #304)', () => {
     const existing = createRepository(2);
     useAppStore.setState({
@@ -708,45 +890,6 @@ describe('useAppStore repository performance guards', () => {
 
     expect(useAppStore.getState().searchResults).toBe(useAppStore.getState().repositories);
   });
-
-  it('repairs a legacy repository ID while preserving local metadata', () => {
-    const existing = createRepository(999, {
-      full_name: 'Owner/Repo',
-      ai_summary: 'local summary',
-      custom_description: 'local description',
-      custom_tags: ['keep'],
-      custom_category: 'Tools',
-      category_locked: true,
-      last_edited: '2026-01-04T00:00:00.000Z',
-    });
-    useAppStore.setState({ repositories: [existing], searchResults: [existing] });
-
-    useAppStore.getState().addRepository(createRepository(42, {
-      full_name: 'owner/repo',
-      description: 'fresh description',
-    }));
-
-    expect(useAppStore.getState().repositories).toHaveLength(1);
-    expect(useAppStore.getState().repositories[0]).toMatchObject({
-      id: 42,
-      description: 'fresh description',
-      ai_summary: 'local summary',
-      custom_description: 'local description',
-      custom_tags: ['keep'],
-      custom_category: 'Tools',
-      category_locked: true,
-      last_edited: '2026-01-04T00:00:00.000Z',
-    });
-  });
-
-  it('keeps the GitHub ID when adding a new repository', () => {
-    useAppStore.setState({ repositories: [], searchResults: [] });
-
-    useAppStore.getState().addRepository(createRepository(42));
-
-    expect(useAppStore.getState().repositories).toHaveLength(1);
-    expect(useAppStore.getState().repositories[0].id).toBe(42);
-  });
 });
 
 describe('useAppStore auth localStorage mirror (Issue #259)', () => {
@@ -767,12 +910,26 @@ describe('useAppStore auth localStorage mirror (Issue #259)', () => {
     expect(mirror.user.login).toBe('test-user');
   });
 
+  it('persists backendApiSecret to the mirror and clears on logout', () => {
+    useAppStore.getState().setBackendApiSecret('secret-1');
+    const parsed = JSON.parse(window.localStorage.getItem(AUTH_MIRROR_KEY) || '{}');
+    expect(parsed.backendApiSecret).toBe('secret-1');
+
+    useAppStore.getState().logout();
+    expect(window.localStorage.getItem(AUTH_MIRROR_KEY)).toBeNull();
+    // The in-memory secret and the sessionStorage cache must also be torn down;
+    // otherwise the backend keeps authenticating a logged-out user (and on v10
+    // the secret is re-persisted to IndexedDB on the next partialize).
+    expect(useAppStore.getState().backendApiSecret).toBeNull();
+    expect(window.sessionStorage.getItem('github-stars-manager-backend-secret')).toBeNull();
+  });
+
   it('restores auth from the mirror when the persisted snapshot lacks credentials', () => {
     // Simulate the reported bug: async IndexedDB write never landed, so the
     // persisted snapshot has empty auth while the mirror holds the real values.
     window.localStorage.setItem(
       AUTH_MIRROR_KEY,
-      JSON.stringify({ user, githubToken: 'ghp_restored' })
+      JSON.stringify({ user, githubToken: 'ghp_restored', backendApiSecret: null })
     );
 
     const normalized = normalizePersistedState({}, useAppStore.getState());
@@ -784,7 +941,7 @@ describe('useAppStore auth localStorage mirror (Issue #259)', () => {
   it('prefers persisted credentials over the mirror when both exist', () => {
     window.localStorage.setItem(
       AUTH_MIRROR_KEY,
-      JSON.stringify({ user, githubToken: 'ghp_mirror' })
+      JSON.stringify({ user, githubToken: 'ghp_mirror', backendApiSecret: null })
     );
     const otherUser = { id: 2, login: 'other', name: 'Other', avatar_url: 'https://x/b.png', email: null };
 
@@ -794,6 +951,107 @@ describe('useAppStore auth localStorage mirror (Issue #259)', () => {
     );
     expect(normalized.user).toEqual(otherUser);
     expect(normalized.githubToken).toBe('ghp_persisted');
+  });
+});
+
+describe('useAppStore logout and per-account workspaces', () => {
+  const userA = { id: 1, login: 'alice', name: 'Alice', avatar_url: 'https://x/a.png', email: null };
+  const userB = { id: 2, login: 'bob', name: 'Bob', avatar_url: 'https://x/b.png', email: null };
+
+  beforeEach(() => {
+    window.localStorage?.removeItem?.('github-stars-manager-auth');
+    useAppStore.setState({
+      user: null,
+      githubToken: null,
+      isAuthenticated: false,
+      accountWorkspaces: {},
+      repositories: [],
+      searchResults: [],
+      lastSync: null,
+      customCategories: [],
+    });
+  });
+
+  it('keeps repositories after logout so the same GitHub account can sign back in', () => {
+    const repositories = [createRepository(1, { ai_summary: 'keep-me' })];
+    useAppStore.setState({
+      user: userA,
+      githubToken: 'ghp_old',
+      isAuthenticated: true,
+      repositories,
+      searchResults: repositories,
+      lastSync: '2026-09-16T00:00:00.000Z',
+    });
+
+    useAppStore.getState().logout();
+
+    const state = useAppStore.getState();
+    expect(state.user).toBeNull();
+    expect(state.githubToken).toBeNull();
+    expect(state.isAuthenticated).toBe(false);
+    expect(state.repositories).toEqual([]);
+    expect(state.accountWorkspaces['1']?.repositories[0].ai_summary).toBe('keep-me');
+
+    useAppStore.getState().setGitHubToken('ghp_new');
+    useAppStore.getState().setUser(userA);
+
+    expect(useAppStore.getState().repositories[0].ai_summary).toBe('keep-me');
+    expect(useAppStore.getState().isAuthenticated).toBe(true);
+  });
+
+  it('restores each GitHub account workspace when switching users', () => {
+    const aliceRepos = [createRepository(1, { ai_summary: 'alice-ai' })];
+    const bobRepos = [createRepository(2, { ai_summary: 'bob-ai' })];
+    useAppStore.setState({
+      user: userA,
+      githubToken: 'ghp_a',
+      isAuthenticated: true,
+      repositories: aliceRepos,
+      searchResults: aliceRepos,
+      lastSync: '2026-09-16T00:00:00.000Z',
+    });
+
+    useAppStore.getState().logout();
+    useAppStore.getState().setGitHubToken('ghp_b');
+    useAppStore.getState().setUser(userB);
+    expect(useAppStore.getState().repositories).toEqual([]);
+
+    useAppStore.setState({
+      repositories: bobRepos,
+      searchResults: bobRepos,
+      lastSync: '2026-09-17T00:00:00.000Z',
+    });
+    useAppStore.getState().logout();
+    useAppStore.getState().setGitHubToken('ghp_a2');
+    useAppStore.getState().setUser(userA);
+
+    expect(useAppStore.getState().repositories[0].ai_summary).toBe('alice-ai');
+    expect(useAppStore.getState().user?.login).toBe('alice');
+  });
+
+  it('does not wipe live repositories when signing in after a backend restore', () => {
+    const restored = [createRepository(9, { ai_summary: 'from-backend' })];
+    useAppStore.setState({
+      repositories: restored,
+      searchResults: restored,
+      lastSync: '2026-09-17T00:00:00.000Z',
+    });
+
+    useAppStore.getState().setGitHubToken('ghp_restored');
+    useAppStore.getState().setUser(userA);
+
+    expect(useAppStore.getState().repositories[0].ai_summary).toBe('from-backend');
+  });
+
+  it('refuses accidental empty repository overwrites unless allowEmpty is set', () => {
+    const repositories = [createRepository(1, { ai_summary: 'keep-me' })];
+    useAppStore.setState({ repositories, searchResults: repositories });
+
+    useAppStore.getState().setRepositories([]);
+    expect(useAppStore.getState().repositories).toEqual(repositories);
+
+    useAppStore.getState().setRepositories([], { allowEmpty: true });
+    expect(useAppStore.getState().repositories).toEqual([]);
   });
 });
 
@@ -826,27 +1084,40 @@ describe('useAppStore repository view mode', () => {
 });
 
 describe('useAppStore theme preset', () => {
-  it('defaults the theme preset for legacy persisted state', () => {
+  it('defaults the theme mode and presets for legacy persisted state', () => {
     const normalized = normalizePersistedState({}, useAppStore.getState());
 
-    expect(normalized.themePreset).toBe('default');
+    expect(normalized.themeMode).toBe('dark');
+    expect(normalized.themePresetLight).toBe('default');
+    expect(normalized.themePresetDark).toBe('default');
   });
 
-  it('falls back to the default preset for unknown persisted values', () => {
+  it('falls back to the default presets for unknown persisted values', () => {
     const normalized = normalizePersistedState(
-      { themePreset: 'does-not-exist' as never },
+      { themePresetLight: 'does-not-exist' as never, themePresetDark: 'does-not-exist' as never },
       useAppStore.getState(),
     );
 
-    expect(normalized.themePreset).toBe('default');
+    expect(normalized.themePresetLight).toBe('default');
+    expect(normalized.themePresetDark).toBe('default');
   });
 
-  it('falls back to default preset for previous custom presets', () => {
-    const normalized = normalizePersistedState({ themePreset: 'deep-purple' as never }, useAppStore.getState());
-    expect(normalized.themePreset).toBe('default');
+  it('migrates legacy theme/themePreset into the new mode-aware fields', () => {
+    const normalized = normalizePersistedState(
+      { theme: 'light', themePreset: 'deep-purple' } as never,
+      useAppStore.getState(),
+    );
+    expect(normalized.themeMode).toBe('light');
+    expect(normalized.themePresetLight).toBe('deep-purple');
+    expect(normalized.themePresetDark).toBe('deep-purple');
+  });
 
-    useAppStore.setState({ themePreset: 'default' });
-    expect(useAppStore.getState().themePreset).toBe('default');
+  it('keeps light and dark presets independent at runtime', () => {
+    useAppStore.setState({ themePresetLight: 'default', themePresetDark: 'default' });
+    useAppStore.getState().setThemePresetLight('deep-purple');
+    useAppStore.getState().setThemePresetDark('zen-inspired');
+    expect(useAppStore.getState().themePresetLight).toBe('deep-purple');
+    expect(useAppStore.getState().themePresetDark).toBe('zen-inspired');
   });
 });
 
@@ -871,9 +1142,17 @@ const partializeState = (overrides: Partial<ReturnType<typeof useAppStore.getSta
   persistenceOptions().partialize({ ...useAppStore.getState(), ...overrides })
 );
 
+const backendSecretMirror = (secret: string | null): void => {
+  window.localStorage.setItem(
+    'github-stars-manager-auth',
+    JSON.stringify({ user: null, githubToken: null, backendApiSecret: secret }),
+  );
+};
+
 describe('useAppStore persisted-state historical fixtures', () => {
   beforeEach(() => {
     window.localStorage.removeItem('github-stars-manager-auth');
+    window.sessionStorage.removeItem('github-stars-manager-backend-secret');
   });
 
   it('migrates the historical __EMPTY__ description marker to an explicit empty description', async () => {
@@ -896,6 +1175,47 @@ describe('useAppStore persisted-state historical fixtures', () => {
     expect(normalized.repositories?.[0]).toMatchObject({
       has_fetched_releases: true,
       last_release_fetch_time: '2026-02-04T00:00:00.000Z',
+    });
+  });
+
+  it('keeps persisted heavy-field array references when no release backfill is needed', () => {
+    // 分片持久化按引用判脏：hydration 规整化不得在无回填需求时重建重数据数组，
+    // 否则每次启动后都会触发一次全量重写。
+    const repositories = [createRepository(1, { has_fetched_releases: true }), createRepository(2)];
+    const gists = [{ id: 'gist-1' }];
+    const releases = [
+      makeRelease(11, { repository: { id: 1, full_name: 'owner/repo-1', name: 'repo-1' } }),
+    ];
+    const normalized = normalizePersistedState(
+      buildPersistedSnapshot({ repositories, gists, releases }),
+      useAppStore.getInitialState(),
+    );
+
+    expect(normalized.repositories).toBe(repositories);
+    expect(normalized.gists).toBe(gists);
+    expect(normalized.releases).toBe(releases);
+
+    // 存在需要回填的仓库时，回填行为保持不变
+    const needsBackfill = normalizePersistedState(
+      buildPersistedSnapshot({ repositories: [createRepository(1)], releases }),
+      useAppStore.getInitialState(),
+    );
+    expect(needsBackfill.repositories?.[0]).toMatchObject({
+      has_fetched_releases: true,
+      last_release_fetch_time: '2026-01-01T00:00:00.000Z',
+    });
+  });
+
+  it('preserves a historical MCP token while filling host and port defaults during migration and hydration', async () => {
+    const migrated = await migrateSnapshot(buildPersistedSnapshot({
+      mcpConfig: { enabled: true, token: 'mcp-historical-token' },
+    }));
+    const normalized = normalizePersistedState(migrated, useAppStore.getInitialState());
+
+    expect(normalized.mcpConfig).toEqual({
+      ...useAppStore.getInitialState().mcpConfig,
+      enabled: true,
+      token: 'mcp-historical-token',
     });
   });
 
@@ -967,15 +1287,86 @@ describe('useAppStore persisted-state historical fixtures', () => {
   });
 });
 
+describe('useAppStore backend API secret three-store contract', () => {
+  const sessionState = (backendApiSecret: string | null) => ({
+    ...useAppStore.getInitialState(),
+    backendApiSecret,
+  });
+
+  beforeEach(() => {
+    window.localStorage.removeItem('github-stars-manager-auth');
+    window.sessionStorage.removeItem('github-stars-manager-backend-secret');
+  });
+
+  it('uses the IndexedDB snapshot first and realigns the auth mirror after hydration', () => {
+    backendSecretMirror('mirror-secret');
+    window.sessionStorage.setItem('github-stars-manager-backend-secret', 'session-secret');
+    const merged = persistenceOptions().merge(
+      buildPersistedSnapshot({ backendApiSecret: 'idb-secret' }),
+      sessionState('session-secret'),
+    );
+
+    expect(merged.backendApiSecret).toBe('idb-secret');
+    expect(JSON.parse(window.localStorage.getItem('github-stars-manager-auth') || '{}')).toMatchObject({
+      backendApiSecret: 'idb-secret',
+    });
+  });
+
+  it('uses the localStorage auth mirror when IndexedDB lacks the secret', () => {
+    backendSecretMirror('mirror-secret');
+    const normalized = normalizePersistedState(buildPersistedSnapshot(), sessionState('session-secret'));
+
+    expect(normalized.backendApiSecret).toBe('mirror-secret');
+  });
+
+  it('falls back to the session secret when IndexedDB and the mirror are empty', () => {
+    const normalized = normalizePersistedState(buildPersistedSnapshot(), sessionState('session-secret'));
+
+    expect(normalized.backendApiSecret).toBe('session-secret');
+  });
+
+  it('keeps IndexedDB ahead of conflicting mirror and session values', () => {
+    backendSecretMirror('mirror-secret');
+    const normalized = normalizePersistedState(
+      buildPersistedSnapshot({ backendApiSecret: 'idb-secret' }),
+      sessionState('session-secret'),
+    );
+
+    expect(normalized.backendApiSecret).toBe('idb-secret');
+  });
+
+  it('treats an explicitly empty persisted secret as a clear and aligns a stale mirror to null', () => {
+    backendSecretMirror('mirror-secret');
+    const merged = persistenceOptions().merge(
+      buildPersistedSnapshot({ backendApiSecret: '' }),
+      sessionState('session-secret'),
+    );
+
+    expect(merged.backendApiSecret).toBeNull();
+    expect(JSON.parse(window.localStorage.getItem('github-stars-manager-auth') || '{}')).toMatchObject({
+      backendApiSecret: null,
+    });
+  });
+});
+
 describe('useAppStore persistence contracts', () => {
-  it('does not serialize discovery runtime repositories while retaining the RPC secret', () => {
+  it('does not serialize discovery runtime repositories while retaining proxy credentials and the RPC secret', () => {
     const persisted = partializeState({
       discoveryRepos: buildTransientDiscoverySnapshot().discoveryRepos as ReturnType<typeof useAppStore.getState>['discoveryRepos'],
+      proxyConfig: { enabled: true, type: 'http', host: 'proxy.example.com', port: 7890, username: 'user', password: 'proxy-password' },
       rpcDownloadConfig: { enabled: true, host: 'rpc.example.com', port: 6800, secret: 'rpc-secret' },
       routeMode: 'browser',
     });
 
     expect(persisted).not.toHaveProperty('discoveryRepos');
+    expect(persisted.proxyConfig).toEqual({
+      enabled: true,
+      type: 'http',
+      host: 'proxy.example.com',
+      port: 7890,
+      username: 'user',
+      password: 'proxy-password',
+    });
     expect(persisted.rpcDownloadConfig).toEqual({
       enabled: true,
       host: 'rpc.example.com',
@@ -999,33 +1390,25 @@ describe('useAppStore persistence contracts', () => {
     expect(legacy.routeMode).toBe('auto');
   });
 
-  it('ignores settings left by removed runtimes during hydration', () => {
-    const legacy = {
-      ...buildPersistedSnapshot(),
-      backendApiSecret: 'old-secret',
-      backendUrl: 'http://localhost:3000/api',
-      mcpConfig: { enabled: true },
-      proxyConfig: { enabled: true },
-    } as unknown as PersistedSnapshot;
+  it('restores the full proxy credential set after hydration', () => {
+    const normalized = normalizePersistedState(buildPersistedSnapshot({
+      proxyConfig: {
+        enabled: true,
+        type: 'socks5',
+        host: 'proxy.example.com',
+        port: 1080,
+        username: 'user',
+        password: 'proxy-password',
+      },
+    }), useAppStore.getInitialState());
 
-    const normalized = normalizePersistedState(legacy, useAppStore.getInitialState());
-
-    expect(normalized).not.toHaveProperty('backendApiSecret');
-    expect(normalized).not.toHaveProperty('backendUrl');
-    expect(normalized).not.toHaveProperty('mcpConfig');
-    expect(normalized).not.toHaveProperty('proxyConfig');
-  });
-
-});
-
-describe('persistence reference stability', () => {
-  it('keeps repositories reference when release metadata needs no migration', () => {
-    const repositories = [createRepository(1)];
-    const normalized = normalizePersistedState(
-      { repositories, releases: [] },
-      useAppStore.getInitialState(),
-    );
-
-    expect(normalized.repositories).toBe(repositories);
+    expect(normalized.proxyConfig).toEqual({
+      enabled: true,
+      type: 'socks5',
+      host: 'proxy.example.com',
+      port: 1080,
+      username: 'user',
+      password: 'proxy-password',
+    });
   });
 });

@@ -3,8 +3,16 @@ import type { AppState, TrendingTimeRange } from '../types';
 import { defaultHeaderMenuConfig, defaultReleaseSourceSettings, defaultSubscriptionChannels } from '../types';
 import { defaultRepositoryChatSettings } from '../types/repositoryChat';
 import { DEFAULT_THEME_PRESET_ID } from '../constants/themePresets';
+import { DEFAULT_THEME_TOKENS } from '../utils/themeTokens';
+import { DEFAULT_REPOSITORY_CARD_FIELDS } from '../types/repositoryCardFields';
+import { DEFAULT_REPOSITORY_CARD_ACTIONS } from '../types/repositoryCardActions';
+import { DEFAULT_XTWEET_FOLLOWS } from '../utils/xTweetFollows';
+import { DEFAULT_TELEGRAM_FOLLOWS } from '../utils/telegramFollows';
+import { readSessionBackendSecret } from './persistence/authStorage';
+import { detectInitialLanguage } from '../i18n/languages';
 import {
   defaultDiscoveryChannels,
+  defaultMcpConfig,
   defaultPresetFilters,
   defaultVectorSearchConfig,
   defaultVectorSearchStatus,
@@ -17,7 +25,12 @@ export const createInitialState = (): AppState => ({
       user: null,
       githubToken: null,
       isAuthenticated: false,
+      accountWorkspaces: {},
       repositories: [],
+      // Theme token 默认全部"跟随预设"（开发守则 §14）
+      themeTokens: { ...DEFAULT_THEME_TOKENS },
+      // Trending 快照（开发守则 §7）：本地榜单历史，默认空
+      trendingSnapshots: [],
       gists: [],
       starredGists: [],
       gistSearchFilters: initialGistSearchFilters,
@@ -40,6 +53,7 @@ export const createInitialState = (): AppState => ({
       vectorSearchConfig: { ...defaultVectorSearchConfig },
       vectorSearchStatus: { ...defaultVectorSearchStatus },
       vectorIndexingState: { isIndexing: false, phase: null, phaseDone: 0, phaseTotal: 0, result: null },
+      mcpConfig: { ...defaultMcpConfig },
       similarView: null,
       webdavConfigs: [],
       activeWebDAVConfig: null,
@@ -57,20 +71,32 @@ export const createInitialState = (): AppState => ({
       collapsedSidebarCategoryCount: 20,
       categoryMatchMode: 'effective',
       assetFilters: defaultPresetFilters,
-      theme: 'dark',
-      themePreset: DEFAULT_THEME_PRESET_ID,
+      themeMode: 'dark',
+      systemTheme:
+        typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+          && window.matchMedia('(prefers-color-scheme: dark)').matches
+          ? 'dark'
+          : 'light',
+      themePresetLight: DEFAULT_THEME_PRESET_ID,
+      themePresetDark: DEFAULT_THEME_PRESET_ID,
       hasHydrated: false,
       currentView: 'repositories',
       selectedCategory: 'all',
-      language: 'zh',
+      language: detectInitialLanguage(),
       translationEngine: 'microsoft',
+      autoTranslateRepoDescription: false,
       updateNotification: null,
       analysisProgress: { current: 0, total: 0 },
+      backendApiSecret: readSessionBackendSecret(),
+      proxyConfig: { enabled: false, type: 'http', host: '', port: 7890 },
       rpcDownloadConfig: { enabled: false, host: '', port: 6800 },
       routeMode: 'auto',
       isSidebarCollapsed: false,
       readmeModalOpen: false,
       repositoryViewMode: 'grid',
+      // 卡片可见字段默认全开（开发守则 §14）
+      repositoryCardFields: { ...DEFAULT_REPOSITORY_CARD_FIELDS },
+      repositoryCardActions: DEFAULT_REPOSITORY_CARD_ACTIONS.map((item) => ({ ...item })),
       releaseViewMode: 'timeline',
       releaseShowMode: 'all',
       releaseLatestMode: 'all',
@@ -90,23 +116,36 @@ export const createInitialState = (): AppState => ({
       forkIsRefreshing: false,
 
       discoveryChannels: defaultDiscoveryChannels,
-      discoveryRepos: { 'trending': [], 'hot-release': [], 'most-popular': [], 'topic': [], 'search': [] },
-      discoveryLastRefresh: { 'trending': null, 'hot-release': null, 'most-popular': null, 'topic': null, 'search': null },
-      discoveryIsLoading: { 'trending': false, 'hot-release': false, 'most-popular': false, 'topic': false, 'search': false },
-      discoveryIsLoadingMore: { 'trending': false, 'hot-release': false, 'most-popular': false, 'topic': false, 'search': false },
-      discoveryLoadMoreError: { 'trending': null, 'hot-release': null, 'most-popular': null, 'topic': null, 'search': null },
+      discoveryRepos: { 'trending': [], 'hot-release': [], 'most-popular': [], 'topic': [], 'x-tweet': [], 'telegram': [], 'weekly': [], 'search': [], 'code-search': [] },
+      discoveryLastRefresh: { 'trending': null, 'hot-release': null, 'most-popular': null, 'topic': null, 'x-tweet': null, 'telegram': null, 'weekly': null, 'search': null, 'code-search': null },
+      discoveryIsLoading: { 'trending': false, 'hot-release': false, 'most-popular': false, 'topic': false, 'x-tweet': false, 'telegram': false, 'weekly': false, 'search': false, 'code-search': false },
+      discoveryIsLoadingMore: { 'trending': false, 'hot-release': false, 'most-popular': false, 'topic': false, 'x-tweet': false, 'telegram': false, 'weekly': false, 'search': false, 'code-search': false },
+      discoveryLoadMoreError: { 'trending': null, 'hot-release': null, 'most-popular': null, 'topic': null, 'x-tweet': null, 'telegram': null, 'weekly': null, 'search': null, 'code-search': null },
       selectedDiscoveryChannel: 'trending',
       discoveryPlatform: 'All',
       discoveryLanguage: 'All',
       discoverySortBy: 'BestMatch',
       discoverySortOrder: 'Descending',
       discoverySearchQuery: '',
+      // 仓库搜索模式：默认关键词（行为与历史版本一致）；phase/detail/emptyReason 为会话级状态
+      discoverySearchMode: 'keyword',
+      discoverySearchPhase: null,
+      discoverySearchPhaseDetail: null,
+      discoverySearchEmptyReason: null,
       discoverySelectedTopic: null,
-      discoveryHasMore: { 'trending': false, 'hot-release': false, 'most-popular': false, 'topic': false, 'search': false },
-      discoveryNextPage: { 'trending': 1, 'hot-release': 1, 'most-popular': 1, 'topic': 1, 'search': 1 },
-      discoveryTotalCount: { 'trending': 0, 'hot-release': 0, 'most-popular': 0, 'topic': 0, 'search': 0 },
-      discoveryScrollPositions: { 'trending': 0, 'hot-release': 0, 'most-popular': 0, 'topic': 0, 'search': 0 },
+      discoveryHasMore: { 'trending': false, 'hot-release': false, 'most-popular': false, 'topic': false, 'x-tweet': false, 'telegram': false, 'weekly': false, 'search': false, 'code-search': false },
+      discoveryNextPage: { 'trending': 1, 'hot-release': 1, 'most-popular': 1, 'topic': 1, 'x-tweet': 1, 'telegram': 1, 'weekly': 1, 'search': 1, 'code-search': 1 },
+      discoveryTotalCount: { 'trending': 0, 'hot-release': 0, 'most-popular': 0, 'topic': 0, 'x-tweet': 0, 'telegram': 0, 'weekly': 0, 'search': 0, 'code-search': 0 },
+      discoveryScrollPositions: { 'trending': 0, 'hot-release': 0, 'most-popular': 0, 'topic': 0, 'x-tweet': 0, 'telegram': 0, 'weekly': 0, 'search': 0, 'code-search': 0 },
   trendingTimeRange: 'weekly' as TrendingTimeRange,
+      weeklyOnlyCollected: false,
+      weeklySyncStatus: null,
+      xTweetFollows: DEFAULT_XTWEET_FOLLOWS.map((follow) => ({ ...follow })),
+      xTweetAuth: null,
+      xTweetAuthRevision: 0,
+      xTweetSyncStatus: null,
+      telegramFollows: DEFAULT_TELEGRAM_FOLLOWS.map((follow) => ({ ...follow })),
+      telegramSyncStatus: null,
 
       // Subscription
       subscriptionRepos: { 'most-stars': [], 'most-forks': [], 'most-dev': [], 'trending': [] },

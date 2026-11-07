@@ -104,7 +104,7 @@ describe('insecure endpoint guard', () => {
     await expect(service.generateChatText({ system: 's', user: 'u' })).rejects.not.toThrow(/HTTPS/);
   });
 
-  it('allows plain http for LAN addresses and local hostnames', async () => {
+  it('allows plain http for local area network (LAN) addresses and local hostnames', async () => {
     const lanEndpoints = [
       'http://192.168.1.100:11434/v1',
       'http://10.0.0.5:11434/v1',

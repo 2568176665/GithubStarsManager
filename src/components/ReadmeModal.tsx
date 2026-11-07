@@ -1,3 +1,6 @@
+import { i18n } from '../i18n';
+import { useT } from "../i18n/useT";
+import type { AppLanguage } from '../i18n/languages';
 import { Button } from './ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
@@ -21,7 +24,7 @@ interface ReadmeModalProps {
   isOpen: boolean;
   onClose: () => void;
   onCloseAutoFocus?: () => void;
-  repository: Repository | null;
+  repository: Pick<Repository, 'full_name' | 'html_url' | 'owner' | 'default_branch'> | null;
 }
 
 const FONT_SIZES = [
@@ -32,9 +35,16 @@ const FONT_SIZES = [
 
 const TOC_MAX_LEVEL = 6;
 
-const getDefaultReadmeVariant = (language: 'zh' | 'en'): ReadmeVariant => ({
+const shouldOpenTocByDefault = (): boolean => {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return true;
+  }
+  return !window.matchMedia('(max-width: 767px)').matches;
+};
+
+const getDefaultReadmeVariant = (language: AppLanguage): ReadmeVariant => ({
   ...DEFAULT_README_VARIANT,
-  label: language === 'zh' ? '默认 README' : 'Default README',
+  label: i18n.getFixedT(language, 'app')('readmeModal.default-readme'),
 });
 
 const isAbortError = (error: unknown, signal?: AbortSignal): boolean => {
@@ -54,7 +64,7 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
   const [readmeContent, setReadmeContent] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showToc, setShowToc] = useState(true);
+  const [showToc, setShowToc] = useState(shouldOpenTocByDefault);
   const [fontSizeIndex, setFontSizeIndex] = useState(1);
   const [tocItems, setTocItems] = useState<TocItem[]>([]);
   const [headingIdMap, setHeadingIdMap] = useState<Map<string, string>>(new Map());
@@ -84,7 +94,7 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
     fetchReadmeContent: fetchReadmeContentFromAvailableSource,
     fetchReadmeCandidates: fetchReadmeCandidatesFromAvailableSource,
     cancel: cancelFetches,
-  } = useReadmeFetch({ owner: repoOwner, name: repoName, repositoryId: repository?.id });
+  } = useReadmeFetch({ owner: repoOwner, name: repoName });
 
   const bilingualRef = useRef<BilingualMarkdownRendererHandle>(null);
   const [translateStatus, setTranslateStatus] = useState<TranslationStatus>('idle');
@@ -92,10 +102,6 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
   const [translateError, setTranslateError] = useState<string | null>(null);
 
   const displayContent = readmeContent;
-
-  const readmeBaseUrl = repository?.html_url || (
-    repository?.full_name ? `https://github.com/${repository.full_name}` : undefined
-  );
 
   const currentFontSize = FONT_SIZES[fontSizeIndex].value;
 
@@ -326,7 +332,7 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
     document.body.style.userSelect = 'none';
   }, [tocWidth]);
 
-  const t = useCallback((zh: string, en: string) => language === 'zh' ? zh : en, [language]);
+  const t = useT('app');
 
   const handleTranslate = useCallback(async () => {
     if (translateStatus === 'translating') return;
@@ -380,8 +386,8 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
       } else {
         setReadmeContent('');
         setError(variant.isDefault
-          ? (language === 'zh' ? '该仓库没有 README 文件' : 'This repository has no README file')
-          : (language === 'zh' ? '该 README 文件为空' : 'This README file is empty'));
+          ? (t('readmeModal.this-repository-has-no-readme-file'))
+          : (t('readmeModal.this-readme-file-is-empty')));
       }
       setLoading(false);
     } catch (err) {
@@ -390,12 +396,12 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
       console.error('Failed to fetch README:', err);
       setReadmeContent('');
       const fallbackMessage = variant.isDefault
-        ? (language === 'zh' ? '加载 README 失败，请检查网络连接或稍后重试' : 'Failed to load README. Please check your network connection and try again later')
-        : (language === 'zh' ? '加载所选 README 失败，请稍后重试' : 'Failed to load selected README. Please try again later');
+        ? (t('readmeModal.failed-to-load-readme-please-check-your-network'))
+        : (t('readmeModal.failed-to-load-selected-readme-please-try-again'));
       setError(err instanceof Error && err.message ? err.message : fallbackMessage);
       setLoading(false);
     }
-  }, [repository, fetchReadmeContentFromAvailableSource, language]);
+  }, [repository, fetchReadmeContentFromAvailableSource, t]);
 
   const fetchReadmeVariants = useCallback(async () => {
     if (!repository) return;
@@ -403,7 +409,7 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
     setVariantsLoading(true);
 
     try {
-      const defaultBranch = (repository as Repository & { default_branch?: string }).default_branch;
+      const defaultBranch = repository.default_branch;
       const candidates = await fetchReadmeCandidatesFromAvailableSource(defaultBranch);
 
       setReadmeVariants(buildReadmeVariants(candidates, language));
@@ -435,13 +441,13 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
       setError(cachedContent.trim()
         ? null
         : nextVariant.isDefault
-          ? (language === 'zh' ? '该仓库没有 README 文件' : 'This repository has no README file')
-          : (language === 'zh' ? '该 README 文件为空' : 'This README file is empty'));
+          ? (t('readmeModal.this-repository-has-no-readme-file'))
+          : (t('readmeModal.this-readme-file-is-empty')));
       return;
     }
 
     void fetchReadmeContent(nextVariant);
-  }, [selectedReadmeKey, readmeVariants, readmeCache, resetReadmeViewState, language, fetchReadmeContent]);
+  }, [selectedReadmeKey, readmeVariants, readmeCache, resetReadmeViewState, fetchReadmeContent, t]);
 
   useEffect(() => {
     if (isOpen && repository) {
@@ -495,7 +501,7 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
     } else {
-      setShowToc(true);
+      setShowToc(shouldOpenTocByDefault());
     }
   }, [isOpen, language, cancelFetches]);
 
@@ -528,8 +534,9 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
         showClose={false}
+        fullscreen
         aria-describedby={undefined}
-        className="flex h-[calc(100vh_-_2rem)] max-h-[calc(100vh_-_2rem)] w-[calc(100vw_-_2rem)] max-w-none min-w-0 flex-col overflow-hidden p-0"
+        className="flex min-w-0 flex-col overflow-hidden p-0"
         onCloseAutoFocus={(event) => {
           if (!onCloseAutoFocus) return;
           event.preventDefault();
@@ -565,7 +572,7 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
             <div className="flex max-w-full flex-wrap items-center justify-end gap-1">
               {readmeVariants.length > 1 && (
                 <Select value={selectedReadmeKey} onValueChange={handleReadmeVariantChange} disabled={loading || variantsLoading}>
-                  <SelectTrigger className="h-9 w-auto min-w-[7rem] max-w-[220px] px-2 py-2 text-sm" title={t('切换 README 语言', 'Switch README language')} aria-label={t('切换 README 语言', 'Switch README language')}><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="h-9 w-auto min-w-[7rem] max-w-[220px] px-2 py-2 text-sm" title={t('readmeModal.switch-readme-language')} aria-label={t('readmeModal.switch-readme-language')}><SelectValue /></SelectTrigger>
                   <SelectContent>{readmeVariants.map((variant) => <SelectItem key={variant.key} value={variant.key}>{variant.label}</SelectItem>)}</SelectContent>
                 </Select>
               )}
@@ -576,15 +583,15 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
                       variant="ghost"
                       onClick={handleRevertTranslation}
                       className="flex items-center space-x-1 px-3 py-2 text-sm rounded-lg transition-colors bg-primary/20 text-primary dark:bg-primary/10 dark:text-primary"
-                      title={t('关闭翻译', 'Close Translation')}
+                      title={t('readmeModal.close-translation')}
                     >
                       <Languages className="w-4 h-4" />
-                      <span className="hidden sm:inline">{t('已翻译', 'Translated')}</span>
+                      <span className="hidden sm:inline">{t('readmeModal.translated')}</span>
                     </Button>
                     {([
-                      { mode: 'original' as DisplayMode, icon: FileText, label: t('原文', 'Original') },
-                      { mode: 'translated' as DisplayMode, icon: Languages, label: t('译文', 'Translated') },
-                      { mode: 'bilingual' as DisplayMode, icon: Eye, label: t('双语', 'Bilingual') },
+                      { mode: 'original' as DisplayMode, icon: FileText, label: t('readmeModal.original') },
+                      { mode: 'translated' as DisplayMode, icon: Languages, label: t('readmeModal.translated-2') },
+                      { mode: 'bilingual' as DisplayMode, icon: Eye, label: t('readmeModal.bilingual') },
                     ]).map(({ mode, icon: Icon, label }) => (
                       <Button
                         key={mode}
@@ -608,16 +615,16 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
                       variant="ghost"
                       onClick={handleTranslate}
                       className="flex items-center space-x-1 px-3 py-2 text-sm rounded-lg transition-colors text-warning hover:bg-warning/10"
-                      title={t('重试翻译', 'Retry Translation')}
+                      title={t('readmeModal.retry-translation')}
                     >
                       <Languages className="w-4 h-4" />
-                      <span className="hidden sm:inline">{t('重试', 'Retry')}</span>
+                      <span className="hidden sm:inline">{t('readmeModal.retry')}</span>
                     </Button>
                     <Button
                       variant="ghost"
                       onClick={handleRevertTranslation}
                       className="flex items-center space-x-1 px-2 py-2 text-sm rounded-lg transition-colors text-muted-foreground hover:text-muted-foreground dark:hover:text-muted-foreground hover:bg-muted dark:hover:bg-card"
-                      title={t('关闭翻译', 'Close Translation')}
+                      title={t('readmeModal.close-translation')}
                     >
                       <X className="w-4 h-4" />
                     </Button>
@@ -632,7 +639,7 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
                         ? 'text-muted-foreground dark:text-muted-foreground/70 cursor-not-allowed'
                         : 'text-muted-foreground dark:text-foreground hover:text-foreground hover:bg-muted dark:hover:bg-accent'
                     }`}
-                    title={t('翻译文档', 'Translate Document')}
+                    title={t('readmeModal.translate-document')}
                   >
                     {isTranslating ? (
                       <>
@@ -640,13 +647,13 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
                         <span className="hidden sm:inline">
                           {translateProgress.total > 0 
                             ? `${translateProgress.current}/${translateProgress.total}` 
-                            : t('翻译中…', 'Translating…')}
+                            : t('readmeModal.translating')}
                         </span>
                       </>
                     ) : (
                       <>
                         <Languages className="w-4 h-4" />
-                        <span className="hidden sm:inline">{language === 'zh' ? t('翻译为中文', 'Translate to Chinese') : t('翻译为英文', 'Translate to English')}</span>
+                        <span className="hidden sm:inline">{language === 'zh' ? t('readmeModal.translate-to-chinese') : t('readmeModal.translate-to-english')}</span>
                       </>
                     )}
                   </Button>
@@ -666,13 +673,13 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
                   variant="ghost"
                   size="icon"
                   onClick={() => setShowToc(!showToc)}
-                  aria-label={t('目录', 'Table of Contents')}
+                  aria-label={t('readmeModal.table-of-contents')}
                   className={`h-8 w-8 rounded-lg p-0 transition-colors ${
                     showToc
                       ? 'bg-primary/20 text-primary dark:bg-primary/10 dark:text-primary'
                       : 'text-muted-foreground hover:text-muted-foreground dark:hover:text-foreground hover:bg-muted dark:hover:bg-accent'
                   }`}
-                  title={t('目录', 'Table of Contents')}
+                  title={t('readmeModal.table-of-contents')}
                 >
                   <List className="w-4 h-4" />
                 </Button>
@@ -680,10 +687,10 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
               <Button
                 variant="ghost"
                 size="icon"
-                aria-label={t(`字体大小: ${FONT_SIZES[fontSizeIndex].label}`, `Font Size: ${FONT_SIZES[fontSizeIndex].labelEn}`)}
+                aria-label={t('readmeModal.cycle-font-size')}
                 onClick={cycleFontSize}
                 className="h-8 w-8 rounded-lg p-0 text-muted-foreground dark:text-foreground hover:text-foreground dark:hover:text-foreground hover:bg-muted dark:hover:bg-accent transition-colors"
-                title={t(`字体大小: ${FONT_SIZES[fontSizeIndex].label}`, `Font Size: ${FONT_SIZES[fontSizeIndex].labelEn}`)}
+                title={t('readmeModal.font-size-v1', { v1: FONT_SIZES[fontSizeIndex].label })}
               >
                 <Type className="w-4 h-4" />
               </Button>
@@ -692,31 +699,31 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center space-x-1 px-3 py-2 text-sm text-muted-foreground dark:text-foreground hover:text-foreground hover:bg-muted dark:hover:bg-accent rounded-lg transition-colors"
-                title={t('在 GitHub 上查看', 'View on GitHub')}
+                title={t('readmeModal.view-on-github')}
               >
                 <ExternalLink className="w-4 h-4" />
-                <span className="hidden sm:inline">{t('在 GitHub 上查看', 'View on GitHub')}</span>
+                <span className="hidden sm:inline">{t('readmeModal.view-on-github')}</span>
               </a>
               <Button
                 variant="ghost"
                 onClick={onClose}
                 className="p-2 rounded-lg text-muted-foreground dark:text-foreground hover:text-foreground dark:hover:text-foreground hover:bg-muted dark:hover:bg-accent transition-colors"
-                aria-label={t('关闭', 'Close')}
+                aria-label={t('readmeModal.close')}
               >
                 <X className="w-5 h-5" />
               </Button>
             </div>
           </div>
 
-          <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+          <div className="app-readme-body flex min-h-0 min-w-0 flex-1 overflow-hidden">
             {showToc && tocItems.length > 0 && (
               <>
                 <div
-                  className="border-r border-border dark:border-border overflow-y-auto p-4 flex-shrink-0 readme-scrollbar"
+                  className="app-readme-toc border-r border-border dark:border-border overflow-y-auto p-4 flex-shrink-0 readme-scrollbar"
                   style={{ width: tocWidth }}
                 >
                   <h4 className="text-sm font-semibold text-foreground dark:text-foreground mb-3">
-                    {t('目录', 'Contents')}
+                    {t('readmeModal.contents')}
                   </h4>
                   <nav className="space-y-0.5">
                     {tocItems.map((item) => {
@@ -725,7 +732,12 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
                         <Button
                           key={item.id}
                           variant="ghost"
-                          onClick={() => scrollToHeading(item.id, item.text)}
+                          onClick={() => {
+                            scrollToHeading(item.id, item.text);
+                            if (window.matchMedia?.('(max-width: 767px)').matches) {
+                              setShowToc(false);
+                            }
+                          }}
                           className={`h-auto block w-full text-left text-sm py-1 px-2 rounded transition-colors truncate ${tocIndentClass(item.level)} ${tocTextClass(item.level)} ${
                             activeHeadingId === item.id
                               ? 'bg-primary/10 text-primary dark:bg-primary/10 dark:text-primary font-medium'
@@ -741,7 +753,7 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
                 </div>
                 <div
                   onMouseDown={handleResizeMouseDown}
-                  className="w-1.5 cursor-col-resize bg-transparent hover:bg-ring dark:hover:bg-ring transition-colors flex-shrink-0 relative group"
+                  className="app-readme-resize-handle w-1.5 cursor-col-resize bg-transparent hover:bg-ring dark:hover:bg-ring transition-colors flex-shrink-0 relative group"
                 >
                   <div className="absolute inset-y-0 -left-1 -right-1" />
                 </div>
@@ -750,14 +762,14 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
 
             <div
               ref={contentRef}
-              className={`min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-auto p-6 ${currentFontSize} select-text readme-scrollbar relative`}
+              className={`app-readme-content min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-auto p-6 ${currentFontSize} select-text readme-scrollbar relative`}
               onScroll={handleScroll}
             >
             {loading ? (
               <div className="flex flex-col items-center justify-center py-12">
                 <Loader2 className="w-8 h-8 text-primary dark:text-primary animate-spin mb-4" />
                 <p className="text-muted-foreground dark:text-muted-foreground">
-                  {language === 'zh' ? '正在加载 README…' : 'Loading README…'}
+                  {t('readmeModal.loading-readme')}
                 </p>
               </div>
             ) : error ? (
@@ -770,14 +782,14 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
                   onClick={fetchReadme}
                   className="rounded-lg px-4 py-2 bg-primary text-primary-foreground transition-colors hover:bg-primary/90"
                 >
-                  {language === 'zh' ? '重试' : 'Retry'}
+                  {t('readmeModal.retry')}
                 </Button>
               </div>
             ) : readmeContent ? (
               <BilingualMarkdownRenderer
                 ref={bilingualRef}
                 markdown={readmeContent}
-                baseUrl={readmeBaseUrl}
+                baseUrl={repository?.html_url}
                 headingIds={headingIdMap}
                 fontSize={getFontSizeType()}
                 language={language}
@@ -791,7 +803,7 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
               <div className="flex flex-col items-center justify-center py-12">
                 <FileText className="w-12 h-12 text-muted-foreground dark:text-muted-foreground/70 mb-4" />
                 <p className="text-muted-foreground dark:text-muted-foreground">
-                  {language === 'zh' ? '该仓库没有 README 文件' : 'This repository has no README file'}
+                  {t('readmeModal.this-repository-has-no-readme-file')}
                 </p>
               </div>
             )}
@@ -800,9 +812,9 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
             {showBackToTop && (
               <Button
                 onClick={scrollToTop}
-                aria-label={t('回到顶部', 'Back to top')}
+                aria-label={t('readmeModal.back-to-top')}
                 className="absolute bottom-4 right-4 h-8 w-8 p-0 bg-card dark:bg-muted rounded-full shadow-lg border border-border dark:border-border text-muted-foreground dark:text-muted-foreground hover:bg-accent dark:hover:bg-accent hover:text-foreground transition-all z-10"
-                title={t('回到顶部', 'Back to top')}
+                title={t('readmeModal.back-to-top')}
               >
                 <ArrowUp className="w-4 h-4" />
               </Button>

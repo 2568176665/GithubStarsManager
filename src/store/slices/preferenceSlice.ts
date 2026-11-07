@@ -1,14 +1,21 @@
 
 import type { AppStoreSlice } from '../types';
 import { REQUIRED_HEADER_MENU_IDS } from '../schema';
+import { normalizeThemeTokens } from '../../utils/themeTokens';
+import { normalizeRepositoryCardFields } from '../../utils/repositoryCardFields';
+import { normalizeRepositoryCardActions } from '../../utils/repositoryCardActions';
 
 export const createPreferenceSlice: AppStoreSlice<Pick<import('../types').AppActions,
-  | 'setTheme'
-  | 'setThemePreset'
+  | 'setThemeMode'
+  | 'setSystemTheme'
+  | 'setThemePresetLight'
+  | 'setThemePresetDark'
+  | 'updateThemeTokens'
   | 'setCurrentView'
   | 'setSelectedCategory'
   | 'setLanguage'
   | 'setTranslationEngine'
+  | 'setAutoTranslateRepoDescription'
   | 'setSidebarCollapsed'
   | 'setReadmeModalOpen'
   | 'setHeaderMenuConfig'
@@ -16,9 +23,12 @@ export const createPreferenceSlice: AppStoreSlice<Pick<import('../types').AppAct
   | 'setUpdateNotification'
   | 'dismissUpdateNotification'
   | 'setAnalysisProgress'
+  | 'setProxyConfig'
   | 'setRouteMode'
   | 'setRpcDownloadConfig'
   | 'setRepositoryViewMode'
+  | 'setRepositoryCardField'
+  | 'setRepositoryCardActions'
   | 'setReleaseViewMode'
   | 'setReleaseShowMode'
   | 'setReleaseLatestMode'
@@ -33,12 +43,20 @@ export const createPreferenceSlice: AppStoreSlice<Pick<import('../types').AppAct
   | 'setIncludeKeysInBackup'
 >> = (set) => ({
       // UI actions
-      setTheme: (theme) => set({ theme }),
-      setThemePreset: (themePreset) => set({ themePreset }),
+      setThemeMode: (themeMode) => set({ themeMode }),
+      setSystemTheme: (systemTheme) => set({ systemTheme }),
+      setThemePresetLight: (themePresetLight) => set({ themePresetLight }),
+      setThemePresetDark: (themePresetDark) => set({ themePresetDark }),
+      // Theme token 只存声明式偏好；写 CSS 变量的副作用在 App 的 effect 里。
+      // 合并当前值后再 normalize，调用方传局部即可，脏值也进不了根节点。
+      updateThemeTokens: (patch) => set((state) => ({
+        themeTokens: normalizeThemeTokens({ ...state.themeTokens, ...patch }),
+      })),
       setCurrentView: (currentView) => set({ currentView }),
       setSelectedCategory: (selectedCategory) => set({ selectedCategory }),
       setLanguage: (language) => set({ language }),
       setTranslationEngine: (translationEngine) => set({ translationEngine }),
+      setAutoTranslateRepoDescription: (autoTranslateRepoDescription) => set({ autoTranslateRepoDescription }),
       setSidebarCollapsed: (isSidebarCollapsed) => set({ isSidebarCollapsed }),
       setReadmeModalOpen: (readmeModalOpen) => set({ readmeModalOpen }),
       setHeaderMenuConfig: (config) => set({
@@ -54,12 +72,20 @@ export const createPreferenceSlice: AppStoreSlice<Pick<import('../types').AppAct
       setUpdateNotification: (notification) => set({ updateNotification: notification }),
       dismissUpdateNotification: () => set({ updateNotification: null }),
       setAnalysisProgress: (newProgress) => set({ analysisProgress: newProgress }),
+      setProxyConfig: (updates) => set((state) => ({
+        proxyConfig: { ...state.proxyConfig, ...updates }
+      })),
       setRouteMode: (routeMode) => set({ routeMode }),
       setRpcDownloadConfig: (updates) => set((state) => ({
         rpcDownloadConfig: { ...state.rpcDownloadConfig, ...updates }
       })),
 
       // Repository list view actions
+      // 卡片字段开关：合并当前值后 normalize，缺失字段自动按默认处理
+      setRepositoryCardField: (id, visible) => set((state) => ({
+        repositoryCardFields: normalizeRepositoryCardFields({ ...state.repositoryCardFields, [id]: visible }),
+      })),
+      setRepositoryCardActions: (actions) => set({ repositoryCardActions: normalizeRepositoryCardActions(actions) }),
       setRepositoryViewMode: (repositoryViewMode) => set({ repositoryViewMode }),
 
       // Release Timeline View actions

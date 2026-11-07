@@ -1,26 +1,34 @@
-import React, { Suspense, useEffect, useCallback, useRef } from 'react';
+import React, { Suspense, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { LoginScreen } from './components/LoginScreen';
 import { Header } from './components/Header';
 import { SearchBar } from './components/SearchBar';
 import { RepositoryList } from './components/RepositoryList';
 import { CategorySidebar } from './components/CategorySidebar';
+import { WorkspacePageHeader } from './components/WorkspacePageHeader';
 
 import { DebugModeIndicator } from './components/DebugModeIndicator';
 
 import { BackToTop } from './components/BackToTop';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { SyncModeChoiceModal } from './components/SyncModeChoiceModal';
-import { useAppStore } from './store/useAppStore';
-import { selectAppShellState } from './store/selectors';
+import { useAppStore, getAllCategories } from './store/useAppStore';
+import { useSystemThemeSync } from './hooks/useSystemThemeSync';
+import { resolveTheme, selectAppShellState } from './store/selectors';
 import { useShallow } from 'zustand/react/shallow';
+import { applyThemePreset } from './lib/themePresets';
+import { applyThemeTokens } from './utils/themeTokens';
+import { changeAppLanguage } from './i18n';
 import { useAutoUpdateCheck } from './hooks/useAutoUpdateCheck';
 import { logger } from './services/logger';
 import { UpdateNotificationBanner } from './components/UpdateNotificationBanner';
 import { ListsPushIndicator } from './components/ListsPushIndicator';
-import { useBackendLifecycle } from './features/lifecycle/useBackendLifecycle';
+import { useBackendLifecycle } from './features/lifecycle/hooks/useBackendLifecycle';
 import type { AppState } from './types';
 import { hasActiveSearchFilters } from './utils/repoSearch';
+import { isElectron, loadEncryptedXAuthViaDesktop } from './services/electronProxy';
+import { useT } from './i18n/useT';
+import { matchesCategory } from './utils/categoryUtils';
 
 const LazyReleaseTimeline = React.lazy(() =>
   import('./components/ReleaseTimeline').then((module) => ({ default: module.ReleaseTimeline }))
@@ -49,6 +57,11 @@ const LazyViewBoundary: React.FC<{ children: React.ReactNode }> = ({ children })
     <Suspense fallback={<ViewLoadingFallback />}>{children}</Suspense>
   </ErrorBoundary>
 );
+
+/**
+ * Main repository view combining category sidebar, search bar, and repository list.
+ * Switches between search results and full list based on active search filters.
+ */
 
 type AppView = AppState['currentView'];
 
@@ -116,18 +129,13 @@ const AppRouteSync: React.FC = () => {
     if (currentView !== lastViewRef.current) {
       const nextView = resolveAppView(currentView);
       lastViewRef.current = nextView;
-      const nextPath = VIEW_PATHS[nextView];
-      navigate(nextPath);
+      navigate(VIEW_PATHS[nextView]);
     }
   }, [currentView, hasHydrated, location.pathname, navigate, setCurrentView]);
 
   return null;
 };
 
-/**
- * Main repository view combining category sidebar, search bar, and repository list.
- * Switches between search results and full list based on active search filters.
- */
 const RepositoriesView = React.memo(({
   repositories,
   searchResults,
@@ -141,16 +149,52 @@ const RepositoriesView = React.memo(({
   selectedCategory: string;
   onCategorySelect: (category: string) => void;
 }) => {
+  const t = useT('app');
   const isActive = hasActiveSearchFilters(searchFilters);
   const similarView = useAppStore((state) => state.similarView);
   const exitSimilarView = useAppStore((state) => state.exitSimilarView);
+  const {
+    language,
+    customCategories,
+    hiddenDefaultCategoryIds,
+    defaultCategoryOverrides,
+    categoryMatchMode,
+  } = useAppStore(useShallow((state) => ({
+    language: state.language,
+    customCategories: state.customCategories,
+    hiddenDefaultCategoryIds: state.hiddenDefaultCategoryIds,
+    defaultCategoryOverrides: state.defaultCategoryOverrides,
+    categoryMatchMode: state.categoryMatchMode,
+  })));
+  const allCategories = useMemo(
+    () => getAllCategories(customCategories, language, hiddenDefaultCategoryIds, defaultCategoryOverrides),
+    [customCategories, language, hiddenDefaultCategoryIds, defaultCategoryOverrides]
+  );
+  const currentCategory = allCategories.find((category) => category.id === selectedCategory);
+  const currentCategoryRepositories = useMemo(() => {
+    if (selectedCategory === 'all') return repositories;
+    const category = allCategories.find((item) => item.id === selectedCategory);
+    return category
+      ? repositories.filter((repository) => matchesCategory(repository, category, categoryMatchMode))
+      : [];
+  }, [repositories, selectedCategory, allCategories, categoryMatchMode]);
+  const analyzedRepositoryCount = currentCategoryRepositories.filter(
+    (repository) => repository.analyzed_at && !repository.analysis_failed
+  ).length;
+  // Similar view preserves the user's sort preference, which is not a search
+  // filter and must not trigger the "search takes precedence" exit.
+  const hasActiveQueryOrFilter = hasActiveSearchFilters({
+    ...searchFilters,
+    sortBy: 'stars',
+    sortOrder: 'desc',
+  });
 
   // 相似视图下用户发起搜索时，自动退出相似视图（搜索优先于相似浏览，避免界面歧义）
   useEffect(() => {
-    if (similarView?.active && isActive) {
+    if (similarView?.active && hasActiveQueryOrFilter) {
       exitSimilarView();
     }
-  }, [similarView?.active, isActive, exitSimilarView]);
+  }, [similarView?.active, hasActiveQueryOrFilter, exitSimilarView]);
 
   // 相似仓库视图激活时，列表数据源切换为相似结果，且忽略分类过滤
   const listRepositories = similarView?.active
@@ -158,13 +202,32 @@ const RepositoriesView = React.memo(({
     : (isActive ? searchResults : repositories);
 
   return (
-    <div className="flex flex-col gap-4 lg:flex-row lg:gap-6">
+    <div className="route-workspace">
       <CategorySidebar
         repositories={repositories}
         selectedCategory={selectedCategory}
         onCategorySelect={onCategorySelect}
       />
-      <div className="flex-1 space-y-6">
+      <div className="workspace-content app-workspace-content space-y-5">
+        <WorkspacePageHeader
+          eyebrow={t('categorySidebar.workspace-label')}
+          section={t('header.menu-repositories')}
+          title={selectedCategory === 'all'
+            ? t('categorySidebar.all-repositories')
+            : currentCategory?.name ?? t('categorySidebar.all-repositories')}
+          meta={(
+            <>
+              <span className="app-workspace-meta-pill">
+                {t('categorySidebar.repository-count', { count: currentCategoryRepositories.length })}
+              </span>
+              {analyzedRepositoryCount > 0 && (
+                <span className="app-workspace-meta-pill">
+                  {t('searchResultStats.ai-analyzed-count', { count: analyzedRepositoryCount })}
+                </span>
+              )}
+            </>
+          )}
+        />
         <SearchBar />
         <RepositoryList
           repositories={listRepositories}
@@ -214,8 +277,14 @@ DiscoverySubscriptionView.displayName = 'DiscoverySubscriptionView';
 function App() {
   const {
     isAuthenticated,
+    currentView,
     selectedCategory,
-    theme,
+    themeMode,
+    systemTheme,
+    themePresetLight,
+    themePresetDark,
+    themeTokens,
+    language,
     hasHydrated,
     searchResults,
     searchFilters,
@@ -226,6 +295,9 @@ function App() {
   useAutoUpdateCheck();
   useBackendLifecycle(hasHydrated);
 
+  const theme = resolveTheme(themeMode, systemTheme);
+  useSystemThemeSync(themeMode);
+
   // Restore persisted frontend debug level at startup so capture is active
   // app-wide, not only after DiagnosticLogsPanel mounts.
   useEffect(() => {
@@ -233,6 +305,26 @@ function App() {
       logger.setLevel('debug');
     }
   }, []);
+
+  // Restore persisted encrypted X auth cookies on desktop startup after hydration completes (#356)
+  useEffect(() => {
+    if (!hasHydrated || !isElectron()) return;
+    loadEncryptedXAuthViaDesktop().then((auth) => {
+      if (auth) {
+        const current = useAppStore.getState().xTweetAuth;
+        if (!current || current.authToken !== auth.authToken || current.ct0 !== auth.ct0) {
+          logger.info('xAuth', 'Restoring encrypted X auth from disk');
+          useAppStore.getState().setXTweetAuth(auth);
+        } else {
+          logger.debug('xAuth', 'Encrypted X auth already matches in-memory state; skipping restore');
+        }
+      } else {
+        logger.debug('xAuth', 'No encrypted X auth found on disk');
+      }
+    }).catch((err: unknown) => {
+      logger.errorFromError('xAuth', 'Failed to load encrypted X auth from disk', err);
+    });
+  }, [hasHydrated]);
 
   useEffect(() => {
     if (theme === 'dark') {
@@ -252,10 +344,28 @@ function App() {
     };
   }, [theme]);
 
-  // Ensure default theme is active without custom theme preset overrides.
+  // Theme preset (palette/radius/font/shadow skin) rides on data-theme;
+  // 深浅模式可分别配置，随解析出的主题切换生效。
+  const activeThemePreset = theme === 'dark' ? themePresetDark : themePresetLight;
   useEffect(() => {
-    delete document.documentElement.dataset.theme;
-  }, []);
+    applyThemePreset(activeThemePreset);
+  }, [activeThemePreset]);
+
+  // Theme token（开发守则 §14）：内联 CSS 变量覆盖预设；恢复默认时删掉内联值，
+  // 预设的 --radius / --primary 自然重新生效。排在预设 effect 之后即可。
+  useEffect(() => {
+    applyThemeTokens(themeTokens);
+  }, [themeTokens, theme, activeThemePreset]);
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'auto' });
+  }, [currentView]);
+
+  // Language side effect: zustand 的 language 是唯一事实源，这里只负责装载
+  // 语言包、切换 i18next 并同步 <html lang>。
+  useEffect(() => {
+    void changeAppLanguage(language);
+  }, [language]);
 
   const handleCategorySelect = useCallback((category: string) => {
     // 相似仓库视图下点击分类 = 离开相似视图并切换到该分类，避免交互歧义
@@ -284,7 +394,7 @@ function App() {
     <div className="ui-shell min-h-screen transition-colors duration-200">
       <UpdateNotificationBanner />
       <Header />
-      <main className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-5 sm:py-7">
+      <main className="app-main">
         <AppRouteSync />
         <Routes>
           <Route

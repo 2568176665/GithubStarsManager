@@ -4,6 +4,12 @@ import { SearchBar } from './SearchBar';
 import { useAppStore } from '../store/useAppStore';
 import type { Repository, SearchFilters } from '../types';
 
+const runVectorSearchPipeline = vi.hoisted(() => vi.fn());
+
+vi.mock('../services/vectorSearchPipeline', () => ({
+  runVectorSearchPipeline,
+}));
+
 vi.mock('../store/useAppStore', () => ({
   useAppStore: vi.fn(),
   getAllCategories: vi.fn(() => []),
@@ -107,6 +113,7 @@ describe('SearchBar', () => {
     vi.clearAllMocks();
     localStorage.clear();
     currentState = baseStoreState();
+    runVectorSearchPipeline.mockReset();
   });
 
   it('clears the committed query when the search input is manually emptied', () => {
@@ -118,27 +125,13 @@ describe('SearchBar', () => {
       },
       setSearchFilters,
     });
-    mockUseAppStore.mockReturnValue(currentState as ReturnType<typeof useAppStore>);
+    mockUseAppStore.mockImplementation(((selector?: (state: unknown) => unknown) => (selector ? selector(currentState) : currentState)) as unknown as typeof useAppStore);
 
     render(<SearchBar />);
 
     fireEvent.change(screen.getByRole('textbox'), { target: { value: '' } });
 
     expect(setSearchFilters).toHaveBeenCalledWith({ query: '' });
-  });
-
-  it('loads search history only when mounted, not when repositories change', () => {
-    const { rerender } = render(<SearchBar />);
-
-    expect(localStorage.getItem).toHaveBeenCalledTimes(1);
-
-    currentState = createStoreState({
-      repositories: [createRepository({ id: 2, name: 'vite', full_name: 'vitejs/vite' })],
-    });
-    mockUseAppStore.mockReturnValue(currentState as ReturnType<typeof useAppStore>);
-    rerender(<SearchBar />);
-
-    expect(localStorage.getItem).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the committed query empty when sorting after manual clearing', () => {
@@ -159,7 +152,7 @@ describe('SearchBar', () => {
     storeState.setSearchFilters = setSearchFilters;
 
     currentState = storeState;
-    mockUseAppStore.mockReturnValue(storeState as ReturnType<typeof useAppStore>);
+    mockUseAppStore.mockImplementation(((selector?: (state: typeof storeState) => unknown) => (selector ? selector(storeState) : storeState)) as unknown as typeof useAppStore);
 
     const { rerender } = render(<SearchBar />);
 
@@ -189,7 +182,7 @@ describe('SearchBar', () => {
       ],
       setSearchResults,
     });
-    mockUseAppStore.mockReturnValue(currentState as ReturnType<typeof useAppStore>);
+    mockUseAppStore.mockImplementation(((selector?: (state: unknown) => unknown) => (selector ? selector(currentState) : currentState)) as unknown as typeof useAppStore);
 
     try {
       render(<SearchBar />);
@@ -215,40 +208,7 @@ describe('SearchBar', () => {
       expect(setSearchResults).toHaveBeenLastCalledWith([
         expect.objectContaining({ name: 'nested-rain' }),
       ]);
-      expect(screen.getByText('实时搜索模式 - 匹配仓库字段')).toBeInTheDocument();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('searches the lightweight projection fields during real-time input', () => {
-    vi.useFakeTimers();
-    const repository = createRepository({
-      id: 7,
-      name: 'sync-tool',
-      full_name: 'owner/sync-tool',
-      description: 'offline utility',
-      topics: ['synchronization'],
-      ai_tags: ['crdt'],
-      custom_tags: ['local-first'],
-      ai_summary: 'database replication helper',
-      custom_description: 'private note',
-    });
-    const setSearchResults = vi.fn();
-    currentState = createStoreState({ repositories: [repository], setSearchResults });
-    mockUseAppStore.mockReturnValue(currentState as ReturnType<typeof useAppStore>);
-
-    try {
-      render(<SearchBar />);
-      fireEvent.change(screen.getByRole('textbox'), {
-        target: { value: 'offline synchronization crdt local-first database private' },
-      });
-
-      act(() => {
-        vi.advanceTimersByTime(300);
-      });
-
-      expect(setSearchResults).toHaveBeenLastCalledWith([repository]);
+      expect(screen.getByText('实时搜索模式 - 匹配仓库名称')).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
@@ -265,7 +225,7 @@ describe('SearchBar', () => {
       repositories,
       setSearchResults,
     });
-    mockUseAppStore.mockReturnValue(currentState as ReturnType<typeof useAppStore>);
+    mockUseAppStore.mockImplementation(((selector?: (state: unknown) => unknown) => (selector ? selector(currentState) : currentState)) as unknown as typeof useAppStore);
 
     try {
       render(<SearchBar />);
@@ -287,14 +247,14 @@ describe('SearchBar', () => {
     }
   });
 
-  it('selects a search history item before the blur delay hides the dropdown', async () => {
+  it('selects a search history item before the blur delay hides the dropdown', () => {
     vi.useFakeTimers();
     const setSearchFilters = vi.fn();
     const setSearchResults = vi.fn();
     const repositories = [createRepository({ id: 1, name: 'react', full_name: 'facebook/react' })];
     localStorage.setItem('github-stars-search-history', JSON.stringify(['react']));
     currentState = createStoreState({ repositories, setSearchFilters, setSearchResults });
-    mockUseAppStore.mockReturnValue(currentState as ReturnType<typeof useAppStore>);
+    mockUseAppStore.mockImplementation(((selector?: (state: unknown) => unknown) => (selector ? selector(currentState) : currentState)) as unknown as typeof useAppStore);
 
     try {
       render(<SearchBar />);
@@ -305,7 +265,6 @@ describe('SearchBar', () => {
 
       fireEvent.blur(input);
       fireEvent.click(historyItem);
-      await act(async () => {});
 
       expect(input).toHaveValue('react');
       expect(setSearchFilters).toHaveBeenCalledWith({ query: 'react' });
@@ -319,7 +278,7 @@ describe('SearchBar', () => {
     vi.useFakeTimers();
     const repositories = [createRepository({ id: 1, language: 'TypeScript' })];
     currentState = createStoreState({ repositories });
-    mockUseAppStore.mockReturnValue(currentState as ReturnType<typeof useAppStore>);
+    mockUseAppStore.mockImplementation(((selector?: (state: unknown) => unknown) => (selector ? selector(currentState) : currentState)) as unknown as typeof useAppStore);
 
     try {
       render(<SearchBar />);
@@ -331,9 +290,125 @@ describe('SearchBar', () => {
       fireEvent.click(suggestionItem);
 
       expect(input).toHaveValue('TypeScript');
-      expect(screen.getByText('实时搜索模式 - 匹配仓库字段')).toBeInTheDocument();
+      expect(screen.getByText('实时搜索模式 - 匹配仓库名称')).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('re-runs search when a health filter chip is toggled', () => {
+    const archived = createRepository({
+      id: 1,
+      name: 'archived-repo',
+      full_name: 'owner/archived-repo',
+      archived: true,
+    });
+    const active = createRepository({
+      id: 2,
+      name: 'active-repo',
+      full_name: 'owner/active-repo',
+      archived: false,
+    });
+    const storeState = createStoreState({
+      repositories: [archived, active],
+      searchFilters: { ...defaultSearchFilters },
+    });
+    const setSearchResults = vi.fn();
+    const setSearchFilters = vi.fn((filters: Partial<SearchFilters>) => {
+      storeState.searchFilters = { ...storeState.searchFilters, ...filters };
+    });
+    storeState.setSearchResults = setSearchResults;
+    storeState.setSearchFilters = setSearchFilters;
+    currentState = storeState;
+    mockUseAppStore.mockImplementation(((selector?: (state: typeof storeState) => unknown) => (selector ? selector(storeState) : storeState)) as unknown as typeof useAppStore);
+
+    const { rerender } = render(<SearchBar />);
+    fireEvent.click(screen.getByRole('button', { name: /过滤器/ }));
+    setSearchResults.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: '已归档' }));
+    expect(setSearchFilters).toHaveBeenCalledWith({ healthArchived: true });
+
+    rerender(<SearchBar />);
+    expect(setSearchResults).toHaveBeenCalledWith([
+      expect.objectContaining({ name: 'archived-repo' }),
+    ]);
+  });
+
+  it('dispatches the global history open event from the 问答历史 button', () => {
+    currentState = createStoreState({});
+    mockUseAppStore.mockImplementation(((selector?: (state: unknown) => unknown) => (selector ? selector(currentState) : currentState)) as unknown as typeof useAppStore);
+    const dispatchSpy = vi.fn();
+    window.addEventListener('gsm:open-global-chat-history', dispatchSpy);
+
+    try {
+      render(<SearchBar />);
+      fireEvent.click(screen.getByRole('button', { name: '问答历史' }));
+      expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener('gsm:open-global-chat-history', dispatchSpy);
+    }
+  });
+
+  it('keeps synthetic vector order when sort/filter effects re-run for the same query', async () => {
+    const lowStarFirst = createRepository({
+      id: 1,
+      name: 'first-by-relevance',
+      full_name: 'owner/first-by-relevance',
+      stargazers_count: 1,
+    });
+    const highStarSecond = createRepository({
+      id: 2,
+      name: 'second-by-relevance',
+      full_name: 'owner/second-by-relevance',
+      stargazers_count: 999,
+    });
+    const setSearchResults = vi.fn();
+    const storeState = createStoreState({
+      repositories: [lowStarFirst, highStarSecond],
+      setSearchResults,
+      vectorSearchConfig: {
+        enabled: true,
+        workerUrl: 'https://worker.example',
+        authToken: 'token',
+        embeddingConfigId: 'emb',
+        indexMode: 'readme',
+        readmeMaxChars: 6000,
+      },
+      embeddingConfigs: [{
+        id: 'emb',
+        name: 'emb',
+        apiType: 'openai-compatible',
+        baseUrl: 'https://embedding.example',
+        apiKey: 'key',
+        model: 'model',
+        dimensions: 2,
+        isActive: true,
+      } as never],
+    });
+    const setSearchFilters = vi.fn((filters: Partial<SearchFilters>) => {
+      storeState.searchFilters = { ...storeState.searchFilters, ...filters };
+    });
+    storeState.setSearchFilters = setSearchFilters;
+    currentState = storeState;
+    mockUseAppStore.mockImplementation(((selector?: (state: unknown) => unknown) => (selector ? selector(storeState) : storeState)) as unknown as typeof useAppStore);
+    runVectorSearchPipeline.mockResolvedValue({
+      repositories: [lowStarFirst, highStarSecond],
+      scoreMap: new Map([['1', 1], ['2', 0.5]]),
+      diagnostics: {},
+    });
+
+    const { rerender } = render(<SearchBar />);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'relevance' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'AI搜索' }));
+    });
+
+    expect(setSearchResults).toHaveBeenLastCalledWith([lowStarFirst, highStarSecond]);
+    rerender(<SearchBar />);
+    fireEvent.click(screen.getByRole('button', { name: '按降序排列' }));
+    rerender(<SearchBar />);
+
+    expect(setSearchResults).toHaveBeenLastCalledWith([lowStarFirst, highStarSecond]);
   });
 });

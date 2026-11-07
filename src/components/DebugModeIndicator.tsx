@@ -1,15 +1,29 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { logger } from '../services/logger';
+import { useDebugActions } from '../features/settings/hooks/useDebugActions';
 import { useAppStore } from '../store/useAppStore';
 import { Button } from './ui/button';
 
+/**
+ * Global debug mode indicator — fixed bottom-right corner.
+ * Reads debug state from sessionStorage; visible across all pages.
+ * Click to disable all debug modes and navigate to diagnostic logs.
+ */
 export const DebugModeIndicator: React.FC = () => {
-  const [enabled, setEnabled] = useState(() => sessionStorage.getItem('gsm:frontend-debug') === 'true');
-  const setCurrentView = useAppStore((state) => state.setCurrentView);
+  const [frontendDebug, setFrontendDebug] = useState(() => sessionStorage.getItem('gsm:frontend-debug') === 'true');
+  const [backendDebug, setBackendDebug] = useState(() => sessionStorage.getItem('gsm:backend-debug') === 'true');
+  const setCurrentView = useAppStore(s => s.setCurrentView);
+  const { disableBackendDebug } = useDebugActions();
 
+  // Sync with sessionStorage changes (e.g. from DiagnosticLogsPanel)
   useEffect(() => {
-    const check = () => setEnabled(sessionStorage.getItem('gsm:frontend-debug') === 'true');
+    const check = () => {
+      setFrontendDebug(sessionStorage.getItem('gsm:frontend-debug') === 'true');
+      setBackendDebug(sessionStorage.getItem('gsm:backend-debug') === 'true');
+    };
+    // Also listen for storage events from other tabs
     window.addEventListener('storage', check);
+    // Poll for changes (sessionStorage doesn't fire storage events in same tab)
     const interval = setInterval(check, 2000);
     return () => {
       window.removeEventListener('storage', check);
@@ -17,22 +31,40 @@ export const DebugModeIndicator: React.FC = () => {
     };
   }, []);
 
-  const handleClick = useCallback(() => {
+  const handleClick = useCallback(async () => {
+    // Disable frontend debug
     logger.setLevel('info');
     sessionStorage.setItem('gsm:frontend-debug', 'false');
-    setEnabled(false);
+    setFrontendDebug(false);
+
+    // Disable backend debug
+    await disableBackendDebug();
+    sessionStorage.setItem('gsm:backend-debug', 'false');
+    setBackendDebug(false);
+
+    // Navigate to settings → logs tab
+    // Store in sessionStorage BEFORE switching view so the new SettingsPanel
+    // instance can pick it up after remount (event may fire before listener is ready)
     sessionStorage.setItem('gsm:pending-settings-tab', 'logs');
     setCurrentView('settings');
+    // Also dispatch event as a backup for same-instance navigation
     window.dispatchEvent(new CustomEvent('gsm:navigate-to-settings-tab', { detail: { tab: 'logs' } }));
-  }, [setCurrentView]);
+  }, [setCurrentView, disableBackendDebug]);
 
-  if (!enabled) return null;
+  if (!frontendDebug && !backendDebug) return null;
 
   return (
-    <Button type="button" variant="secondary" onClick={handleClick} className="fixed bottom-6 right-6 z-50 h-auto gap-2 rounded-full bg-success px-3 py-2 text-sm font-medium text-success-foreground shadow-lg hover:bg-success/90" title="Click to disable debug mode and open logs / 点击关闭调试并打开日志">
-      <span className="h-2 w-2 animate-pulse rounded-full bg-success-foreground" />
+    <Button
+      type="button"
+      variant="secondary"
+      onClick={handleClick}
+      className="fixed bottom-6 right-6 z-50 h-auto gap-2 rounded-full bg-success px-3 py-2 text-sm font-medium text-success-foreground shadow-lg hover:bg-success/90"
+      title="Click to disable debug mode and open logs / 点击关闭调试并打开日志"
+    >
+      <span className="w-2 h-2 rounded-full bg-success-foreground animate-pulse" />
       <span>DEBUG</span>
-      <span className="text-xs opacity-80">FE</span>
+      {frontendDebug && <span className="text-xs opacity-80">FE</span>}
+      {backendDebug && <span className="text-xs opacity-80">BE</span>}
     </Button>
   );
 };

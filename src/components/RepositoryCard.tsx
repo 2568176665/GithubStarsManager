@@ -1,3 +1,7 @@
+
+import { getDateFnsLocale, getIntlLocale } from '../i18n/format';
+import { useT, type TranslateFn } from '../i18n/useT';
+import type { AppLanguage } from '../i18n/languages';
 import React, { Suspense, useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -8,16 +12,21 @@ import { useRepositoryPlatforms } from '../hooks/useRepositoryPlatforms';
 import { GripVertical, Star, StarOff, ExternalLink, Calendar, Bell, BellOff, Bot, Sparkles, Terminal, Edit3, BookOpen, Square, CheckSquare, Loader2, HelpCircle, Search, Scale, MoreHorizontal, PackageOpen, MessageSquareText } from 'lucide-react';
 import { Repository, Category } from '../types';
 import { useAppStore } from '../store/useAppStore';
+import { isRepositoryCardFieldVisible } from '../utils/repositoryCardFields';
+import { normalizeRepositoryCardActions } from '../utils/repositoryCardActions';
+import type { RepositoryCardActionId, RepositoryCardActionPreference } from '../types/repositoryCardActions';
+import { useRepositoryDragStore } from '../store/useRepositoryDragStore';
 import { getAICategory, getDefaultCategory } from '../utils/categoryUtils';
 import { formatDistanceToNow } from 'date-fns';
-import { zhCN } from 'date-fns/locale';
 import { RepositoryEditModal } from './RepositoryEditModal';
 import { ErrorBoundary } from './ErrorBoundary';
 import { Dialog, DialogContent, DialogTitle } from './ui/dialog';
+import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { NO_LICENSE_SENTINEL, normalizeLicense } from '../utils/licenseFilter';
 import { useRepositoryCardActions } from '../features/repositories/hooks/useRepositoryCardActions';
+import { useTranslatedDescription } from '../hooks/useTranslatedDescription';
 import { Button } from './ui/button';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
 
 type DialogContentPointerDownOutsideHandler = NonNullable<
   React.ComponentProps<typeof DialogContent>['onPointerDownOutside']
@@ -37,8 +46,9 @@ const ReadmeModalLoadingFallback: React.FC<{
 }> = ({ onClose, onCloseAutoFocus }) => (
   <Dialog open onOpenChange={(open) => !open && onClose()}>
     <DialogContent
+      fullscreen
       aria-describedby={undefined}
-      className="flex h-[calc(100vh_-_2rem)] max-h-[calc(100vh_-_2rem)] w-[calc(100vw_-_2rem)] max-w-none flex-col overflow-hidden p-6"
+      className="flex flex-col overflow-hidden p-6"
       onCloseAutoFocus={(event) => {
         event.preventDefault();
         onCloseAutoFocus();
@@ -63,6 +73,7 @@ const ReleaseSheetLoadingFallback: React.FC<{
       aria-describedby={undefined}
       className="w-[calc(100%_-_2rem)] max-w-sm p-6"
       onPointerDownOutside={onPointerDownOutside}
+      onOverlayPointerDown={onPointerDownOutside as unknown as React.PointerEventHandler<HTMLDivElement>}
       onCloseAutoFocus={(event) => {
         event.preventDefault();
         onCloseAutoFocus();
@@ -136,9 +147,258 @@ interface RepositoryCardProps {
   onAskRepository?: (repository: Repository) => void;
 }
 
+
 const MAX_CACHE_SIZE = 500;
+const ACTION_SLOT_WIDTH = 32;
+const ACTION_SLOT_GAP = 6;
+const ACTION_SLOT_STRIDE = ACTION_SLOT_WIDTH + ACTION_SLOT_GAP;
 
 const highlightCache = new Map<string, React.ReactNode>();
+
+/**
+ * Counts quick actions that fit beside the persistent More actions button.
+ * A zero width means the row has not been measured yet, so all primary actions
+ * remain visible until layout supplies a usable width.
+ *
+ * @param width - Available action-row width in pixels.
+ * @param primaryActionCount - Number of primary quick actions.
+ * @returns Number of primary actions to render outside the menu.
+ */
+const countVisibleOverflowActions = (
+  width: number,
+  primaryActionCount: number,
+): number => {
+  if (width === 0) return primaryActionCount;
+  const capacity = Math.max(1, Math.floor((width + ACTION_SLOT_GAP) / ACTION_SLOT_STRIDE));
+  return Math.max(0, Math.min(primaryActionCount, capacity - 1));
+};
+
+const mutedIconButtonClass =
+  'bg-muted text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground';
+
+interface OverflowActionRowProps {
+  actionRowRef: React.Ref<HTMLDivElement>;
+  testId: string;
+  className: string;
+  visibleActionCount: number;
+  primaryActionCount: number;
+  actionPreferences: RepositoryCardActionPreference[];
+  selectionMode: boolean;
+  onAskRepository?: (repository: Repository) => void;
+  repository: Repository;
+  language: AppLanguage;
+  docsUrl: string;
+  githubUrl: string;
+  aiButtonTitle: string;
+  isAnalyzing: boolean;
+  isSubscribed: boolean;
+  unstarring: boolean;
+  vectorSearchAvailable?: boolean;
+  isFindingSimilar?: boolean;
+  onFindSimilar?: () => void;
+  persistFindSimilarInMenu?: boolean;
+  isActionsMenuOpen?: boolean;
+  onActionsMenuOpenChange?: (open: boolean) => void;
+  onAnalyze: () => void;
+  onAsk?: () => void;
+  onToggleReleaseSubscription: () => void;
+  onEdit: () => void;
+  editButtonTitle: string;
+  onViewReleases: () => void;
+  onUnstar: () => void;
+  menuAlign?: 'start' | 'end';
+  onMenuPointerDownOutside?: (target: Node) => void;
+  t: TranslateFn;
+}
+
+const OverflowActionRow: React.FC<OverflowActionRowProps> = ({
+  actionRowRef,
+  testId,
+  className,
+  visibleActionCount,
+  primaryActionCount,
+  actionPreferences,
+  selectionMode,
+  onAskRepository,
+  docsUrl,
+  githubUrl,
+  aiButtonTitle,
+  isAnalyzing,
+  isSubscribed,
+  unstarring,
+  vectorSearchAvailable = false,
+  isFindingSimilar = false,
+  onFindSimilar,
+  persistFindSimilarInMenu = false,
+  isActionsMenuOpen,
+  onActionsMenuOpenChange,
+  onAnalyze,
+  onAsk,
+  onToggleReleaseSubscription,
+  onEdit,
+  editButtonTitle,
+  onViewReleases,
+  onUnstar,
+  menuAlign = 'start',
+  onMenuPointerDownOutside,
+  t,
+}) => {
+  const availableActions = actionPreferences.filter((item) => item.id !== 'ask' || onAskRepository);
+  const inlineCandidates = availableActions.filter((item) => item.visible);
+  const inlineActionIds = inlineCandidates.slice(0, visibleActionCount).map((item) => item.id);
+  const inlineActionSet = new Set(inlineActionIds);
+  const overflowActionIds = availableActions.filter((item) => !inlineActionSet.has(item.id)).map((item) => item.id);
+  const showFindSimilarInMenu = Boolean(vectorSearchAvailable && onFindSimilar && (persistFindSimilarInMenu || visibleActionCount < primaryActionCount));
+  const hasActionsAboveUnstar = overflowActionIds.length > 0 || showFindSimilarInMenu;
+  const menuOpenProps = onActionsMenuOpenChange
+    ? { open: isActionsMenuOpen, onOpenChange: onActionsMenuOpenChange }
+    : {};
+
+  const inlineActionNodes: Record<RepositoryCardActionId, React.ReactNode> = {
+    analyze: (
+      <SelectionAwareButton onClick={onAnalyze} disabled={isAnalyzing} selectionMode={selectionMode}
+        className={mutedIconButtonClass} title={aiButtonTitle} aria-label={aiButtonTitle}>
+        {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bot className="w-4 h-4" />}
+      </SelectionAwareButton>
+    ),
+    ask: (
+      <SelectionAwareButton onClick={onAsk} selectionMode={selectionMode} className={mutedIconButtonClass}
+        title={t('repositoryCard.ask-this-repository')} aria-label={t('repositoryCard.ask-this-repository')}>
+        <MessageSquareText className="w-4 h-4" />
+      </SelectionAwareButton>
+    ),
+    subscribe: (
+      <SelectionAwareButton onClick={onToggleReleaseSubscription} selectionMode={selectionMode}
+        className={isSubscribed ? 'bg-primary text-primary-foreground shadow-sm' : mutedIconButtonClass}
+        title={isSubscribed ? t('repositoryCard.unsubscribe-from-releases-2') : t('repositoryCard.subscribe-to-releases-2')}
+        aria-label={isSubscribed ? t('repositoryCard.unsubscribe-from-releases-2') : t('repositoryCard.subscribe-to-releases-2')}
+        aria-pressed={isSubscribed}>
+        {isSubscribed ? <Bell className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
+      </SelectionAwareButton>
+    ),
+    edit: (
+      <SelectionAwareButton onClick={onEdit} selectionMode={selectionMode} variant="edit"
+        title={editButtonTitle} aria-label={t('repositoryCard.edit-repository-info')}>
+        <Edit3 className="w-4 h-4" />
+      </SelectionAwareButton>
+    ),
+    releases: (
+      <SelectionAwareButton onClick={onViewReleases} selectionMode={selectionMode} className={mutedIconButtonClass}
+        title={t('repositoryCard.view-releases')} aria-label={t('repositoryCard.view-releases')}>
+        <PackageOpen className="w-4 h-4" />
+      </SelectionAwareButton>
+    ),
+    docs: (
+      <a href={docsUrl} target="_blank" rel="noopener noreferrer"
+        onClick={(event) => selectionMode && event.preventDefault()}
+        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md ${mutedIconButtonClass} ${selectionMode ? 'pointer-events-none opacity-50' : ''}`}
+        title={t('repositoryCard.view-on-deepwiki-2')}>
+        <BookOpen className="w-4 h-4" />
+      </a>
+    ),
+    github: (
+      <a href={githubUrl} target="_blank" rel="noopener noreferrer"
+        onClick={(event) => selectionMode && event.preventDefault()}
+        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md ${mutedIconButtonClass} ${selectionMode ? 'pointer-events-none opacity-50' : ''}`}
+        title={t('repositoryCard.view-on-github-2')}>
+        <ExternalLink className="w-4 h-4" />
+      </a>
+    ),
+  };
+  const menuActionNodes: Record<RepositoryCardActionId, React.ReactNode> = {
+    analyze: (
+      <DropdownMenuItem disabled={isAnalyzing} onSelect={() => void onAnalyze()}>
+        {isAnalyzing ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Bot className="mr-2 h-3.5 w-3.5" />}
+        {t('repositoryCard.analyze-with-ai-2')}
+      </DropdownMenuItem>
+    ),
+    ask: (
+      <DropdownMenuItem onSelect={() => onAsk?.()}>
+        <MessageSquareText className="mr-2 h-3.5 w-3.5" />
+        {t('repositoryCard.ask-this-repository')}
+      </DropdownMenuItem>
+    ),
+    subscribe: (
+      <DropdownMenuItem onSelect={onToggleReleaseSubscription}>
+        {isSubscribed ? <Bell className="mr-2 h-3.5 w-3.5" /> : <BellOff className="mr-2 h-3.5 w-3.5" />}
+        {isSubscribed ? t('repositoryCard.unsubscribe-from-releases') : t('repositoryCard.subscribe-to-releases')}
+      </DropdownMenuItem>
+    ),
+    edit: (
+      <DropdownMenuItem onSelect={onEdit}>
+        <Edit3 className="mr-2 h-3.5 w-3.5" />
+        {t('repositoryCard.edit-repository-info')}
+      </DropdownMenuItem>
+    ),
+    releases: (
+      <DropdownMenuItem onSelect={onViewReleases}>
+        <PackageOpen className="mr-2 h-3.5 w-3.5" />
+        {t('repositoryCard.view-releases')}
+      </DropdownMenuItem>
+    ),
+    docs: (
+      <DropdownMenuItem asChild>
+        <a href={docsUrl} target="_blank" rel="noopener noreferrer">
+          <BookOpen className="mr-2 h-3.5 w-3.5" />
+          {t('repositoryCard.view-on-deepwiki')}
+        </a>
+      </DropdownMenuItem>
+    ),
+    github: (
+      <DropdownMenuItem asChild>
+        <a href={githubUrl} target="_blank" rel="noopener noreferrer">
+          <ExternalLink className="mr-2 h-3.5 w-3.5" />
+          {t('repositoryCard.view-on-github')}
+        </a>
+      </DropdownMenuItem>
+    ),
+  };
+
+  return (
+    <div ref={actionRowRef} data-testid={testId} className={className}>
+      {inlineActionIds.map((id) => <React.Fragment key={id}>{inlineActionNodes[id]}</React.Fragment>)}
+      <DropdownMenu {...menuOpenProps}>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              disabled={selectionMode}
+              className={`h-8 w-8 shrink-0 rounded-md ${mutedIconButtonClass}`}
+              aria-label={t('repositoryCard.more-repository-actions')}
+              title={t('repositoryCard.more-repository-actions')}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align={menuAlign}
+            className="w-52"
+            onClick={(event) => event.stopPropagation()}
+            onPointerDownOutside={(event) => {
+              if (onMenuPointerDownOutside) {
+                onMenuPointerDownOutside(event.target as Node);
+              }
+            }}
+          >
+            {overflowActionIds.map((id) => <React.Fragment key={id}>{menuActionNodes[id]}</React.Fragment>)}
+            {showFindSimilarInMenu ? (
+              <DropdownMenuItem disabled={isFindingSimilar} onSelect={() => onFindSimilar?.()}>
+                {isFindingSimilar ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Search className="mr-2 h-3.5 w-3.5" />}
+                {t('repositoryCard.find-similar-repositories')}
+              </DropdownMenuItem>
+            ) : null}
+            {hasActionsAboveUnstar ? <DropdownMenuSeparator /> : null}
+            <DropdownMenuItem className="text-destructive focus:text-destructive" disabled={unstarring} onSelect={() => void onUnstar()}>
+              <StarOff className={`mr-2 h-3.5 w-3.5 ${unstarring ? 'animate-pulse' : ''}`} />
+              {t('repositoryCard.unstar')}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+};
 
 const escapeRegExp = (string: string): string => {
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -156,7 +416,29 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
   viewMode = 'grid',
   onAskRepository,
 }) => {
+    const t = useT('repositories');
   const language = useAppStore((state) => state.language);
+  // 卡片可见字段（开发守则 §14）：未提供时按默认（显示）处理
+  const cardFields = useAppStore((state) => state.repositoryCardFields);
+  const savedActionPreferences = useAppStore((state) => state.repositoryCardActions);
+  const actionPreferences = useMemo(() => normalizeRepositoryCardActions(savedActionPreferences), [savedActionPreferences]);
+  const showDescription = isRepositoryCardFieldVisible(cardFields, 'description');
+  // 「自动翻译仓库描述」：仅当卡片实际展示原始描述时才翻译
+  // （字段开关关闭 / 自定义描述 / AI 总结优先级更高时不发起翻译），翻译中/失败回退原文。
+  const descriptionDisplay = repository.description_display ?? 'follow';
+  const showsAiDescription =
+    !!repository.ai_summary &&
+    !repository.analysis_failed &&
+    (descriptionDisplay === 'ai' ||
+      (descriptionDisplay === 'follow' && showAISummary));
+  const showsOriginalDescription =
+    showDescription &&
+    !!repository.description &&
+    repository.custom_description === undefined &&
+    !showsAiDescription;
+  const translatedDescription = useTranslatedDescription(
+    showsOriginalDescription ? repository.description : null
+  );
   const {
     analyze: handleAIAnalyze,
     findSimilar: handleFindSimilar,
@@ -179,40 +461,42 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
   const menuDismissedByPointerDownRef = useRef(false);
   const releaseSheetOutsideDismissedAtRef = useRef<number | null>(null);
   const editModalOutsideDismissedAtRef = useRef<number | null>(null);
-  const gridActionRowRef = useRef<HTMLDivElement>(null);
-  const [visibleGridActionCount, setVisibleGridActionCount] = useState(8);
+  const overflowActionRowRef = useRef<HTMLDivElement>(null);
+  const availableActionPreferences = actionPreferences.filter((item) => item.id !== 'ask' || onAskRepository);
+  const primaryOverflowActionCount = availableActionPreferences.filter((item) => item.visible).length;
+  const [visibleOverflowActionCount, setVisibleOverflowActionCount] = useState(primaryOverflowActionCount);
 
   const restoreReadmeTriggerFocus = useCallback(() => {
     cardRef.current?.focus();
   }, []);
 
   useEffect(() => {
-    if (viewMode !== 'list' || selectionMode) {
-      setIsActionsMenuOpen(false);
-    }
+    setIsActionsMenuOpen(false);
   }, [viewMode, selectionMode]);
 
   useEffect(() => {
-    if (viewMode !== 'grid') return;
-
     const updateVisibleActionCount = () => {
-      const width = gridActionRowRef.current?.clientWidth ?? 0;
+      const width = overflowActionRowRef.current?.clientWidth ?? 0;
       // A zero width occurs during hidden/JSDOM rendering; retain all actions
       // until a real layout measurement is available.
-      if (width === 0) return;
-      const capacity = Math.max(1, Math.floor((width + 6) / 38));
-      setVisibleGridActionCount(capacity >= 8 ? 8 : Math.max(0, capacity - 1));
+      if (width === 0) {
+        setVisibleOverflowActionCount(primaryOverflowActionCount);
+        return;
+      }
+      setVisibleOverflowActionCount(
+        countVisibleOverflowActions(width, primaryOverflowActionCount),
+      );
     };
 
     updateVisibleActionCount();
     const observer = new ResizeObserver(updateVisibleActionCount);
-    if (gridActionRowRef.current) observer.observe(gridActionRowRef.current);
+    if (overflowActionRowRef.current) observer.observe(overflowActionRowRef.current);
     window.addEventListener('resize', updateVisibleActionCount);
     return () => {
       observer.disconnect();
       window.removeEventListener('resize', updateVisibleActionCount);
     };
-  }, [viewMode]);
+  }, [viewMode, primaryOverflowActionCount, selectionMode]);
 
   // 高亮搜索关键词的工具函数 - 使用缓存优化
   const highlightSearchTerm = useCallback((text: string, searchTerm: string): React.ReactNode => {
@@ -253,6 +537,9 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
     return () => {
       if (dragHintTimeoutRef.current) {
         clearTimeout(dragHintTimeoutRef.current);
+      }
+      if (touchSuppressTimeoutRef.current) {
+        clearTimeout(touchSuppressTimeoutRef.current);
       }
     };
   }, []);
@@ -312,46 +599,38 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
     let content: string;
     let contentSource: 'custom' | 'ai' | 'original' | 'empty';
 
+    // 每仓库显示偏好：follow=跟随列表页"显示内容"开关；ai/original=固定显示对应来源
+    const descriptionDisplay = repository.description_display ?? 'follow';
+    const aiAvailable = !!repository.ai_summary && !repository.analysis_failed;
+    const preferAi =
+      aiAvailable &&
+      (descriptionDisplay === 'ai' ||
+        (descriptionDisplay === 'follow' && showAISummary));
+
     // 检查是否有明确的自定义描述（包括空标记）
     const hasExplicitCustomDesc = repository.custom_description !== undefined;
     const isExplicitlyCleared = repository.custom_description === '';
 
     if (isExplicitlyCleared) {
       // 用户明确清空描述
-      content = language === 'zh' ? '（无描述）' : '(No description)';
+      content = t('repositoryCard.no-description');
       contentSource = 'empty';
     } else if (repository.custom_description) {
       // 有自定义描述
       content = repository.custom_description;
       contentSource = 'custom';
-    } else if (showAISummary && repository.ai_summary) {
+    } else if (preferAi) {
       // 显示AI总结
-      content = repository.ai_summary;
+      content = repository.ai_summary!;
       contentSource = 'ai';
     } else if (repository.description) {
-      // 显示原始描述
-      content = repository.description;
+      // 显示原始描述（开启自动翻译时为译文，未完成/失败回退原文）
+      content = translatedDescription ?? repository.description;
       contentSource = 'original';
     } else {
       // 无可用描述
-      content = language === 'zh' ? '暂无描述' : 'No description available';
+      content = t('repositoryCard.no-description-available');
       contentSource = 'empty';
-    }
-
-    if (showAISummary && repository.analysis_failed) {
-      if (isExplicitlyCleared) {
-        content = language === 'zh' ? '（无描述）' : '(No description)';
-        contentSource = 'empty';
-      } else if (repository.custom_description) {
-        content = repository.custom_description;
-        contentSource = 'custom';
-      } else if (repository.description) {
-        content = repository.description;
-        contentSource = 'original';
-      } else {
-        content = language === 'zh' ? '暂无描述' : 'No description available';
-        contentSource = 'empty';
-      }
     }
 
     // 判断仓库是否有任何自定义行为（与筛选器逻辑一致）
@@ -395,11 +674,19 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
       isExplicitlyCleared,
       isCustomized
     };
-  }, [repository, showAISummary, language, allCategories]);
+  }, [repository, showAISummary, allCategories, t, translatedDescription]);
 
   // 使用 useMemo 缓存标签计算
   // 逻辑：优先显示自定义标签，如果没有则按AI分析状态显示AI标签或Topics
   const displayTags = useMemo(() => {
+    // 每仓库标签显示偏好：follow=跟随列表页"显示内容"开关；ai/topics=固定显示对应来源
+    const tagsDisplay = repository.tags_display ?? 'follow';
+    const isAnalyzed = !!repository.analyzed_at && !repository.analysis_failed;
+    const aiTagsUsable = isAnalyzed && !!repository.ai_tags && repository.ai_tags.length > 0;
+    const preferAiTags =
+      aiTagsUsable &&
+      (tagsDisplay === 'ai' || (tagsDisplay === 'follow' && showAISummary));
+
     // 检查是否有明确的自定义标签设置（包括空数组）
     const hasExplicitCustomTags = repository.custom_tags !== undefined;
     const isExplicitlyCleared = hasExplicitCustomTags && repository.custom_tags!.length === 0;
@@ -424,9 +711,8 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
       };
     }
 
-    // 没有自定义标签时，按AI分析状态显示
-    const isAnalyzed = !!repository.analyzed_at && !repository.analysis_failed;
-    if (isAnalyzed && repository.ai_tags && repository.ai_tags.length > 0) {
+    // 没有自定义标签时，按显示偏好决定AI标签或Topics
+    if (preferAiTags && repository.ai_tags) {
       return {
         tags: repository.ai_tags.map(tag => ({ tag, source: 'ai' as const })),
         tagType: 'ai' as const,
@@ -442,30 +728,27 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
         isExplicitlyCleared
       };
     }
-  }, [repository.custom_tags, repository.analyzed_at, repository.analysis_failed, repository.ai_tags, repository.topics]);
+  }, [repository.custom_tags, repository.tags_display, repository.analyzed_at, repository.analysis_failed, repository.ai_tags, repository.topics, showAISummary]);
 
   // 使用 useMemo 缓存AI分析按钮提示文本
   const aiButtonTitle = useMemo(() => {
     if (repository.analysis_failed) {
       const analyzeTime = new Date(repository.analyzed_at!).toLocaleString();
-      return language === 'zh'
-        ? `分析失败于 ${analyzeTime}，点击重新分析`
-        : `Analysis failed on ${analyzeTime}, click to retry`;
+      return t('repositoryCard.analysis-failed-on-analyzetime-click-to-retry', { analyzeTime: analyzeTime });
     } else if (repository.analyzed_at) {
       const analyzeTime = new Date(repository.analyzed_at).toLocaleString();
-      return language === 'zh'
-        ? `已于 ${analyzeTime} 分析过，点击重新分析`
-        : `Analyzed on ${analyzeTime}, click to re-analyze`;
+      return t('repositoryCard.analyzed-on-analyzetime-click-to-re-analyze', { analyzeTime: analyzeTime });
     } else {
-      return language === 'zh' ? 'AI分析此仓库' : 'Analyze with AI';
+      return t('repositoryCard.analyze-with-ai');
     }
-  }, [repository.analysis_failed, repository.analyzed_at, language]);
+  }, [repository.analysis_failed, repository.analyzed_at, t]);
 
   const dragStartPosRef = useRef<{ x: number; y: number } | null>(null);
   const isDraggingRef = useRef(false);
   const dragHandleRef = useRef<HTMLDivElement>(null);
   const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
   const isTouchDraggingRef = useRef(false);
+  const touchSuppressTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleDragStart = (event: React.DragEvent<HTMLDivElement>) => {
     event.dataTransfer.setData('application/x-gsm-repository-id', String(repository.id));
@@ -482,15 +765,15 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
     event.stopPropagation();
     isDraggingRef.current = true;
     // 标记正在拖拽，防止触发卡片点击
-    (window as Window & { __isDraggingRepo?: boolean }).__isDraggingRepo = true;
+    // 全局状态走 dragStore：document 级兜底监听保证源卡片在 drop 时
+    // 被卸载（如分类视图切换）后拖拽状态仍能可靠清除（issue #353）
+    useRepositoryDragStore.getState().startDrag();
   };
 
   const handleDragEnd = () => {
     isDraggingRef.current = false;
-    // 拖拽结束后延迟清除标记，确保 click 事件能检测到拖拽状态
-    setTimeout(() => {
-      (window as Window & { __isDraggingRepo?: boolean }).__isDraggingRepo = false;
-    }, 200);
+    // document 兜底监听通常已先行复位；此处同步调用保持幂等一致
+    useRepositoryDragStore.getState().endDrag();
   };
 
   const handleDragHandleMouseDown = (event: React.MouseEvent) => {
@@ -500,7 +783,7 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
 
   const handleDragHandleClick = (event: React.MouseEvent) => {
     // 如果发生了拖拽，阻止点击事件
-    if (isDraggingRef.current || (window as Window & { __isDraggingRepo?: boolean }).__isDraggingRepo) {
+    if (isDraggingRef.current || useRepositoryDragStore.getState().isDragging) {
       event.preventDefault();
       event.stopPropagation();
     }
@@ -511,6 +794,11 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
     const touch = event.touches[0];
     touchStartPosRef.current = { x: touch.clientX, y: touch.clientY };
     isTouchDraggingRef.current = false;
+    // 取消上一次拖拽的抑制定时器，避免其在本次拖拽的抑制窗口内提前清位
+    if (touchSuppressTimeoutRef.current) {
+      clearTimeout(touchSuppressTimeoutRef.current);
+      touchSuppressTimeoutRef.current = null;
+    }
   };
 
   const handleTouchMove = (event: React.TouchEvent) => {
@@ -528,14 +816,19 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
 
   const handleTouchEnd = () => {
     if (isTouchDraggingRef.current) {
-      // 如果发生了拖拽，阻止后续点击事件
-      (window as Window & { __isDraggingRepo?: boolean }).__isDraggingRepo = true;
-      setTimeout(() => {
-        (window as Window & { __isDraggingRepo?: boolean }).__isDraggingRepo = false;
+      // 触摸拖拽后的兼容鼠标事件序列（touchend → mousemove → click）会让
+      // dragStore 的 document 级 mousemove 兜底立即清位，因此触摸拖拽不能
+      // 走全局拖拽状态；用实例级标志独立抑制 200ms 内补发的 click。
+      // 重启窗口前先取消旧定时器，防止连续快速拖拽时旧定时器提前清位。
+      if (touchSuppressTimeoutRef.current) {
+        clearTimeout(touchSuppressTimeoutRef.current);
+      }
+      touchSuppressTimeoutRef.current = setTimeout(() => {
+        isTouchDraggingRef.current = false;
+        touchSuppressTimeoutRef.current = null;
       }, 200);
     }
     touchStartPosRef.current = null;
-    isTouchDraggingRef.current = false;
   };
 
   // 使用 ref 记录当前选中状态，避免闭包问题
@@ -561,6 +854,14 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
 
   // 使用 useCallback 优化事件处理函数
   const handleCardClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    // 点击目标是链接/按钮等交互元素时永不拦截：链接导航与按钮动作必须保留
+    // 默认行为；时间窗防误触（弹窗关闭防抖/拖拽标志）只应作用于卡片空白区域。
+    // 交互元素检查必须先于所有拦截分支，否则弹窗关闭防抖或拖拽标志一旦
+    // 滞留，「在 GitHub 上查看」等链接会被 preventDefault 吞掉（issue #353）。
+    const target = event.target as HTMLElement;
+    // 排除卡片本身的 role="button"，只检查子元素的交互元素
+    if (target.closest('button, a, input, textarea, select, [draggable="true"]')) return;
+
     const releaseSheetDismissedAt = releaseSheetOutsideDismissedAtRef.current;
     if (releaseSheetDismissedAt !== null) {
       releaseSheetOutsideDismissedAtRef.current = null;
@@ -588,8 +889,8 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
       return;
     }
 
-    // 如果正在拖拽，不处理点击
-    if (isDraggingRef.current || (window as Window & { __isDraggingRepo?: boolean }).__isDraggingRepo) {
+    // 如果正在拖拽，不处理点击（含触摸拖拽后的兼容 click 抑制窗口）
+    if (isDraggingRef.current || isTouchDraggingRef.current || useRepositoryDragStore.getState().isDragging) {
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -598,14 +899,6 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
     const dismissedByPointerDown = menuDismissedByPointerDownRef.current;
     menuDismissedByPointerDownRef.current = false;
     if (dismissedByPointerDown) return;
-
-    // 检查点击目标是否是交互元素或其子元素
-    const target = event.target as HTMLElement;
-    // 排除卡片本身的 role="button"，只检查子元素的交互元素
-    const isInteractiveElement = target.closest('button, a, input, textarea, select, [draggable="true"]');
-
-    // 如果点击的是交互元素，不处理
-    if (isInteractiveElement) return;
 
     // 菜单展开时，点击卡片空白处仅收起菜单，不触发详情或选择。
     if (isActionsMenuOpen) {
@@ -687,140 +980,94 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
       onKeyDown={handleCardKeyDown}
       tabIndex={isModalOpen ? -1 : 0}
       role="button"
-      aria-label={`${repository.full_name} - ${repository.description || 'No description'}`}
+      aria-label={showDescription
+        ? `${repository.full_name} - ${repository.description || 'No description'}`
+        : repository.full_name}
       data-selection-mode={selectionMode}
       aria-disabled={isModalOpen}
     >
       {/* Header - Repository Info */}
-      <div className="flex items-start space-x-3 mb-3">
+      <div className="app-repository-card-header flex items-start space-x-3 mb-3">
         <img
           src={repository.owner.avatar_url}
           alt={repository.owner.login}
-          className={`${viewMode === 'list' ? 'w-10 h-10' : 'w-8 h-8'} rounded-full flex-shrink-0`}
+          className={`app-repository-card-avatar ${viewMode === 'list' ? 'w-10 h-10' : 'w-8 h-8'} rounded-full flex-shrink-0`}
         />
-        <div className="min-w-0 flex-1">
-          <h3 className={`${viewMode === 'list' ? 'text-base' : ''} font-semibold text-foreground dark:text-foreground truncate`}>
+        <div className="app-repository-card-identity min-w-0 flex-1">
+          <h3 className={`app-repository-card-title ${viewMode === 'list' ? 'text-base' : ''} font-semibold text-foreground dark:text-foreground truncate`}>
             {highlightSearchTerm(repository.name, searchQuery)}
           </h3>
-          <p className="text-sm text-muted-foreground dark:text-muted-foreground truncate">
+          <p className="app-repository-card-owner text-sm text-muted-foreground dark:text-muted-foreground truncate">
             {repository.owner.login}
           </p>
         </div>
         
         {/* 拖拽按钮 - 右上角 - 手机和平板端隐藏 */}
         {viewMode === 'list' && (
-          <div className="ml-auto flex items-center gap-1.5 flex-shrink-0">
+          <div className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-1.5">
+            {displayContent.isCustomized && (
+              <span className="inline-flex shrink-0 items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium bg-muted dark:bg-muted/40 text-muted-foreground dark:text-muted-foreground">
+                <Edit3 className="w-3 h-3" />
+                {t('repositoryCard.customized')}
+              </span>
+            )}
             {displayContent.isAnalysisFailed ? (
-                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium bg-destructive/10 text-destructive">
+                <span className="inline-flex shrink-0 items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium bg-destructive/10 text-destructive">
                   <Bot className="w-3 h-3" />
-                  {language === 'zh' ? '分析失败' : 'Analysis failed'}
+                  {t('repositoryCard.analysis-failed')}
                 </span>
             ) : displayContent.isAnalyzed ? (
-              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium bg-primary/10 dark:bg-primary/20 text-primary">
+              <span className="inline-flex shrink-0 items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium bg-primary/10 dark:bg-primary/20 text-primary">
                 <Sparkles className="w-3 h-3" />
-                {language === 'zh' ? '已分析' : 'Analyzed'}
+                {t('repositoryCard.analyzed')}
               </span>
             ) : (
-              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium bg-muted dark:bg-muted/40 text-muted-foreground dark:text-muted-foreground">
+              <span className="inline-flex shrink-0 items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium bg-muted dark:bg-muted/40 text-muted-foreground dark:text-muted-foreground">
                 <Bot className="w-3 h-3" />
-                {language === 'zh' ? '待分析' : 'Not analyzed'}
+                {t('repositoryCard.not-analyzed')}
               </span>
             )}
-            {!selectionMode && (
-              <Button
-                type="button"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setEditModalOpen(true);
+            {!selectionMode ? (
+              <OverflowActionRow
+                actionRowRef={overflowActionRowRef}
+                testId="list-action-row"
+                className="app-repository-actions flex min-w-0 flex-1 items-center justify-end gap-1.5 overflow-hidden"
+                visibleActionCount={visibleOverflowActionCount}
+                primaryActionCount={primaryOverflowActionCount}
+                actionPreferences={actionPreferences}
+                selectionMode={selectionMode}
+                onAskRepository={onAskRepository}
+                repository={repository}
+                language={language}
+                docsUrl={language === 'zh' ? getZreadUrl(repository.full_name) : getDeepWikiUrl(repository.html_url)}
+                githubUrl={repository.html_url}
+                aiButtonTitle={aiButtonTitle}
+                isAnalyzing={isAnalyzing}
+                isSubscribed={isSubscribed}
+                unstarring={unstarring}
+                vectorSearchAvailable={vectorSearchAvailable}
+                isFindingSimilar={isFindingSimilar}
+                onFindSimilar={handleFindSimilar}
+                persistFindSimilarInMenu
+                isActionsMenuOpen={isActionsMenuOpen}
+                onActionsMenuOpenChange={setIsActionsMenuOpen}
+                onAnalyze={handleAIAnalyze}
+                onAsk={onAskRepository ? () => onAskRepository(repository) : undefined}
+                onToggleReleaseSubscription={toggleReleaseSubscription}
+                onEdit={() => setEditModalOpen(true)}
+                editButtonTitle={displayContent.isCustomized ? t('repositoryCard.customized-edit-repository-info') : t('repositoryCard.edit-repository-info')}
+                onViewReleases={() => setReleaseSheetOpen(true)}
+                onUnstar={handleUnstar}
+                menuAlign="end"
+                onMenuPointerDownOutside={(target) => {
+                  if (cardRef.current?.contains(target)) {
+                    menuDismissedByPointerDownRef.current = true;
+                  }
                 }}
-                variant="ghost"
-                size="icon"
-                className="text-primary"
-                title={displayContent.isCustomized ? (language === 'zh' ? '已自定义，编辑仓库信息' : 'Customized, edit repository info') : (language === 'zh' ? '编辑仓库信息' : 'Edit repository info')}
-                aria-label={language === 'zh' ? '编辑仓库信息' : 'Edit repository info'}
-              >
-                <Edit3 className="w-4 h-4" />
-              </Button>
-            )}
+                t={t}
+              />
+            ) : null}
           </div>
-        )}
-
-        {viewMode === 'list' && !selectionMode && (
-          <DropdownMenu open={isActionsMenuOpen} onOpenChange={setIsActionsMenuOpen}>
-            <DropdownMenuTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                title={language === 'zh' ? '更多操作' : 'More actions'}
-                aria-label={language === 'zh' ? '更多操作' : 'More actions'}
-                onClick={(event) => event.stopPropagation()}
-              >
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="end"
-              className="w-52"
-              onClick={(event) => event.stopPropagation()}
-              onPointerDownOutside={(event) => {
-                if (cardRef.current?.contains(event.target as Node)) {
-                  menuDismissedByPointerDownRef.current = true;
-                }
-              }}
-            >
-              <DropdownMenuLabel>{language === 'zh' ? '仓库操作' : 'Repository actions'}</DropdownMenuLabel>
-              <DropdownMenuItem
-                disabled={isAnalyzing}
-                onSelect={() => void handleAIAnalyze()}
-              >
-                {isAnalyzing ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Bot className="mr-2 h-3.5 w-3.5" />}
-                {language === 'zh' ? 'AI 分析' : 'Analyze with AI'}
-              </DropdownMenuItem>
-              {onAskRepository && (
-                <DropdownMenuItem onSelect={() => onAskRepository(repository)}>
-                  <MessageSquareText className="mr-2 h-3.5 w-3.5" />
-                  {language === 'zh' ? '问答此仓库' : 'Ask this repository'}
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuItem onSelect={() => toggleReleaseSubscription()}>
-                {isSubscribed ? <Bell className="mr-2 h-3.5 w-3.5" /> : <BellOff className="mr-2 h-3.5 w-3.5" />}
-                {isSubscribed ? (language === 'zh' ? '取消订阅 Release' : 'Unsubscribe from releases') : (language === 'zh' ? '订阅 Release' : 'Subscribe to releases')}
-              </DropdownMenuItem>
-              {vectorSearchAvailable && (
-                <DropdownMenuItem disabled={isFindingSimilar} onSelect={() => handleFindSimilar()}>
-                  {isFindingSimilar ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Search className="mr-2 h-3.5 w-3.5" />}
-                  {language === 'zh' ? '查找同类仓库' : 'Find similar repositories'}
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={() => setReleaseSheetOpen(true)}>
-                <PackageOpen className="mr-2 h-3.5 w-3.5" />
-                {language === 'zh' ? '查看 Release' : 'View releases'}
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <a
-                  href={language === 'zh' ? getZreadUrl(repository.full_name) : getDeepWikiUrl(repository.html_url)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  <BookOpen className="mr-2 h-3.5 w-3.5" />
-                  {language === 'zh' ? '在 Zread 中查看' : 'View on DeepWiki'}
-                </a>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <a href={repository.html_url} target="_blank" rel="noopener noreferrer">
-                  <ExternalLink className="mr-2 h-3.5 w-3.5" />
-                  {language === 'zh' ? '在 GitHub 中查看' : 'View on GitHub'}
-                </a>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem className="text-destructive focus:text-destructive" disabled={unstarring} onSelect={() => void handleUnstar()}>
-                <StarOff className={`mr-2 h-3.5 w-3.5 ${unstarring ? 'animate-pulse' : ''}`} />
-                {language === 'zh' ? '取消 Star' : 'Unstar'}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
         )}
 
         {viewMode === 'grid' && !selectionMode && (
@@ -856,16 +1103,16 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
               onTouchEnd={handleTouchEnd}
               tabIndex={0}
               role="button"
-              aria-label={language === 'zh' ? '编辑仓库分类' : 'Edit repository category'}
+              aria-label={t('repositoryCard.edit-repository-category')}
               className="linear-icon-button flex items-center justify-center w-8 h-8 cursor-grab active:cursor-grabbing touch-manipulation"
-              title={language === 'zh' ? '拖拽我到侧栏以分类' : 'Drag me to sidebar to categorize'}
+              title={t('repositoryCard.drag-me-to-sidebar-to-categorize')}
             >
               <GripVertical className="w-4 h-4" />
             </div>
             {/* 弱气泡提示 */}
             {showDragHint && (
               <div className="absolute top-full right-0 z-50 mt-2 whitespace-nowrap rounded-lg border border-border bg-popover px-3 py-1.5 text-xs text-popover-foreground shadow-dialog animate-fade-in">
-                {language === 'zh' ? '拖拽我到左侧分类栏' : 'Drag me to left sidebar'}
+                {t('repositoryCard.drag-me-to-left-sidebar')}
                 {/* 气泡箭头 */}
                 <div className="absolute bottom-full right-3 h-0 w-0 border-x-4 border-b-4 border-l-transparent border-r-transparent border-b-popover"></div>
               </div>
@@ -874,209 +1121,87 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
         )}
       </div>
 
-      {/* Grid actions occupy equal slots from the left; tail actions collapse into a menu when space is constrained. */}
-      {viewMode === 'grid' && (
-        <div ref={gridActionRowRef} data-testid="grid-action-row" className="mb-4 flex w-full items-center justify-start gap-1.5 overflow-hidden">
-          {visibleGridActionCount >= 1 && (
-            <SelectionAwareButton
-              onClick={handleAIAnalyze}
-              disabled={isAnalyzing}
-              selectionMode={selectionMode}
-              className="bg-muted text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-              title={aiButtonTitle}
-              aria-label={aiButtonTitle}
-            >
-              {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bot className="w-4 h-4" />}
-            </SelectionAwareButton>
-          )}
-          {onAskRepository && visibleGridActionCount >= 2 && (
-            <SelectionAwareButton
-              onClick={() => onAskRepository(repository)}
-              selectionMode={selectionMode}
-              className="bg-muted text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-              title={language === 'zh' ? '问答此仓库' : 'Ask this repository'}
-              aria-label={language === 'zh' ? '问答此仓库' : 'Ask this repository'}
-            >
-              <MessageSquareText className="w-4 h-4" />
-            </SelectionAwareButton>
-          )}
-          {visibleGridActionCount >= 3 && (
-            <SelectionAwareButton
-              onClick={() => toggleReleaseSubscription()}
-              selectionMode={selectionMode}
-              className={`${isSubscribed
-                ? 'bg-primary text-primary-foreground shadow-sm'
-                : 'bg-muted text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground'
-              }`}
-              title={isSubscribed ? (language === 'zh' ? '取消订阅发布' : 'Unsubscribe from releases') : (language === 'zh' ? '订阅发布' : 'Subscribe to releases')}
-              aria-label={isSubscribed ? (language === 'zh' ? '取消订阅发布' : 'Unsubscribe from releases') : (language === 'zh' ? '订阅发布' : 'Subscribe to releases')}
-              aria-pressed={isSubscribed}
-            >
-              {isSubscribed ? <Bell className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
-            </SelectionAwareButton>
-          )}
-          {visibleGridActionCount >= 4 && (
-            <SelectionAwareButton
-              onClick={() => setEditModalOpen(true)}
-              selectionMode={selectionMode}
-              variant="edit"
-              title={language === 'zh' ? '编辑仓库信息' : 'Edit repository info'}
-              aria-label={language === 'zh' ? '编辑仓库信息' : 'Edit repository info'}
-            >
-              <Edit3 className="w-4 h-4" />
-            </SelectionAwareButton>
-          )}
-          {visibleGridActionCount >= 5 && (
-            <SelectionAwareButton
-              onClick={() => setReleaseSheetOpen(true)}
-              selectionMode={selectionMode}
-              className="bg-muted text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-              title={language === 'zh' ? '查看 Release' : 'View releases'}
-              aria-label={language === 'zh' ? '查看 Release' : 'View releases'}
-            >
-              <PackageOpen className="w-4 h-4" />
-            </SelectionAwareButton>
-          )}
-          {visibleGridActionCount >= 6 && (
-            <a
-              href={language === 'zh' ? getZreadUrl(repository.full_name) : getDeepWikiUrl(repository.html_url)}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(event) => selectionMode && event.preventDefault()}
-              className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground ${selectionMode ? 'pointer-events-none opacity-50' : ''}`}
-              title={language === 'zh' ? '在Zread中查看' : 'View on DeepWiki'}
-            >
-              <BookOpen className="w-4 h-4" />
-            </a>
-          )}
-          {visibleGridActionCount >= 7 && (
-            <a
-              href={repository.html_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(event) => selectionMode && event.preventDefault()}
-              className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground ${selectionMode ? 'pointer-events-none opacity-50' : ''}`}
-              title={language === 'zh' ? '在GitHub上查看' : 'View on GitHub'}
-            >
-              <ExternalLink className="w-4 h-4" />
-            </a>
-          )}
-          {visibleGridActionCount >= 8 && (
-            <SelectionAwareButton
-              onClick={handleUnstar}
-              disabled={unstarring}
-              selectionMode={selectionMode}
-              variant="unstar"
-              title={language === 'zh' ? '取消 Star' : 'Unstar'}
-            >
-              <StarOff className={`w-4 h-4 ${unstarring ? 'animate-pulse' : ''}`} />
-            </SelectionAwareButton>
-          )}
-          {visibleGridActionCount < 8 && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  disabled={selectionMode}
-                  className="h-8 w-8 shrink-0 rounded-md bg-muted text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                  aria-label={language === 'zh' ? '更多仓库操作' : 'More repository actions'}
-                  title={language === 'zh' ? '更多仓库操作' : 'More repository actions'}
-                >
-                  <MoreHorizontal className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-52" onClick={(event) => event.stopPropagation()}>
-                {visibleGridActionCount < 1 && (
-                  <DropdownMenuItem disabled={isAnalyzing} onSelect={() => void handleAIAnalyze()}>
-                    {isAnalyzing ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Bot className="mr-2 h-3.5 w-3.5" />}
-                    {language === 'zh' ? 'AI 分析' : 'Analyze with AI'}
-                  </DropdownMenuItem>
-                )}
-                {onAskRepository && visibleGridActionCount < 2 && (
-                  <DropdownMenuItem onSelect={() => onAskRepository(repository)}>
-                    <MessageSquareText className="mr-2 h-3.5 w-3.5" />
-                    {language === 'zh' ? '问答此仓库' : 'Ask this repository'}
-                  </DropdownMenuItem>
-                )}
-                {visibleGridActionCount < 3 && (
-                  <DropdownMenuItem onSelect={() => toggleReleaseSubscription()}>
-                    {isSubscribed ? <Bell className="mr-2 h-3.5 w-3.5" /> : <BellOff className="mr-2 h-3.5 w-3.5" />}
-                    {isSubscribed ? (language === 'zh' ? '取消订阅 Release' : 'Unsubscribe from releases') : (language === 'zh' ? '订阅 Release' : 'Subscribe to releases')}
-                  </DropdownMenuItem>
-                )}
-                {visibleGridActionCount < 4 && (
-                  <DropdownMenuItem onSelect={() => setEditModalOpen(true)}>
-                    <Edit3 className="mr-2 h-3.5 w-3.5" />
-                    {language === 'zh' ? '编辑仓库信息' : 'Edit repository info'}
-                  </DropdownMenuItem>
-                )}
-                {visibleGridActionCount < 5 && (
-                  <DropdownMenuItem onSelect={() => setReleaseSheetOpen(true)}>
-                    <PackageOpen className="mr-2 h-3.5 w-3.5" />
-                    {language === 'zh' ? '查看 Release' : 'View releases'}
-                  </DropdownMenuItem>
-                )}
-                {visibleGridActionCount < 6 && (
-                  <DropdownMenuItem asChild>
-                    <a href={language === 'zh' ? getZreadUrl(repository.full_name) : getDeepWikiUrl(repository.html_url)} target="_blank" rel="noopener noreferrer">
-                      <BookOpen className="mr-2 h-3.5 w-3.5" />
-                      {language === 'zh' ? '在 Zread 中查看' : 'View on DeepWiki'}
-                    </a>
-                  </DropdownMenuItem>
-                )}
-                {visibleGridActionCount < 7 && (
-                  <DropdownMenuItem asChild>
-                    <a href={repository.html_url} target="_blank" rel="noopener noreferrer">
-                      <ExternalLink className="mr-2 h-3.5 w-3.5" />
-                      {language === 'zh' ? '在 GitHub 中查看' : 'View on GitHub'}
-                    </a>
-                  </DropdownMenuItem>
-                )}
-                {visibleGridActionCount < 8 && (
-                  <DropdownMenuItem className="text-destructive focus:text-destructive" disabled={unstarring} onSelect={() => void handleUnstar()}>
-                    <StarOff className={`mr-2 h-3.5 w-3.5 ${unstarring ? 'animate-pulse' : ''}`} />
-                    {language === 'zh' ? '取消 Star' : 'Unstar'}
-                  </DropdownMenuItem>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
-        </div>
+      {viewMode === 'grid' && !selectionMode && (
+        <OverflowActionRow
+          actionRowRef={overflowActionRowRef}
+          testId="grid-action-row"
+          className="app-repository-actions flex w-full items-center justify-start gap-1.5 overflow-hidden"
+          visibleActionCount={visibleOverflowActionCount}
+          primaryActionCount={primaryOverflowActionCount}
+          actionPreferences={actionPreferences}
+          selectionMode={selectionMode}
+          onAskRepository={onAskRepository}
+          repository={repository}
+          language={language}
+          docsUrl={language === 'zh' ? getZreadUrl(repository.full_name) : getDeepWikiUrl(repository.html_url)}
+          githubUrl={repository.html_url}
+          aiButtonTitle={aiButtonTitle}
+          isAnalyzing={isAnalyzing}
+          isSubscribed={isSubscribed}
+          unstarring={unstarring}
+          isActionsMenuOpen={isActionsMenuOpen}
+          onActionsMenuOpenChange={setIsActionsMenuOpen}
+          onAnalyze={handleAIAnalyze}
+          onAsk={onAskRepository ? () => onAskRepository(repository) : undefined}
+          onToggleReleaseSubscription={toggleReleaseSubscription}
+          onEdit={() => setEditModalOpen(true)}
+          editButtonTitle={displayContent.isCustomized ? t('repositoryCard.customized-edit-repository-info') : t('repositoryCard.edit-repository-info')}
+          onViewReleases={() => setReleaseSheetOpen(true)}
+          onUnstar={handleUnstar}
+          menuAlign="start"
+          onMenuPointerDownOutside={(target) => {
+            if (cardRef.current?.contains(target)) {
+              menuDismissedByPointerDownRef.current = true;
+            }
+          }}
+          t={t}
+        />
       )}
 
-      {/* Description */}
-      <div className={viewMode === 'list' ? 'mb-3' : 'mb-4 flex-1'}>
-        <p
-          tabIndex={0}
-          className={viewMode === 'list'
-            ? 'text-sm leading-6 text-muted-foreground dark:text-muted-foreground line-clamp-2 transition-colors duration-200 [text-wrap:pretty] hover:text-foreground dark:hover:text-foreground'
-            : 'text-foreground dark:text-muted-foreground text-[13px] leading-[1.625] line-clamp-3 mb-2 transition-colors duration-200 [text-wrap:pretty] hover:text-foreground dark:hover:text-foreground rounded-md px-1 -mx-1 hover:bg-muted dark:hover:bg-card/[0.02]'}
-        >
-          {highlightSearchTerm(displayContent.content, searchQuery)}
-        </p>
+      {/* Description with shared Tooltip. Keep analysis status visible independently. */}
+      {(showDescription || (
+        viewMode === 'grid'
+        && (displayContent.isCustomized || displayContent.isAnalysisFailed || displayContent.isAnalyzed)
+      )) && (
+      <div className={viewMode === 'list' ? 'mb-3' : 'app-repository-card-copy'}>
+        {showDescription && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <p
+              tabIndex={0}
+              className={`app-repository-card-description ${viewMode === 'list'
+                ? 'text-sm leading-6 text-muted-foreground dark:text-muted-foreground line-clamp-2 transition-colors duration-200 [text-wrap:pretty] hover:text-foreground dark:hover:text-foreground'
+                : 'text-foreground dark:text-muted-foreground line-clamp-2 mb-2 transition-colors duration-200 [text-wrap:pretty] hover:text-foreground dark:hover:text-foreground rounded-md px-1 -mx-1 hover:bg-muted dark:hover:bg-card/[0.02]'}`}
+            >
+              {highlightSearchTerm(displayContent.content, searchQuery)}
+            </p>
+          </TooltipTrigger>
+          <TooltipContent side="top" align="start" className="max-w-lg whitespace-pre-wrap break-words">
+            {displayContent.content}
+          </TooltipContent>
+        </Tooltip>
+        )}
 
         {/* 方案一：同时显示多个状态标签 */}
         {viewMode === 'grid' && (
         <div className="flex items-center space-x-2 flex-wrap gap-y-1">
           {/* 已自定义标签 - 与筛选器逻辑一致 */}
           {displayContent.isCustomized && (
-            <div className="flex items-center space-x-1 text-xs text-muted-foreground dark:text-muted-foreground" title={language === 'zh' ? '此仓库已自定义（描述、标签或分类）' : 'This repository has been customized (description, tags or category)'}>
+            <div className="flex items-center space-x-1 text-xs text-muted-foreground dark:text-muted-foreground" title={t('repositoryCard.this-repository-has-been-customized-description')}>
               <Edit3 className="w-3 h-3" />
-              <span>{language === 'zh' ? '已自定义' : 'Customized'}</span>
+              <span>{t('repositoryCard.customized')}</span>
             </div>
           )}
           {/* AI 分析状态标签 (合并展示) */}
           {displayContent.isAnalysisFailed ? (
-            <div className="flex items-center space-x-1 text-xs text-destructive dark:text-destructive" title={language === 'zh' ? 'AI分析失败，点击AI按钮重新分析' : 'AI analysis failed, click AI button to retry'}>
+            <div className="flex items-center space-x-1 text-xs text-destructive dark:text-destructive" title={t('repositoryCard.ai-analysis-failed-click-ai-button-to-retry')}>
               <Bot className="w-3 h-3" />
-              <span>{language === 'zh' ? '分析失败' : 'Failed'}</span>
+              <span>{t('repositoryCard.failed')}</span>
               <div className="group relative">
                 <HelpCircle className="w-3 h-3 text-destructive/70 dark:text-destructive/70 cursor-help" />
                 <div className="absolute left-0 top-full z-[9999] mt-2 w-72 max-w-xs rounded-lg border border-border bg-popover p-3 text-xs text-popover-foreground opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-[opacity,visibility] whitespace-normal break-words shadow-lg">
                   <p className="text-muted-foreground dark:text-muted-foreground leading-relaxed">
-                    {repository.analysis_error || (language === 'zh' ? 'AI分析失败，请检查AI配置和网络连接' : 'AI analysis failed, please check AI configuration and network connection')}
+                    {repository.analysis_error || (t('repositoryCard.ai-analysis-failed-please-check-ai-configuration'))}
                   </p>
                   <div className="absolute top-[-4px] left-3 h-2 w-2 rotate-45 transform border-l border-t border-border bg-popover"></div>
                 </div>
@@ -1085,25 +1210,26 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
           ) : displayContent.isAnalyzed ? (
             <div
               className="flex items-center space-x-1 px-2 py-0.5 rounded-full text-xs font-medium bg-primary/10 dark:bg-primary/20 text-primary border border-primary/20 dark:border-primary/20"
-              title={displayContent.analyzedAt ? `${language === 'zh' ? '分析于' : 'Analyzed on'} ${new Date(displayContent.analyzedAt).toLocaleString()}` : ''}
+              title={displayContent.analyzedAt ? t('repositoryCard.analyzed-on-date', { date: new Date(displayContent.analyzedAt).toLocaleString(getIntlLocale(language)) }) : ''}
             >
               <Sparkles className="w-3 h-3" />
-              <span>{language === 'zh' ? 'AI已分析' : 'AI Analyzed'}</span>
+              <span>{t('repositoryCard.ai-analyzed')}</span>
             </div>
           ) : null}
         </div>
         )}
       </div>
+      )}
 
       {/* List mode keeps tags and repository metadata on one wrapping information row. */}
       <div className={viewMode === 'list' ? 'flex flex-wrap items-center gap-x-3 gap-y-2' : 'contents'}>
       {/* Tags - 未AI分析时显示Topics，AI分析后显示AI标签 */}
-      {displayTags.tags.length > 0 && (
-        <div className={`flex flex-wrap ${viewMode === 'list' ? 'gap-1' : 'gap-2 mb-4'}`}>
+      {isRepositoryCardFieldVisible(cardFields, 'tags') && displayTags.tags.length > 0 && (
+        <div className={`app-repository-card-tags flex flex-wrap ${viewMode === 'list' ? 'gap-1' : 'gap-2'}`}>
           {displayTags.tags.map((tagItem, index) => (
             <span
               key={`tag-${index}`}
-              className={`linear-card-tag font-medium ${viewMode === 'list' ? 'px-1.5 py-0.5 text-xs' : 'px-2 py-1 text-xs'}`}
+              className={`linear-card-tag app-repository-card-tag font-medium ${viewMode === 'list' ? 'px-1.5 py-0.5 text-xs' : 'px-2 py-1 text-xs'}`}
             >
               {highlightSearchTerm(tagItem.tag, searchQuery)}
             </span>
@@ -1113,9 +1239,9 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
 
       {/* Platform Icons */}
       {viewMode === 'grid' && displayPlatforms.length > 0 && (
-        <div className="flex items-center space-x-2 mb-4">
+        <div className="app-repository-card-platforms flex items-center space-x-2">
           <span className="text-xs text-muted-foreground dark:text-muted-foreground">
-            {language === 'zh' ? '支持平台:' : 'Platforms:'}
+            {t('repositoryCard.platforms')}
           </span>
           <div className="flex space-x-1">
             {displayPlatforms.slice(0, 6).map((platform, index) => {
@@ -1137,10 +1263,10 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
       )}
 
       {/* Stats */}
-      <div className={viewMode === 'list' ? 'contents' : 'space-y-3 mt-auto'}>
+      <div className={viewMode === 'list' ? 'app-repository-list-stats' : 'app-repository-card-stats space-y-3'}>
         {/* Language and Stars */}
-        <div className={`flex items-center ${viewMode === 'list' ? 'space-x-3 flex-wrap gap-y-1' : 'space-x-4'} text-xs text-muted-foreground dark:text-muted-foreground`}>
-          {repository.language && (
+        <div className={`app-repository-card-meta flex items-center ${viewMode === 'list' ? 'space-x-3 flex-wrap gap-y-1' : 'space-x-4'} text-xs text-muted-foreground dark:text-muted-foreground`}>
+          {isRepositoryCardFieldVisible(cardFields, 'language') && repository.language && (
             <div className="flex items-center space-x-1 min-w-0">
               <div
                 className="w-2.5 h-2.5 rounded-full flex-shrink-0"
@@ -1149,17 +1275,19 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
               <span className="truncate max-w-20">{repository.language}</span>
             </div>
           )}
+          {isRepositoryCardFieldVisible(cardFields, 'stars') && (
           <div className="flex items-center space-x-1 flex-shrink-0">
             <Star className="w-3.5 h-3.5" />
             <span className="truncate max-w-16">{formatNumber(repository.stargazers_count)}</span>
           </div>
+          )}
           {viewMode === 'list' && displayPlatforms.length > 0 && (
             <div className="flex items-center space-x-1 min-w-0">
               <Terminal className="w-3.5 h-3.5 flex-shrink-0" />
               <span className="truncate max-w-40">{displayPlatforms.slice(0, 3).map(getPlatformDisplayName).join(' · ')}</span>
             </div>
           )}
-          {(() => {
+          {isRepositoryCardFieldVisible(cardFields, 'license') && (() => {
             // license：归一化后展示 SPDX id；无 license 不渲染
             const lic = normalizeLicense(repository.license);
             if (lic === NO_LICENSE_SENTINEL) return null;
@@ -1173,13 +1301,17 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
         </div>
 
         {/* Update time is a compact footer in list mode and stays centered between divider and card edge. */}
-        <div className={viewMode === 'list' ? 'basis-full flex-none' : 'mt-4'}>
-        <div className={`flex items-center justify-between text-muted-foreground dark:text-muted-foreground border-t ui-divider ${viewMode === 'list' ? 'w-full h-14 mt-4 text-sm leading-5' : 'pt-2 text-sm'}`}>
-          <div className="relative flex min-w-0 items-center gap-1.5 leading-none">
-            <Calendar className={`w-4 h-4 flex-shrink-0 transition-opacity duration-150 ${viewMode === 'grid' && vectorSearchAvailable && !selectionMode ? 'group-hover:opacity-0' : ''}`} />
-            <span className={`truncate transition-opacity duration-150 ${viewMode === 'grid' && vectorSearchAvailable && !selectionMode ? 'group-hover:opacity-0' : ''}`}>
-              {language === 'zh' ? '最近提交' : 'Last pushed'} {formatDistanceToNow(new Date(repository.pushed_at || repository.updated_at), { addSuffix: true, ...(language === 'zh' ? { locale: zhCN } : {}) })}
+        <div className={viewMode === 'list' ? 'app-repository-list-time flex-none' : 'mt-4'}>
+        <div className={`app-repository-card-footer flex items-center justify-between text-muted-foreground dark:text-muted-foreground border-t ui-divider ${viewMode === 'list' ? 'w-full text-xs' : 'pt-2 text-sm'}`}>
+          <div className="group/footer relative flex min-w-0 items-center gap-1.5 leading-none">
+            {isRepositoryCardFieldVisible(cardFields, 'lastUpdated') && (
+            <>
+            <Calendar className={`w-4 h-4 flex-shrink-0 transition-opacity duration-150 ${viewMode === 'grid' && vectorSearchAvailable && !selectionMode ? `group-hover:opacity-0 group-hover:invisible group-focus-within/footer:opacity-0 group-focus-within/footer:invisible ${isFindingSimilar ? 'invisible' : ''}` : ''}`} />
+            <span className={`truncate transition-opacity duration-150 ${viewMode === 'grid' && vectorSearchAvailable && !selectionMode ? `group-hover:opacity-0 group-hover:invisible group-focus-within/footer:opacity-0 group-focus-within/footer:invisible ${isFindingSimilar ? 'invisible' : ''}` : ''}`}>
+              {t('repositoryCard.last-pushed-time', { time: formatDistanceToNow(new Date(repository.pushed_at || repository.updated_at), { addSuffix: true, locale: getDateFnsLocale(language) }) })}
             </span>
+            </>
+            )}
 
             {viewMode === 'grid' && vectorSearchAvailable && !selectionMode && (
               <Button
@@ -1189,11 +1321,11 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
                   handleFindSimilar();
                 }}
                 disabled={isFindingSimilar}
-                className="absolute -inset-y-1 left-0 flex h-auto items-center space-x-1 text-primary dark:text-primary font-medium opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-events-none group-hover:pointer-events-auto focus-visible:pointer-events-auto transition-opacity duration-150 hover:underline disabled:cursor-not-allowed disabled:hover:no-underline"
-                title={language === 'zh' ? '查找相似仓库' : 'Find similar repositories'}
+                className={`absolute -inset-y-1 left-0 flex h-auto items-center space-x-1 text-primary dark:text-primary font-medium transition-opacity duration-150 hover:underline disabled:cursor-not-allowed disabled:hover:no-underline ${isFindingSimilar ? 'opacity-100 pointer-events-auto' : 'opacity-0 group-hover:opacity-100 group-focus-within/footer:opacity-100 focus-visible:opacity-100 pointer-events-none group-hover:pointer-events-auto group-focus-within/footer:pointer-events-auto focus-visible:pointer-events-auto'}`}
+                title={t('repositoryCard.find-similar-repositories-2')}
               >
                 {isFindingSimilar ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-                <span>{language === 'zh' ? '查找相似仓库' : 'Find similar'}</span>
+                <span>{t('repositoryCard.find-similar')}</span>
               </Button>
             )}
           </div>
@@ -1208,13 +1340,13 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
                 e.stopPropagation();
                 onSelect(repository.id);
               }}
-              className={`flex items-center justify-center w-7 h-7 rounded-md p-0 transition-colors ${
+              className={`app-repository-select-toggle flex items-center justify-center w-7 h-7 rounded-md p-0 transition-colors ${
                 isSelected
                   ? 'bg-accent text-accent-foreground'
                   : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
               }`}
-              title={isSelected ? (language === 'zh' ? '取消选择' : 'Deselect') : (language === 'zh' ? '选择' : 'Select')}
-              aria-label={isSelected ? (language === 'zh' ? '取消选择' : 'Deselect') : (language === 'zh' ? '选择' : 'Select')}
+              title={isSelected ? (t('repositoryCard.deselect')) : (t('repositoryCard.select'))}
+              aria-label={isSelected ? (t('repositoryCard.deselect')) : (t('repositoryCard.select'))}
               aria-pressed={isSelected}
             >
               {isSelected ? <CheckSquare className="w-5 h-5" /> : <Square className="w-5 h-5" />}
@@ -1232,6 +1364,7 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
           onClose={() => setEditModalOpen(false)}
           onOutsideDismiss={handleEditModalOutsideDismiss}
           repository={repository}
+          showAISummary={showAISummary}
         />,
         document.body
       )}
@@ -1285,14 +1418,14 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
 
 // 使用 React.memo 优化，避免不必要的重渲染
 export const RepositoryCard = React.memo(RepositoryCardComponent, (prevProps, nextProps) => {
-  const allCategoriesEqual =
+  const allCategoriesEqual = 
     prevProps.allCategories.length === nextProps.allCategories.length &&
-    prevProps.allCategories.every((cat, index) => {
-      const nextCategory = nextProps.allCategories[index];
-      return nextCategory &&
-        cat.id === nextCategory.id &&
-        cat.name === nextCategory.name &&
-        JSON.stringify(cat.keywords) === JSON.stringify(nextCategory.keywords);
+    prevProps.allCategories.every((cat, i) => {
+      const nextCat = nextProps.allCategories[i];
+      return nextCat && 
+             cat.id === nextCat.id && 
+             cat.name === nextCat.name && 
+             JSON.stringify(cat.keywords) === JSON.stringify(nextCat.keywords);
     });
 
   return (
@@ -1305,6 +1438,8 @@ export const RepositoryCard = React.memo(RepositoryCardComponent, (prevProps, ne
     prevProps.repository.ai_platforms === nextProps.repository.ai_platforms &&
     prevProps.repository.custom_description === nextProps.repository.custom_description &&
     prevProps.repository.custom_tags === nextProps.repository.custom_tags &&
+    prevProps.repository.description_display === nextProps.repository.description_display &&
+    prevProps.repository.tags_display === nextProps.repository.tags_display &&
     prevProps.repository.custom_category === nextProps.repository.custom_category &&
     prevProps.repository.category_locked === nextProps.repository.category_locked &&
     prevProps.repository.description === nextProps.repository.description &&

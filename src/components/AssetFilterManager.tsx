@@ -1,5 +1,10 @@
+
+
+
+
+import { useT } from '../i18n/useT';
 import React, { useState, useMemo } from 'react';
-import { Plus, Edit3, Trash2, Filter, ChevronDown, ChevronUp, X, Package, Lock, MonitorSmartphone } from 'lucide-react';
+import { Plus, PencilLine, Trash2, Filter, X, Package, Lock, MonitorSmartphone } from 'lucide-react';
 import { SiAndroid, SiApple, SiLinux } from '@icons-pack/react-simple-icons';
 import { SiWindows } from './SiWindows';
 import { useAppStore } from '../store/useAppStore';
@@ -33,13 +38,6 @@ const PRESET_ICON_MAP: Record<string, string> = {
   'preset-source': 'Package',
 };
 
-const getFilterRuleSummary = (filter: AssetFilter): string => [
-  ...filter.keywords,
-  ...(filter.excludeKeywords ?? []).map(keyword => `-${keyword}`),
-  ...(filter.includeRepos ?? []).map(repository => `repo:${repository}`),
-  ...(filter.alwaysExcludeRepos ?? []).map(repository => `!repo:${repository}`),
-].join(', ');
-
 interface AssetFilterManagerProps {
   selectedFilters: string[];
   onFilterToggle: (filterId: string) => void;
@@ -49,7 +47,6 @@ interface AssetFilterManagerProps {
     status: 'ready' | 'detecting-arch' | 'arch-unknown' | 'unsupported';
     platform: InstallablePlatform | null;
     label: string;
-    matchCount?: number;
   };
 }
 
@@ -59,7 +56,7 @@ export const AssetFilterManager: React.FC<AssetFilterManagerProps> = ({
   onClearFilters,
   currentSystemFilter,
 }) => {
-  const { assetFilters, addAssetFilter, updateAssetFilter, deleteAssetFilter, language } = useAppStore(useShallow((state) => ({
+  const { assetFilters, addAssetFilter, updateAssetFilter, deleteAssetFilter } = useAppStore(useShallow((state) => ({
     assetFilters: state.assetFilters,
     addAssetFilter: state.addAssetFilter,
     updateAssetFilter: state.updateAssetFilter,
@@ -71,7 +68,6 @@ export const AssetFilterManager: React.FC<AssetFilterManagerProps> = ({
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingFilter, setEditingFilter] = useState<AssetFilter | undefined>();
-  const [isExpanded, setIsExpanded] = useState(false);
 
   // 归一化 assetFilters：匹配预设标识的项设为 isPreset=true
   const normalizedFilters = useMemo(() => assetFilters.map(f => {
@@ -98,9 +94,9 @@ export const AssetFilterManager: React.FC<AssetFilterManagerProps> = ({
 
   const handleDeleteFilter = async (filterId: string) => {
     const confirmed = await confirm(
-      t('删除过滤器', 'Delete Filter'),
-      language === 'zh' ? '确定要删除这个过滤器吗？' : 'Are you sure you want to delete this filter?',
-      { type: 'danger', confirmText: t('删除', 'Delete') }
+      t('assetFilterManager.delete-filter'),
+      t('assetFilterManager.are-you-sure-you-want-to-delete-this-filter'),
+      { type: 'danger', confirmText: t('assetFilterManager.delete') }
     );
 
     if (!confirmed) return;
@@ -119,11 +115,7 @@ export const AssetFilterManager: React.FC<AssetFilterManagerProps> = ({
     }
   };
 
-  const handlePresetToggle = (presetId: string) => {
-    onFilterToggle(presetId);
-  };
-
-  const t = (zh: string, en: string) => language === 'zh' ? zh : en;
+  const t = useT('app');
   const CurrentSystemIcon = currentSystemFilter?.platform
     ? getPlatformIcon(currentSystemFilter.platform)
     : MonitorSmartphone;
@@ -132,233 +124,136 @@ export const AssetFilterManager: React.FC<AssetFilterManagerProps> = ({
   const currentSystemUnsupported = currentSystemFilter?.status === 'unsupported';
 
   return (
-    <div className="space-y-3">
-      {/* Compact Header with Toggle */}
-      <div className="flex items-center justify-between">
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => setIsExpanded(!isExpanded)}
-          className="flex items-center space-x-2 px-3 py-2 bg-muted dark:bg-muted/40 rounded-lg hover:bg-accent dark:hover:bg-accent transition-all group"
-          title={isExpanded ? t('收起过滤器', 'Collapse filters') : t('展开过滤器', 'Expand filters')}
-          aria-expanded={isExpanded}
-          aria-controls="asset-filter-panel"
-        >
-          <Filter className={`w-4 h-4 text-muted-foreground dark:text-muted-foreground transition-transform ${
-            isExpanded ? 'text-primary dark:text-primary' : ''
-          }`} aria-hidden="true" />
-          <span className="text-sm font-medium text-foreground dark:text-muted-foreground">
-            {t('过滤器', 'Filters')}
-          </span>
+    <div className="app-side-filter-manager">
+      <div className="app-collection-row">
+        <div className="flex min-w-0 items-center gap-2">
+          <p className="app-section-label">{t('assetFilterManager.filters')}</p>
           {selectedFilters.length > 0 && (
-            <span className="px-2 py-0.5 bg-primary text-primary-foreground text-xs rounded-full">
-              {selectedFilters.length}
-            </span>
+            <span className="app-side-count">{selectedFilters.length}</span>
           )}
-          {isExpanded ? (
-            <ChevronUp className="w-4 h-4 text-muted-foreground dark:text-muted-foreground" aria-hidden="true" />
-          ) : (
-            <ChevronDown className="w-4 h-4 text-muted-foreground dark:text-muted-foreground" aria-hidden="true" />
-          )}
-        </Button>
-
-        <div className="flex items-center space-x-2">
+        </div>
+        <div className="app-side-filter-toolbar">
           {selectedFilters.length > 0 && (
             <Button
               variant="ghost"
               onClick={onClearFilters}
-              className="flex items-center space-x-1 px-2 py-1.5 text-xs text-muted-foreground dark:text-muted-foreground hover:bg-muted dark:hover:bg-accent rounded-lg transition-colors"
-              title={t('清除所有筛选', 'Clear all filters')}
+              className="linear-icon-button app-side-action-button"
+              title={t('assetFilterManager.clear-all-filters')}
               type="button"
-              aria-label={t('清除所有筛选', 'Clear all filters')}
+              aria-label={t('assetFilterManager.clear-all-filters')}
             >
-              <X className="w-3 h-3" aria-hidden="true" />
-              <span className="hidden sm:inline">{t('清除所有筛选', 'Clear all filters')}</span>
+              <X aria-hidden="true" />
             </Button>
           )}
           <Button
             onClick={handleCreateFilter}
-            className="flex items-center space-x-1 px-3 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors text-sm"
-            title={t('新建过滤器', 'New Filter')}
+            variant="ghost"
+            className="linear-icon-button app-side-action-button"
+            title={t('assetFilterManager.new-filter')}
             type="button"
-            aria-label={t('新建过滤器', 'New Filter')}
+            aria-label={t('assetFilterManager.new-filter')}
           >
-            <Plus className="w-4 h-4" aria-hidden="true" />
-            <span className="hidden sm:inline">{t('新建', 'New')}</span>
+            <Plus aria-hidden="true" />
           </Button>
         </div>
       </div>
 
-      {/* Expandable Content */}
-      <div
-        className="grid transition-[grid-template-rows] duration-300 ease-in-out"
-        style={{ gridTemplateRows: isExpanded ? '1fr' : '0fr' }}
-      >
-        <div className="overflow-hidden min-h-0">
-          <div id="asset-filter-panel" className="space-y-3">
-          {/* 内置「当前系统」筛选：不可编辑，仅按检测结果过滤 */}
-          {currentSystemFilter && (
-            <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2">
-              <Button
-                variant="ghost"
-                onClick={() => onFilterToggle(currentSystemFilter.id)}
-                disabled={currentSystemUnsupported}
-                className="h-auto min-h-0 flex-1 items-center justify-start gap-2 p-0 text-left"
-                title={currentSystemUnsupported
-                  ? t('当前设备不支持，已忽略', 'Not supported on this device; ignored')
-                  : t(
-                      `显示能在 ${currentSystemFilter.label} 上运行的资产，以及平台未确认的资产。依据文件名、同版本资产和仓库信息识别；卡片中可点「显示全部」查看其余资产。`,
-                      `Shows assets that run on ${currentSystemFilter.label} plus assets whose platform is unverified, based on file names, sibling assets and repository info. Use "Show all" on a card to see the rest.`,
-                    )}
-                type="button"
-                aria-pressed={currentSystemSelected}
-              >
-                <CurrentSystemIcon className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
+      <div id="asset-filter-panel" className="app-side-list app-side-filter-list">
+        {currentSystemFilter && (
+          <div className="app-side-filter-row">
+            <Button
+              variant="ghost"
+              onClick={() => onFilterToggle(currentSystemFilter.id)}
+              disabled={currentSystemUnsupported}
+              className="app-side-item app-side-multiline-label justify-between"
+              title={currentSystemUnsupported
+                ? t('assetFilterManager.builtin-ignored')
+                : t('assetFilterManager.builtin-tooltip', { device: currentSystemFilter.label })}
+              type="button"
+              aria-pressed={currentSystemSelected}
+            >
+              {/* 两行布局：图标固定，一行放名称+徽标（徽标固定宽度），一行放设备；名称可截断。 */}
+              <span className="app-side-item-label app-side-multiline-label min-w-0 flex-1">
+                <CurrentSystemIcon aria-hidden="true" />
                 <span className="flex min-w-0 flex-col items-start">
-                  <span className="flex items-center gap-1.5">
-                    <span className="truncate text-sm font-medium">{t('当前系统', 'This device')}</span>
-                    <Badge variant="secondary" className="h-4 px-1 text-[9px] font-medium">
-                      {t('内置', 'Built-in')}
+                  <span className="flex w-full min-w-0 items-center gap-1.5">
+                    <span className="truncate">{t('assetFilterManager.builtin-current-system')}</span>
+                    <Badge variant="secondary" className="h-4 shrink-0 whitespace-nowrap px-1.5 text-[9px] font-medium leading-none">
+                      {t('assetFilterManager.builtin-badge')}
                     </Badge>
                   </span>
-                  <span className={`truncate text-xs ${currentSystemUnsupported ? 'text-destructive' : 'text-muted-foreground'}`}>
-                    {currentSystemUnsupported && currentSystemSelected
-                      ? t('当前设备不支持，已忽略', 'Not supported on this device; ignored')
+                  <span className={`w-full truncate text-[11px] ${currentSystemUnsupported ? 'text-destructive' : 'text-muted-foreground'}`}>
+                    {currentSystemUnsupported
+                      ? currentSystemSelected
+                        ? t('assetFilterManager.builtin-ignored')
+                        : t('assetFilterManager.builtin-unsupported')
                       : currentSystemFilter.label}
                   </span>
                 </span>
-              </Button>
-              {typeof currentSystemFilter.matchCount === 'number' && (
-                <span className="flex-shrink-0 rounded-full bg-primary px-2 py-0.5 text-xs text-primary-foreground">
-                  {currentSystemFilter.matchCount}
-                </span>
-              )}
-              <span title={t('内置过滤器不可编辑', "Built-in filter can't be edited")}>
-                <Lock className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" aria-hidden="true" />
+              </span>
+            </Button>
+            <div className="app-side-row-actions">
+              <span title={t('assetFilterManager.builtin-locked')}>
+                <Lock className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
               </span>
             </div>
-          )}
-
-          {/* Preset Filters */}
-          {presetFilters.length > 0 && (
-            <div>
-              <p className="text-xs text-muted-foreground dark:text-muted-foreground mb-2">
-                {t('预设筛选器', 'Preset Filters')}
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {presetFilters.map(preset => {
-                  const Icon = preset.icon ? ICON_MAP[preset.icon] : Filter;
-                  const isSelected = selectedFilters.includes(preset.id);
-                  return (
-                    <div
-                      key={preset.id}
-                      className={`group flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border text-xs transition-colors ${
-                        isSelected
-                          ? 'bg-primary border-transparent text-primary-foreground font-medium'
-                          : 'bg-card border-border text-muted-foreground hover:bg-accent hover:text-accent-foreground'
-                      }`}
-                    >
-                      <Button
-                        variant="ghost"
-                        onClick={() => handlePresetToggle(preset.id)}
-                        className="h-auto min-h-0 flex items-center space-x-1.5 p-0"
-                        title={[...preset.keywords, ...(preset.excludeKeywords ?? []).map(keyword => `-${keyword}`), ...(preset.includeRepos ?? [])].join(', ')}
-                        type="button"
-                        aria-pressed={isSelected}
-                      >
-                        {Icon && <Icon className="w-3.5 h-3.5" aria-hidden="true" />}
-                        <span>{preset.name}</span>
-                      </Button>
-
-                      <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity ml-1">
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleEditFilter(preset)}
-                          className="h-6 w-6 rounded p-0 hover:bg-accent hover:text-accent-foreground transition-colors"
-                          title={t('编辑', 'Edit')}
-                          type="button"
-                          aria-label={t('编辑', 'Edit')}
-                        >
-                          <Edit3 className="w-3 h-3" aria-hidden="true" />
-                        </Button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Custom Filters */}
-          {customFilters.length > 0 && (
-            <div>
-              <p className="text-xs text-muted-foreground dark:text-muted-foreground mb-2">
-                {t('自定义筛选器', 'Custom Filters')}
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {customFilters.map(filter => (
-                  <div
-                    key={filter.id}
-                    className={`group flex items-center space-x-2 px-3 py-2 rounded-lg border transition-colors ${
-                      selectedFilters.includes(filter.id)
-                        ? 'bg-primary border-transparent text-primary-foreground font-medium'
-                        : 'bg-muted border-border text-muted-foreground hover:bg-accent hover:text-accent-foreground'
-                    }`}
-                  >
-                    <Button
-                      variant="ghost"
-                      onClick={() => onFilterToggle(filter.id)}
-                      className="h-auto min-h-0 flex flex-1 items-center justify-start space-x-2 p-0"
-                      aria-pressed={selectedFilters.includes(filter.id)}
-                      aria-label={`${filter.name}${getFilterRuleSummary(filter) ? ` (${getFilterRuleSummary(filter)})` : ''}`}
-                      title={`${filter.name}${getFilterRuleSummary(filter) ? ` (${getFilterRuleSummary(filter)})` : ''}`}
-                      type="button"
-                    >
-                      <span className="font-medium text-sm">{filter.name}</span>
-                      {getFilterRuleSummary(filter) && (
-                        <span className="text-xs opacity-75 hidden lg:inline">({getFilterRuleSummary(filter)})</span>
-                      )}
-                    </Button>
-                    
-                    <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-                      <Button
-                        variant="ghost"
-                        onClick={() => handleEditFilter(filter)}
-                        className="h-6 w-6 rounded p-0 hover:bg-accent dark:hover:bg-accent transition-colors"
-                        title={t('编辑', 'Edit')}
-                        type="button"
-                        aria-label={t('编辑', 'Edit')}
-                      >
-                        <Edit3 className="w-3 h-3" aria-hidden="true" />
-                      </Button>
-                      <Button
-                        variant="destructive"
-                        onClick={() => handleDeleteFilter(filter.id)}
-                        className="h-6 w-6 rounded p-0 transition-colors"
-                        title={t('删除', 'Delete')}
-                        type="button"
-                        aria-label={t('删除', 'Delete')}
-                      >
-                        <Trash2 className="w-3 h-3" aria-hidden="true" />
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {presetFilters.length === 0 && customFilters.length === 0 && (
-            <div className="text-center py-4 bg-background dark:bg-card rounded-lg border-2 border-dashed border-border dark:border-border">
-              <p className="text-xs text-muted-foreground dark:text-muted-foreground">
-                {t('暂无过滤器，点击"新建"创建', 'No filters, click "New" to create')}
-              </p>
-            </div>
-          )}
-
           </div>
-        </div>
+        )}
+
+        {[...presetFilters, ...customFilters].map((filter) => {
+          const Icon = filter.icon ? ICON_MAP[filter.icon] : Filter;
+          const isSelected = selectedFilters.includes(filter.id);
+          return (
+            <div key={filter.id} className="app-side-filter-row">
+              <Button
+                variant="ghost"
+                onClick={() => onFilterToggle(filter.id)}
+                className="app-side-item justify-between"
+                title={filter.keywords.join(', ')}
+                type="button"
+                aria-pressed={isSelected}
+              >
+                <span className="app-side-item-label">
+                  {Icon && <Icon aria-hidden="true" />}
+                  <span className="truncate">{filter.name}</span>
+                </span>
+              </Button>
+              <div className="app-side-row-actions">
+                <Button
+                  variant="ghost"
+                  onClick={() => handleEditFilter(filter)}
+                  className="linear-icon-button app-side-action-button"
+                  title={t('assetFilterManager.edit')}
+                  type="button"
+                  aria-label={`${t('assetFilterManager.edit')} ${filter.name}`}
+                >
+                  <PencilLine aria-hidden="true" />
+                </Button>
+                {!filter.isPreset && (
+                  <Button
+                    variant="ghost"
+                    onClick={() => void handleDeleteFilter(filter.id)}
+                    className="linear-icon-button app-side-action-button text-destructive"
+                    title={t('assetFilterManager.delete')}
+                    type="button"
+                    aria-label={`${t('assetFilterManager.delete')} ${filter.name}`}
+                  >
+                    <Trash2 aria-hidden="true" />
+                  </Button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+
+        {presetFilters.length === 0 && customFilters.length === 0 && (
+          <p className="app-side-empty">
+            {t('assetFilterManager.no-filters-click-new-to-create')}
+          </p>
+        )}
       </div>
+
+      <p className="app-side-filter-note">{t('assetFilterManager.filter-scope-note')}</p>
 
       {/* Filter Modal */}
       <FilterModal

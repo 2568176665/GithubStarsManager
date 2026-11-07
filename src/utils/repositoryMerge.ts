@@ -14,8 +14,13 @@ const LOCAL_REPOSITORY_FIELDS: Array<keyof Repository> = [
   'custom_tags',
   'custom_category',
   'category_locked',
+  'description_display',
+  'tags_display',
   'last_edited',
   'vector_indexed_at',
+  // GitHub 原生状态字段：后端不存储，但 Repository Health / 筛选依赖它们。
+  // 必须同时出现在 CLIENT_ONLY_REPOSITORY_FIELDS（不参与后端同步指纹），
+  // 否则每次拉取都会把它们清空并触发一次多余的「已变化」判定。
   'archived',
   'disabled',
   'fork',
@@ -36,6 +41,7 @@ export const CLIENT_ONLY_REPOSITORY_FIELDS: ReadonlySet<keyof Repository> = new 
   'analysis_error',
   'has_fetched_releases',
   'last_release_fetch_time',
+  // 见 LOCAL_REPOSITORY_FIELDS 中的同名字段：成对出现，缺一不可。
   'archived',
   'disabled',
   'fork',
@@ -77,6 +83,15 @@ export function mergeRepositoriesPreservingLocalMetadata(
       if (localValue !== undefined) {
         (mergedRepository as Record<keyof Repository, unknown>)[field] = localValue;
       }
+    }
+
+    // 显示偏好以同步源提供的新值为准，保证其他设备修改的偏好能传播；
+    // 同步源未提供（GitHub 拉取 / 旧后端）时保留上面合并的本地值。
+    if (incomingRepository.description_display !== undefined) {
+      mergedRepository.description_display = incomingRepository.description_display;
+    }
+    if (incomingRepository.tags_display !== undefined) {
+      mergedRepository.tags_display = incomingRepository.tags_display;
     }
 
     return mergedRepository;

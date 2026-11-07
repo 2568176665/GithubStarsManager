@@ -1,5 +1,7 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { TranslateFn } from '../../i18n/useT';
+import { DialogProvider } from '../../hooks/useDialog';
 import { GeneralPanel } from './GeneralPanel';
 
 const storeState = {
@@ -13,17 +15,25 @@ vi.mock('../../store/useAppStore', () => ({
 vi.mock('../UpdateChecker', () => ({ UpdateChecker: () => <button type="button">Update</button> }));
 vi.mock('./ThemeSettingsCard', () => ({ ThemeSettingsCard: () => <div /> }));
 
-const t = (_zh: string, en: string) => en;
+const t: TranslateFn = (key) => key;
 
 describe('GeneralPanel', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('explains classic and fine-grained token permissions', () => {
-    render(<GeneralPanel t={t} />);
+  it('exposes the GitHub token permission guide', async () => {
+    render(
+      <DialogProvider>
+        <GeneralPanel t={t} />
+      </DialogProvider>,
+    );
 
-    expect(screen.getByText('Classic token:')).toBeInTheDocument();
-    expect(screen.getByText(/Enable the user scope/)).toBeInTheDocument();
-    expect(screen.getByText('Fine-grained token:')).toBeInTheDocument();
-    expect(screen.getByText(/Starring \(read and write\)/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'generalPanel.token-permission-guide' }));
+
+    expect(await screen.findByRole('tab', { name: 'Fine-grained' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Classic' })).toBeInTheDocument();
+    expect(screen.getAllByText('Managing Stars')).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Classic' }));
+    expect(screen.getByText('public_repo')).toBeInTheDocument();
   });
 });

@@ -1,20 +1,28 @@
+import { useT } from "../i18n/useT";
 import { Button } from './ui/button';
 import React, { useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import {
   Plus,
-  Edit3,
+  PencilLine,
   Trash2,
   EyeOff,
-  ChevronLeft,
-  ChevronRight,
+  Undo2,
+  BellRing,
+  Sparkles,
+  CheckCircle2,
+  Layers3,
 } from 'lucide-react';
 import { Category, Repository } from '../types';
 import { useAppStore, getAllCategories, sortCategoriesByOrder } from '../store/useAppStore';
+import { useRepositoryDragStore } from '../store/useRepositoryDragStore';
 import { useShallow } from 'zustand/react/shallow';
 import { CategoryEditModal } from './CategoryEditModal';
 import { useCategorySyncActions } from '../features/repositories/hooks/useCategorySyncActions';
+import { cancelActiveAiSearch } from '../features/repositories/hooks/useSearchActions';
 import { getAICategory, getDefaultCategory, computeCustomCategory, matchesCategory } from '../utils/categoryUtils';
 import { useDialog } from '../hooks/useDialog';
+import { CategoryGlyph } from './CategoryGlyph';
+import { ContextSidebarBody } from './ContextSidebarBody';
 
 interface CategorySidebarProps {
   repositories: Repository[];
@@ -32,37 +40,61 @@ export const CategorySidebar: React.FC<CategorySidebarProps> = ({
     hiddenDefaultCategoryIds,
     defaultCategoryOverrides,
     categoryOrder,
-    collapsedSidebarCategoryCount,
     categoryMatchMode,
     deleteCustomCategory,
     hideDefaultCategory,
     showDefaultCategory,
     language,
     updateRepository,
-    isSidebarCollapsed,
-    setSidebarCollapsed,
+    releaseSubscriptions,
+    searchFilters,
+    setSearchFilters,
+    lastSync,
+    isSyncingStars,
   } = useAppStore(useShallow((state) => ({
     customCategories: state.customCategories,
     hiddenDefaultCategoryIds: state.hiddenDefaultCategoryIds,
     defaultCategoryOverrides: state.defaultCategoryOverrides,
     categoryOrder: state.categoryOrder,
-    collapsedSidebarCategoryCount: state.collapsedSidebarCategoryCount,
     categoryMatchMode: state.categoryMatchMode,
     deleteCustomCategory: state.deleteCustomCategory,
     hideDefaultCategory: state.hideDefaultCategory,
     showDefaultCategory: state.showDefaultCategory,
     language: state.language,
     updateRepository: state.updateRepository,
-    isSidebarCollapsed: state.isSidebarCollapsed,
-    setSidebarCollapsed: state.setSidebarCollapsed,
+    releaseSubscriptions: state.releaseSubscriptions,
+    searchFilters: state.searchFilters,
+    setSearchFilters: state.setSearchFilters,
+    lastSync: state.lastSync,
+    isSyncingStars: state.isSyncingStars,
   })));
 
   const { toast, confirm } = useDialog();
   const { forceSyncToBackend } = useCategorySyncActions();
+  const t = useT('app');
+  // 仓库卡片拖拽中：驱动「全部分类」变为「取消分类」热区提示
+  const isRepoDragging = useRepositoryDragStore((state) => state.isDragging);
 
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingCategory, setEditingCategory] = useState<Category | null>(null);
   const [isCreatingCategory, setIsCreatingCategory] = useState(false);
+  // 分类同步进行中/失败时，footer 不显示「已同步」：lastSync 只反映星标同步，
+  // 分类变更是否落库需要单独跟踪，避免同步失败后状态文案失真
+  const [isSyncingCategories, setIsSyncingCategories] = useState(false);
+  const [hasCategorySyncFailure, setHasCategorySyncFailure] = useState(false);
+
+  const syncCategories = async () => {
+    setIsSyncingCategories(true);
+    try {
+      await forceSyncToBackend({ reportFailures: true });
+      setHasCategorySyncFailure(false);
+    } catch (error) {
+      setHasCategorySyncFailure(true);
+      throw error;
+    } finally {
+      setIsSyncingCategories(false);
+    }
+  };
   const [dragOverCategoryId, setDragOverCategoryId] = useState<string | null>(null);
   // 用于防止拖拽后触发点击的标志
   const justDroppedRef = useRef(false);
@@ -72,37 +104,11 @@ export const CategorySidebar: React.FC<CategorySidebarProps> = ({
     if (typeof window === 'undefined') return false;
     return window.innerWidth < 1024;
   });
-  // 控制文字显示的状态：等侧栏展开动效完成后再显示文字
-  const [showText, setShowText] = useState(!isSidebarCollapsed);
-
-  // 用于存储 showText 定时器的 ref
-  const showTextTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // 用于存储 toggleSidebar 定时器的 ref
-  const toggleSidebarTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 分类列表滚动容器的 ref
   const categoryListRef = useRef<HTMLDivElement>(null);
   // 滚动条显示定时器 ref
   const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isScrolling, setIsScrolling] = useState(false);
-
-  // 监听侧栏状态变化，同步更新文字显示状态
-  useEffect(() => {
-    if (isSidebarCollapsed) {
-      setShowText(false);
-    } else {
-      // 清除之前的定时器
-      if (showTextTimerRef.current) {
-        clearTimeout(showTextTimerRef.current);
-      }
-      // 侧栏展开时，延迟显示文字，使用更短的延迟让体验更流畅
-      showTextTimerRef.current = setTimeout(() => setShowText(true), 150);
-    }
-    return () => {
-      if (showTextTimerRef.current) {
-        clearTimeout(showTextTimerRef.current);
-      }
-    };
-  }, [isSidebarCollapsed]);
 
   // 检测屏幕尺寸
   useEffect(() => {
@@ -113,23 +119,6 @@ export const CategorySidebar: React.FC<CategorySidebarProps> = ({
     window.addEventListener('resize', checkMobile);
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
-
-  // 切换侧栏折叠状态
-  const toggleSidebar = useCallback(() => {
-    // 清除之前的定时器
-    if (toggleSidebarTimerRef.current) {
-      clearTimeout(toggleSidebarTimerRef.current);
-    }
-    if (isSidebarCollapsed) {
-      // 展开侧栏：先展开，再显示文字
-      setSidebarCollapsed(false);
-      toggleSidebarTimerRef.current = setTimeout(() => setShowText(true), 150); // 150ms 后显示文字，配合动效
-    } else {
-      // 折叠侧栏：先隐藏文字，再折叠
-      setShowText(false);
-      toggleSidebarTimerRef.current = setTimeout(() => setSidebarCollapsed(true), 120); // 120ms 后折叠，文字先消失
-    }
-  }, [isSidebarCollapsed, setSidebarCollapsed]);
 
   // 处理分类列表滚动事件
   const handleCategoryScroll = useCallback(() => {
@@ -146,9 +135,6 @@ export const CategorySidebar: React.FC<CategorySidebarProps> = ({
   // 组件卸载时清理定时器
   useEffect(() => {
     return () => {
-      if (toggleSidebarTimerRef.current) {
-        clearTimeout(toggleSidebarTimerRef.current);
-      }
       if (dropTimeoutRef.current) {
         clearTimeout(dropTimeoutRef.current);
       }
@@ -157,28 +143,6 @@ export const CategorySidebar: React.FC<CategorySidebarProps> = ({
       }
     };
   }, []);
-
-  // 键盘快捷键支持 (Ctrl/Cmd + B)
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const active = document.activeElement as HTMLElement | null;
-      const isEditable = active?.tagName === 'INPUT' ||
-                         active?.tagName === 'TEXTAREA' ||
-                         active?.isContentEditable ||
-                         active?.getAttribute('role') === 'textbox';
-      if (isEditable) return;
-
-      // 移动端时键盘快捷键不执行折叠切换，避免修改持久化状态
-      if (isMobile) return;
-
-      if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
-        e.preventDefault();
-        toggleSidebar();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [toggleSidebar, isMobile]);
 
   const allCategories = useMemo(() => {
     const categories = getAllCategories(customCategories, language, hiddenDefaultCategoryIds, defaultCategoryOverrides);
@@ -199,6 +163,33 @@ export const CategorySidebar: React.FC<CategorySidebarProps> = ({
     return counts;
   }, [repositories, allCategories, categoryMatchMode]);
 
+  const subscribedRepoCount = useMemo(
+    () => repositories.filter((repo) => releaseSubscriptions?.has(repo.id)).length,
+    [repositories, releaseSubscriptions],
+  );
+
+  const needsReviewCount = useMemo(
+    () => repositories.filter((repo) => !repo.analyzed_at).length,
+    [repositories],
+  );
+
+  const navigableCategories = useMemo(
+    () => allCategories.filter((category) => category.id !== 'all'),
+    [allCategories],
+  );
+
+  const activeQuickAccess = searchFilters?.isSubscribed === true
+    ? 'subscribed'
+    : searchFilters?.isAnalyzed === false
+      ? 'needs-review'
+      : selectedCategory === 'all' &&
+          !searchFilters?.query &&
+          !searchFilters?.isSubscribed &&
+          searchFilters?.isAnalyzed === undefined &&
+          searchFilters?.analysisFailed === undefined
+        ? 'all'
+        : null;
+
   const getCategoryCount = useCallback((category: Category) => {
     return categoryCounts.get(category.id) ?? 0;
   }, [categoryCounts]);
@@ -217,31 +208,25 @@ export const CategorySidebar: React.FC<CategorySidebarProps> = ({
 
   const handleDeleteCategory = async (category: Category) => {
     const confirmed = await confirm(
-      t('删除分类确认', 'Delete Category Confirmation'),
-      t(
-        `确定删除自定义分类"${category.name}"吗？\n\n仓库会保留，Star 不会取消，只会清空它们的手动分类归属。`,
-        `Delete custom category "${category.name}"?\n\nRepositories will stay starred. Only their manual category assignment will be cleared.`
-      ),
-      { type: 'danger', confirmText: t('删除', 'Delete') }
+      t('categorySidebar.delete-category-confirmation'),
+      t('categorySidebar.delete-custom-category-v1-repositories-will-stay', { v1: category.name }),
+      { type: 'danger', confirmText: t('categorySidebar.delete') }
     );
 
     if (!confirmed) return;
 
     deleteCustomCategory(category.id);
     try {
-      await forceSyncToBackend();
+      await syncCategories();
     } catch {
-      toast(t('删除分类失败，请检查后端连接。', 'Failed to delete category. Please check backend connection.'), 'error');
+      toast(t('categorySidebar.failed-to-delete-category-please-check-backend-c'), 'error');
     }
   };
 
   const handleHideDefaultCategory = async (category: Category) => {
     const confirmed = await confirm(
-      t('隐藏分类确认', 'Hide Category Confirmation'),
-      t(
-        `隐藏默认分类"${category.name}"？\n\n这不会删除任何仓库，只是在左侧隐藏这个预设分类。`,
-        `Hide default category "${category.name}"?\n\nThis will not delete any repositories. It only hides this built-in category from the sidebar.`
-      ),
+      t('categorySidebar.hide-category-confirmation'),
+      t('categorySidebar.hide-default-category-v1-this-will-not-delete-an', { v1: category.name }),
       { type: 'warning' }
     );
 
@@ -249,10 +234,10 @@ export const CategorySidebar: React.FC<CategorySidebarProps> = ({
 
     hideDefaultCategory(category.id);
     try {
-      await forceSyncToBackend();
+      await syncCategories();
     } catch {
       showDefaultCategory(category.id);
-      toast(t('隐藏分类失败，请检查后端连接。', 'Failed to hide category. Please check backend connection.'), 'error');
+      toast(t('categorySidebar.failed-to-hide-category-please-check-backend-con'), 'error');
     }
   };
 
@@ -266,14 +251,12 @@ export const CategorySidebar: React.FC<CategorySidebarProps> = ({
     updateRepository(originalRepo);
     setDragOverCategoryId(null);
     toast(
-      language === 'zh'
-        ? `同步到后端失败，已恢复分类更改。`
-        : `Failed to sync to backend. Category change has been reverted.`,
+      t('categorySidebar.sync-failed-reverted'),
       'error'
     );
   };
 
-  const handleDropOnCategory = async (event: React.DragEvent<HTMLDivElement>, category: Category) => {
+  const handleDropOnCategory = async (event: React.DragEvent<HTMLElement>, category: Category) => {
     event.preventDefault();
     setDragOverCategoryId(null);
 
@@ -286,37 +269,45 @@ export const CategorySidebar: React.FC<CategorySidebarProps> = ({
       justDroppedRef.current = false;
     }, 300);
 
+    // drop 先于 dragend 派发；若当前正处于某分类视图，源卡片即将因分类变更
+    // 从列表卸载，其 React dragend 将丢失，这里显式复位拖拽状态（issue #353）
+    useRepositoryDragStore.getState().endDrag();
+
     const repoId = event.dataTransfer.getData('application/x-gsm-repository-id');
     const repository = repositoryMap.get(repoId);
     if (!repository) return;
 
-    const originalRepo = { ...repository };
-
-    // 获取所有分类用于计算AI和默认分类
     const allCategoriesList = getAllCategories(customCategories, language, hiddenDefaultCategoryIds, defaultCategoryOverrides);
 
-    // 拖到“全部”表示取消手动分类，同时解除分类锁定。
-    // 已经没有任何分类归属的仓库无需写入，避免无意义的同步。
+    // 拖到「全部分类」= 取消分类：显式清空（''），与编辑弹窗清空分类的结果一致；
+    // resolveCategoryAssignment 会保留显式清空，后续 AI 重新分析不会重新归类
     if (category.id === 'all') {
-      const hasAssignedCategory = Boolean(repository.custom_category)
-        || Boolean(getAICategory(repository, allCategoriesList))
-        || Boolean(getDefaultCategory(repository, allCategoriesList));
-      if (!hasAssignedCategory && !repository.category_locked) return;
+      // 已显式清空过的仓库无需再写
+      if (repository.custom_category === '') return;
+      // 无锁定分类且 AI/默认分类均未命中时，仓库本就无归属：
+      // 写入 '' 会被 resolveCategoryAssignment 永久保留，阻止后续 AI 重新归类，故 no-op
+      const hasAssignedCategory = !!repository.custom_category ||
+        !!(getAICategory(repository, allCategoriesList) || getDefaultCategory(repository, allCategoriesList));
+      if (!hasAssignedCategory) return;
 
-      updateRepository({
+      const originalRepo = { ...repository };
+      const nextRepo = {
         ...repository,
         custom_category: '',
         category_locked: false,
         last_edited: new Date().toISOString(),
-      });
+      };
+      updateRepository(nextRepo);
 
       try {
-        await forceSyncToBackend();
+        await syncCategories();
       } catch {
         handleSyncError(originalRepo);
       }
       return;
     }
+
+    const originalRepo = { ...repository };
 
     const aiCat = getAICategory(repository, allCategoriesList);
     const defaultCat = getDefaultCategory(repository, allCategoriesList);
@@ -335,7 +326,7 @@ export const CategorySidebar: React.FC<CategorySidebarProps> = ({
     updateRepository(nextRepo);
 
     try {
-      await forceSyncToBackend();
+      await syncCategories();
     } catch {
       handleSyncError(originalRepo);
     }
@@ -346,136 +337,301 @@ export const CategorySidebar: React.FC<CategorySidebarProps> = ({
     if (justDroppedRef.current) {
       return;
     }
+    setSearchFilters?.({
+      isSubscribed: undefined,
+      isAnalyzed: undefined,
+      analysisFailed: undefined,
+    });
     onCategorySelect(categoryId);
   };
 
-  const t = (zh: string, en: string) => language === 'zh' ? zh : en;
+  const handleQuickAccess = (mode: 'all' | 'subscribed' | 'needs-review') => {
+    // 快速访问会清空搜索条件：先中止在途 AI 搜索，
+    // 防止旧搜索完成后写回过期结果并恢复旧查询词
+    cancelActiveAiSearch();
+    const resetFilters = {
+      query: '',
+      tags: [],
+      languages: [],
+      platforms: [],
+      licenses: [],
+      minStars: undefined,
+      maxStars: undefined,
+      isAnalyzed: undefined,
+      isSubscribed: undefined,
+      isEdited: undefined,
+      isCategoryLocked: undefined,
+      analysisFailed: undefined,
+      healthArchived: undefined,
+      healthRecentActivity: undefined,
+      healthHasLicense: undefined,
+    };
+    if (mode === 'all') {
+      setSearchFilters?.(resetFilters);
+      onCategorySelect('all');
+      return;
+    }
+    setSearchFilters?.({
+      ...resetFilters,
+      ...(mode === 'subscribed'
+        ? { isSubscribed: true }
+        : { isAnalyzed: false }),
+    });
+    onCategorySelect('all');
+  };
 
   return (
-    <>
+    <aside data-context-sidebar="repositories" aria-label={t('categorySidebar.categories')} className="w-full lg:w-auto lg:self-stretch">
       {/* 移动端：始终显示完整侧栏 */}
       {isMobile ? (
-        <div className="w-full overflow-hidden rounded-md border border-border bg-card p-3 sm:p-4">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-base font-semibold text-card-foreground">
-              {t('应用分类', 'Categories')}
-            </h2>
-            <Button
-              variant="ghost"
-              onClick={handleAddCategory}
-              size="icon"
-              className="h-8 w-8"
-              title={t('添加分类', 'Add Category')}
-              aria-label={t('添加分类', 'Add Category')}
-            >
-              <Plus className="w-4 h-4" />
-            </Button>
+        <section aria-label={t('categorySidebar.categories')} className="context-sidebar-section">
+          <div className="app-side-section">
+            <p className="app-section-label app-side-group-label">
+              {t('categorySidebar.quick-access')}
+            </p>
+            <div className="app-side-list">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => handleQuickAccess('all')}
+                aria-pressed={activeQuickAccess === 'all'}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  setDragOverCategoryId('all');
+                }}
+                onDragLeave={() => {
+                  if (dragOverCategoryId === 'all') setDragOverCategoryId(null);
+                }}
+                onDrop={(event) => {
+                  const allCategory = allCategories.find((category) => category.id === 'all');
+                  if (allCategory) void handleDropOnCategory(event, allCategory);
+                }}
+                title={isRepoDragging ? t('categorySidebar.drop-here-to-remove-category') : undefined}
+                className={`app-side-item justify-between text-left ${
+                  isRepoDragging
+                    ? 'border-dashed! border-warning/50! bg-warning/5! text-warning!'
+                    : activeQuickAccess === 'all'
+                      ? ''
+                      : 'text-muted-foreground'
+                }`}
+              >
+                <span className="app-side-item-label">
+                  {isRepoDragging ? <Undo2 className="h-4 w-4" /> : <Layers3 className="h-4 w-4" />}
+                  <span>{isRepoDragging ? t('categorySidebar.uncategorize') : t('categorySidebar.all-repositories')}</span>
+                </span>
+                <span className="app-side-count">{repositories.length}</span>
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => handleQuickAccess('subscribed')}
+                aria-pressed={activeQuickAccess === 'subscribed'}
+                className={`app-side-item justify-between text-left ${
+                  activeQuickAccess === 'subscribed' ? '' : 'text-muted-foreground'
+                }`}
+              >
+                <span className="app-side-item-label">
+                  <BellRing className="h-4 w-4" />
+                  <span>{t('searchBar.subscribed-to-releases')}</span>
+                </span>
+                <span className="app-side-count">{subscribedRepoCount}</span>
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => handleQuickAccess('needs-review')}
+                aria-pressed={activeQuickAccess === 'needs-review'}
+                className={`app-side-item justify-between text-left ${
+                  activeQuickAccess === 'needs-review' ? '' : 'text-muted-foreground'
+                }`}
+              >
+                <span className="app-side-item-label">
+                  <Sparkles className="h-4 w-4" />
+                  <span>{t('categorySidebar.needs-review')}</span>
+                </span>
+                <span className="app-side-count">{needsReviewCount}</span>
+              </Button>
+            </div>
           </div>
 
-          <div className="flex gap-2 overflow-x-auto pb-1">
-            {allCategories.map(category => {
-              const count = getCategoryCount(category);
-              const isSelected = selectedCategory === category.id;
-              const isDragTarget = dragOverCategoryId === category.id;
+          <div className="app-side-section">
+            <div className="app-collection-row">
+              <div className="flex items-center gap-2">
+                <h2 className="app-section-label">
+                  {t('categorySidebar.categories')}
+                </h2>
+                <span className="app-side-count shrink-0">
+                  {navigableCategories.length}
+                </span>
+              </div>
+              <Button
+                variant="ghost"
+                onClick={handleAddCategory}
+                size="icon"
+                className="linear-icon-button"
+                title={t('categorySidebar.add-category')}
+                aria-label={t('categorySidebar.add-category')}
+              >
+                <Plus className="w-4 h-4" />
+              </Button>
+            </div>
 
-              return (
-                <div
-                  key={category.id}
-                  className="group shrink-0"
-                  onDragOver={(event) => {
-                    event.preventDefault();
-                    setDragOverCategoryId(category.id);
-                  }}
-                  onDragLeave={() => {
-                    if (dragOverCategoryId === category.id) {
-                      setDragOverCategoryId(null);
-                    }
-                  }}
-                  onDrop={(event) => handleDropOnCategory(event, category)}
-                >
+            <div className="app-category-strip">
+              {navigableCategories.map(category => {
+                const count = getCategoryCount(category);
+                const isSelected = selectedCategory === category.id;
+                const isDragTarget = dragOverCategoryId === category.id;
+
+                return (
+                  <div
+                    key={category.id}
+                    className="group shrink-0"
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      setDragOverCategoryId(category.id);
+                    }}
+                    onDragLeave={() => {
+                      if (dragOverCategoryId === category.id) {
+                        setDragOverCategoryId(null);
+                      }
+                    }}
+                    onDrop={(event) => handleDropOnCategory(event, category)}
+                  >
+                    <Button
+                      variant="ghost"
+                      onClick={() => handleCategoryClick(category.id)}
+                      size="sm"
+                      className={`app-side-item app-category-pill relative justify-between text-left ${
+                        isDragTarget
+                          ? 'bg-success/10! text-success! ring-1 ring-success/40'
+                          : isSelected
+                            ? ''
+                            : 'text-muted-foreground'
+                      }`}
+                      title={t('categorySidebar.drag-hint', { name: category.name })}
+                      aria-pressed={isSelected}
+                      aria-current={isSelected ? 'page' : undefined}
+                    >
+                      <span className="app-side-item-label">
+                        <CategoryGlyph
+                          icon={category.icon}
+                          name={category.name}
+                          categoryId={category.id}
+                        />
+                        <span className="truncate">{category.name}</span>
+                      </span>
+                      <span
+                        className={`app-side-count shrink-0 ${
+                          isDragTarget ? 'bg-success/20! text-success!' : ''
+                        }`}
+                      >
+                        {count}
+                      </span>
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </section>
+      ) : (
+        <div className="app-category-sidebar-shell relative flex shrink-0">
+          <div className="linear-sidebar relative w-(--app-sidebar-width) overflow-visible">
+            <div className="context-sidebar-head">
+              <div>
+                <p className="app-side-eyebrow">{t('categorySidebar.workspace-label')}</p>
+                <h2 className="app-side-title">{t('categorySidebar.categories')}</h2>
+              </div>
+            </div>
+
+            <ContextSidebarBody>
+              <section className="app-side-section" aria-label={t('categorySidebar.quick-access')}>
+                <p className="app-section-label app-side-group-label">
+                  {t('categorySidebar.quick-access')}
+                </p>
+                <div className="app-side-list">
                   <Button
                     variant="ghost"
-                    onClick={() => handleCategoryClick(category.id)}
-                    size="sm"
-                    className={`relative flex min-w-[140px] items-center justify-between rounded-md text-left transition-colors ${
-                      isSelected
-                        ? 'bg-accent text-accent-foreground font-medium'
-                        : isDragTarget
-                          ? 'bg-success/10 text-success ring-1 ring-success/40'
-                          : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+                    onClick={() => handleQuickAccess('all')}
+                    aria-pressed={activeQuickAccess === 'all'}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      setDragOverCategoryId('all');
+                    }}
+                    onDragLeave={() => {
+                      if (dragOverCategoryId === 'all') setDragOverCategoryId(null);
+                    }}
+                    onDrop={(event) => {
+                      const allCategory = allCategories.find((category) => category.id === 'all');
+                      if (allCategory) void handleDropOnCategory(event, allCategory);
+                    }}
+                    className={`app-side-item justify-between ${
+                      isRepoDragging ? 'border-dashed! border-warning/50! bg-warning/5! text-warning!' : ''
                     }`}
-                    title={category.id !== 'all' ? category.name + " — " + t('可将仓库卡片拖到这里快速改分类', 'Drag repository cards here to quickly change category') : undefined}
-                    aria-pressed={isSelected}
-                    aria-current={isSelected ? 'page' : undefined}
+                    title={isRepoDragging ? t('categorySidebar.drop-here-to-remove-category') : undefined}
                   >
-                    <div className="flex items-center space-x-3 min-w-0 flex-1">
-                      <span className="text-base flex-shrink-0">{category.icon}</span>
-                      <span className="text-sm font-medium truncate">{category.name}</span>
-                    </div>
-                    <span
-                      className={`shrink-0 rounded-md px-2 py-0.5 text-xs ${
-                        isSelected
-                          ? 'bg-primary text-primary-foreground'
-                          : isDragTarget
-                            ? 'bg-success/10 text-success'
-                            : 'bg-muted text-muted-foreground'
-                      }`}
-                    >
-                      {count}
+                    <span className="app-side-item-label">
+                      {isRepoDragging ? <Undo2 className="h-4 w-4" /> : <Layers3 className="h-4 w-4" />}
+                      <span>{isRepoDragging ? t('categorySidebar.uncategorize') : t('categorySidebar.all-repositories')}</span>
                     </span>
+                    <span className="app-side-count">{repositories.length}</span>
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    onClick={() => handleQuickAccess('subscribed')}
+                    aria-pressed={activeQuickAccess === 'subscribed'}
+                    className="app-side-item justify-between"
+                  >
+                    <span className="app-side-item-label">
+                      <BellRing className="h-4 w-4" />
+                      <span>{t('searchBar.subscribed-to-releases')}</span>
+                    </span>
+                    <span className="app-side-count">{subscribedRepoCount}</span>
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    onClick={() => handleQuickAccess('needs-review')}
+                    aria-pressed={activeQuickAccess === 'needs-review'}
+                    className="app-side-item justify-between"
+                  >
+                    <span className="app-side-item-label">
+                      <Sparkles className="h-4 w-4" />
+                      <span>{t('categorySidebar.needs-review')}</span>
+                    </span>
+                    <span className="app-side-count">{needsReviewCount}</span>
                   </Button>
                 </div>
-              );
-            })}
-          </div>
-        </div>
-      ) : (
-        /* 桌面端：可折叠侧栏 - sticky定位，滚动时保持可见 */
-        <div className="relative flex shrink-0 lg:sticky lg:top-16 lg:self-start z-10">
-          {/* 侧栏容器 */}
-          <div
-              className={`linear-sidebar relative overflow-visible transition-all duration-200 ease-out ${
-              isSidebarCollapsed
-                ? 'w-14 p-2'
-                : 'w-64 p-4'
-            }`}
-            style={{
-              maxHeight: isSidebarCollapsed ? 'calc(100vh - 8rem)' : 'calc(100vh - 8rem)',
-              transitionProperty: 'width, padding, max-height',
-            }}
-          >
-            {/* 折叠状态：简洁视图 */}
-            {isSidebarCollapsed ? (
-              <div className="flex flex-col items-center space-y-3 max-h-[calc(100vh-12rem)] overflow-y-auto scrollbar-hide">
-                {/* 展开按钮 - 放在折叠状态的顶部 */}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={toggleSidebar}
-                  className="linear-icon-button w-8 h-8 flex items-center justify-center transition-colors duration-200"
-                  title={t('展开侧栏 (Ctrl/Cmd+B)', 'Expand Sidebar (Ctrl/Cmd+B)')}
-                  aria-label={t('展开侧栏', 'Expand Sidebar')}
-                  aria-expanded="false"
+              </section>
+
+              <section className="app-side-section" aria-label={t('categorySidebar.category-group')}>
+                <div className="app-collection-row">
+                  <div className="flex items-center gap-2">
+                    <span className="app-section-label">{t('categorySidebar.category-group')}</span>
+                    <span className="app-side-count shrink-0">{navigableCategories.length}</span>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    onClick={handleAddCategory}
+                    size="icon"
+                    className="linear-icon-button"
+                    title={t('categorySidebar.add-category')}
+                    aria-label={t('categorySidebar.add-category')}
+                  >
+                    <Plus className="w-4 h-4" />
+                  </Button>
+                </div>
+
+                <div
+                  ref={categoryListRef}
+                  onScroll={handleCategoryScroll}
+                  className={`min-w-0 overflow-visible category-scrollbar ${isScrolling ? 'is-scrolling' : ''}`}
                 >
-                  <ChevronRight className="w-4 h-4" />
-                </Button>
-
-                <div className="h-px w-full bg-border" />
-
-                {/* 折叠状态下的分类图标列表 */}
-                <div className="flex flex-col items-center space-y-2">
-                  {(() => {
-                    // 确保选中分类在显示列表中
-                    const selectedIndex = allCategories.findIndex(c => c.id === selectedCategory);
-                    const isSelectedHidden = selectedIndex >= collapsedSidebarCategoryCount;
-                    let displayCategories = allCategories.slice(0, collapsedSidebarCategoryCount);
-                    if (isSelectedHidden && selectedIndex !== -1) {
-                      // 用选中分类替换最后一个
-                      displayCategories = [...allCategories.slice(0, collapsedSidebarCategoryCount - 1), allCategories[selectedIndex]];
-                    }
-                    return displayCategories.map((category) => {
+                  <div className="app-side-list">
+                    {navigableCategories.map((category) => {
+                      const count = getCategoryCount(category);
                       const isSelected = selectedCategory === category.id;
                       const isDragTarget = dragOverCategoryId === category.id;
+
                       return (
                         <div
                           key={category.id}
@@ -495,147 +651,34 @@ export const CategorySidebar: React.FC<CategorySidebarProps> = ({
                             variant="ghost"
                             onClick={() => handleCategoryClick(category.id)}
                             aria-pressed={isSelected}
-                            size="icon"
-                            className={`h-8 w-8 rounded-md text-lg transition-all duration-200 ${
-                              isSelected
-                                ? 'bg-accent text-accent-foreground font-medium'
-                                : isDragTarget
-                                  ? 'bg-success/10 text-success ring-1 ring-success/40'
-                                  : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+                            size="sm"
+                            className={`app-side-item flex w-full items-center justify-between pr-2 text-left ${
+                              isDragTarget
+                                ? 'bg-success/10! text-success! ring-1 ring-success/40'
+                                : isSelected
+                                  ? ''
+                                  : 'text-muted-foreground'
                             }`}
-                            title={category.id !== 'all' ? category.name + " — " + t('可将仓库卡片拖到这里快速改分类', 'Drag repository cards here to quickly change category') : category.name}
-                            aria-label={category.name}
+                            title={t('categorySidebar.drag-hint', { name: category.name })}
                           >
-                            {category.icon}
-                          </Button>
-                        </div>
-                      );
-                    });
-                  })()}
-                </div>
-
-                {/* 添加分类按钮 */}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={handleAddCategory}
-                  className="linear-icon-button w-8 h-8 flex items-center justify-center"
-                  title={t('添加分类', 'Add Category')}
-                  aria-label={t('添加分类', 'Add Category')}
-                >
-                  <Plus className="w-4 h-4" />
-                </Button>
-              </div>
-            ) : (
-              /* 展开状态：完整视图 */
-              <div>
-                {/* 头部 - 包含折叠按钮 */}
-                <div className="flex items-center justify-between mb-4">
-                  <h2
-                      className={`text-base font-semibold text-card-foreground transition-all duration-200 ease-out ${
-                      showText ? 'opacity-100 translate-x-0' : 'opacity-0 -translate-x-2'
-                    }`}
-                  >
-                    {t('应用分类', 'Categories')}
-                  </h2>
-                  <div className="flex items-center gap-1 pr-3">
-                    <Button
-                      variant="ghost"
-                      onClick={handleAddCategory}
-                      size="icon"
-              className="h-8 w-8"
-                      title={t('添加分类', 'Add Category')}
-                      aria-label={t('添加分类', 'Add Category')}
-                    >
-                      <Plus className="w-4 h-4" />
-                    </Button>
-                    {/* 折叠按钮 - 放在标题栏右侧 */}
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={toggleSidebar}
-                      className="h-8 w-8 rounded-md bg-muted text-muted-foreground transition-colors duration-200"
-                      title={t('折叠侧栏 (Ctrl/Cmd+B)', 'Collapse Sidebar (Ctrl/Cmd+B)')}
-                      aria-label={t('折叠侧栏', 'Collapse Sidebar')}
-                      aria-expanded="true"
-                    >
-                      <ChevronLeft className="w-4 h-4" />
-                    </Button>
-                  </div>
-                </div>
-
-                {/* 分类列表 */}
-                <div
-                  ref={categoryListRef}
-                  onScroll={handleCategoryScroll}
-                  className={`-mr-4 max-h-[calc(100vh-12rem)] min-w-0 overflow-y-auto category-scrollbar ${isScrolling ? 'is-scrolling' : ''}`}
-                >
-                  <div className="space-y-1 pr-3">
-                  {allCategories.map((category, index) => {
-                    const count = getCategoryCount(category);
-                    const isSelected = selectedCategory === category.id;
-                    const isDragTarget = dragOverCategoryId === category.id;
-
-                    return (
-                      <div
-                        key={category.id}
-                        className="group relative"
-                        style={{
-                          transitionDelay: showText ? `${Math.min(index * 30, 300)}ms` : '0ms',
-                        }}
-                        onDragOver={(event) => {
-                          event.preventDefault();
-                          setDragOverCategoryId(category.id);
-                        }}
-                        onDragLeave={() => {
-                          if (dragOverCategoryId === category.id) {
-                            setDragOverCategoryId(null);
-                          }
-                        }}
-                        onDrop={(event) => handleDropOnCategory(event, category)}
-                      >
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleCategoryClick(category.id)}
-                          aria-pressed={isSelected}
-                          size="sm"
-                          className={`flex h-9 w-full items-center justify-between rounded-md text-left transition-[color,background-color,border-color,opacity,transform] duration-200 ease-out pr-3 ${
-                            isSelected
-                              ? 'bg-accent text-accent-foreground font-medium'
-                              : isDragTarget
-                                ? 'bg-success/10 text-success ring-1 ring-success/40'
-                                : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
-                          } ${showText ? 'opacity-100 translate-x-0' : 'opacity-0 -translate-x-3'}`}
-                          title={category.id !== 'all' ? category.name + " — " + t('可将仓库卡片拖到这里快速改分类', 'Drag repository cards here to quickly change category') : undefined}
-                        >
-                          <div className="flex items-center space-x-3 min-w-0 flex-1">
-                            <span className="text-base flex-shrink-0">{category.icon}</span>
+                            <span className="app-side-item-label">
+                              <CategoryGlyph
+                                icon={category.icon}
+                                name={category.name}
+                                categoryId={category.id}
+                              />
+                              <span className="truncate">{category.name}</span>
+                            </span>
                             <span
-                              className={`text-sm font-medium truncate transition-[opacity,transform] duration-200 ease-out ${
-                                showText ? 'opacity-100 translate-x-0' : 'opacity-0 -translate-x-2'
+                              className={`app-side-count ml-auto flex shrink-0 justify-center group-hover:opacity-0 group-focus-within:opacity-0 ${
+                                isDragTarget ? 'bg-success/20! text-success!' : ''
                               }`}
                             >
-                              {category.name}
+                              {count}
                             </span>
-                          </div>
+                          </Button>
 
-                          {/* 数字 badge - 正常状态显示，hover/focus-within 时隐藏 */}
-                          <span
-                              className={`ml-auto flex min-w-8 shrink-0 justify-center rounded-md px-2 py-0.5 text-xs transition-[color,background-color,border-color,opacity,transform] duration-200 ease-out ${
-                              isSelected
-                                ? 'bg-primary text-primary-foreground'
-                                : isDragTarget
-                                  ? 'bg-success/20 text-success'
-                                  : 'bg-muted text-muted-foreground'
-                            } ${showText ? 'opacity-100 scale-100' : 'opacity-0 scale-75'} group-hover:opacity-0 group-focus-within:opacity-0`}
-                          >
-                            {count}
-                          </span>
-                        </Button>
-
-                        {/* 操作按钮 - 绝对定位，hover/focus-within 时显示，不占位 */}
-                        {category.id !== 'all' && (
-                          <div className="absolute right-0 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto">
+                          <div className="pointer-events-none absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-1 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
                             <Button
                               variant="ghost"
                               onClick={(e) => {
@@ -643,11 +686,11 @@ export const CategorySidebar: React.FC<CategorySidebarProps> = ({
                                 handleEditCategory(category);
                               }}
                               size="icon"
-                              className="h-7 w-7"
-                              title={t('编辑分类', 'Edit category')}
-                              aria-label={t('编辑分类', 'Edit category')}
+                              className="linear-icon-button app-side-action-button"
+                              title={t('categorySidebar.edit-category')}
+                              aria-label={t('categorySidebar.edit-category')}
                             >
-                              <Edit3 className="w-3.5 h-3.5" />
+                              <PencilLine />
                             </Button>
                             {category.isCustom ? (
                               <Button
@@ -657,11 +700,11 @@ export const CategorySidebar: React.FC<CategorySidebarProps> = ({
                                 }}
                                 variant="ghost"
                                 size="icon"
-                                className="h-7 w-7 text-muted-foreground"
-                                title={t('删除分类', 'Delete category')}
-                                aria-label={t('删除分类', 'Delete category')}
+                                className="linear-icon-button app-side-action-button"
+                                title={t('categorySidebar.delete-category')}
+                                aria-label={t('categorySidebar.delete-category')}
                               >
-                                <Trash2 className="w-3.5 h-3.5" />
+                                <Trash2 />
                               </Button>
                             ) : (
                               <Button
@@ -671,22 +714,33 @@ export const CategorySidebar: React.FC<CategorySidebarProps> = ({
                                 }}
                                 variant="ghost"
                                 size="icon"
-                                className="h-7 w-7 text-muted-foreground"
-                                title={t('隐藏默认分类', 'Hide default category')}
-                                aria-label={t('隐藏默认分类', 'Hide default category')}
+                                className="linear-icon-button app-side-action-button"
+                                title={t('categorySidebar.hide-default-category')}
+                                aria-label={t('categorySidebar.hide-default-category')}
                               >
-                                <EyeOff className="w-3.5 h-3.5" />
+                                <EyeOff />
                               </Button>
                             )}
                           </div>
-                        )}
-                      </div>
-                    );
-                  })}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
+              </section>
+            </ContextSidebarBody>
+            <div className="context-sidebar-foot">
+              {lastSync && !isSyncingStars && !isSyncingCategories && !hasCategorySyncFailure && (
+                <div className="app-side-foot-status">
+                  <span className="app-status-dot" aria-hidden="true" />
+                  <span>{t('categorySidebar.synced')}</span>
+                </div>
+              )}
+              <div className="app-side-foot-meta">
+                <span>{t('categorySidebar.repository-count', { count: repositories.length })}</span>
+                {lastSync && !isSyncingStars && !isSyncingCategories && !hasCategorySyncFailure && <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />}
               </div>
-            )}
+            </div>
           </div>
         </div>
       )}
@@ -697,6 +751,6 @@ export const CategorySidebar: React.FC<CategorySidebarProps> = ({
         category={editingCategory}
         isCreating={isCreatingCategory}
       />
-    </>
+    </aside>
   );
 };

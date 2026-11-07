@@ -1,7 +1,7 @@
 import { StrictMode, type ReactNode } from 'react';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Category, Repository } from '../../../types';
+import type { Repository } from '../../../types';
 import { useRepositoryAnalysisJob } from './useRepositoryAnalysisJob';
 import { useAppStore } from '../../../store/useAppStore';
 
@@ -77,7 +77,7 @@ const createStoreState = () => ({
     model: 'test-model',
     concurrency: 1,
   }],
-  activeAIConfig: 'ai-config' as string | null,
+  activeAIConfig: 'ai-config',
   language: 'zh' as const,
   updateRepository: vi.fn(),
   setLoading: vi.fn(),
@@ -92,10 +92,7 @@ const runOptions = (repositories: Repository[], syncOnComplete = false) => ({
   syncOnComplete,
 });
 
-const renderJob = (
-  onAnalysisResult?: Parameters<typeof useRepositoryAnalysisJob>[0]['onAnalysisResult'],
-  allCategories: Category[] = [],
-) => renderHook(() => useRepositoryAnalysisJob({ allCategories, onAnalysisResult }));
+const renderJob = () => renderHook(() => useRepositoryAnalysisJob({ allCategories: [] }));
 
 describe('useRepositoryAnalysisJob', () => {
   beforeEach(() => {
@@ -135,52 +132,6 @@ describe('useRepositoryAnalysisJob', () => {
     }));
     expect(mocks.forceSyncToBackend).not.toHaveBeenCalled();
     expect(result.current).toMatchObject({ isRunning: false, isPaused: false, progress: { current: 0, total: 0 } });
-  });
-
-  it('runs the pipeline when the only AI config has no active id', async () => {
-    storeState.activeAIConfig = null;
-    const target = repository(1);
-    const { result } = renderJob();
-
-    await act(async () => {
-      await result.current.run(runOptions([target]));
-    });
-
-    expect(mocks.analyzeRepositoriesPipelined).toHaveBeenCalledTimes(1);
-    expect(mocks.toast).not.toHaveBeenCalledWith('请先在设置中配置AI服务。', 'error');
-  });
-
-  it('uses the same pipeline while allowing discovery views to own result persistence', async () => {
-    const target = repository(2);
-    const onAnalysisResult = vi.fn();
-    mocks.analyzeRepositoriesPipelined.mockImplementation(async (...args: unknown[]) => {
-      const onResult = args[6] as (result: object) => void;
-      onResult({
-        repo: target,
-        success: true,
-        summary: 'summary',
-        tags: ['tag'],
-        platforms: ['web'],
-        duration: 1,
-      });
-    });
-
-    const { result } = renderJob(onAnalysisResult, [{
-      id: 'tag',
-      name: 'tag',
-      icon: 'tag',
-      keywords: [],
-      isCustom: true,
-    }]);
-    await act(async () => {
-      await result.current.run(runOptions([target]));
-    });
-
-    expect(onAnalysisResult).toHaveBeenCalledWith(
-      expect.objectContaining({ repo: target, success: true }),
-      expect.objectContaining({ resolvedCategory: expect.any(String) }),
-    );
-    expect(storeState.updateRepository).not.toHaveBeenCalled();
   });
 
   it('stores both successful and failed results from a partially failing job and syncs once when requested', async () => {

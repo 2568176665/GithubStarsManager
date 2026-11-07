@@ -1,3 +1,4 @@
+import { useT } from "../i18n/useT";
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import type { Release } from '../types';
@@ -37,16 +38,17 @@ export interface ReleaseArtifactActions {
 
 /**
  * Release 资产动作（RPC 发送 + AI 总结），规范语义取自 ReleaseCard 版本；
- * useRepositoryReleaseSheet 委托本 hook，避免重复实现。
+ * useRepositoryReleaseSheet 委托本 hook（ADR 0001：同一逻辑不允许第三份拷贝）。
  */
 export const useReleaseArtifactActions = (): ReleaseArtifactActions => {
-  const { language, aiConfigs, activeAIConfig } = useAppStore(useShallow((state) => ({
+  const { language, backendApiSecret, aiConfigs, activeAIConfig } = useAppStore(useShallow((state) => ({
     language: state.language,
+    backendApiSecret: state.backendApiSecret,
     aiConfigs: state.aiConfigs,
     activeAIConfig: state.activeAIConfig,
   })));
   const { toast } = useDialog();
-  const t = useCallback((zh: string, en: string) => language === 'zh' ? zh : en, [language]);
+  const t = useT('app');
 
   const [summaries, setSummaries] = useState<Record<number, ReleaseArtifactSummaryState>>({});
   // 渲染态用 useState Record 取代原 ReleaseCard 的 refs + forceUpdate（渲染等价）；
@@ -86,24 +88,24 @@ export const useReleaseArtifactActions = (): ReleaseArtifactActions => {
     // 否则卡片会把失败的重试报告成成功。
     applyRpcDownloadState(key, 'sending');
     try {
-      const result = await sendToRpcDownload(link.url, link.name);
+      const result = await sendToRpcDownload(link.url, link.name, backendApiSecret || undefined);
       if (result.success) {
         applyRpcDownloadState(key, 'sent');
-        toast(t('已发送到远程下载器', 'Sent to remote downloader'), 'success');
+        toast(t('useReleaseArtifactActions.sent-to-remote-downloader'), 'success');
       } else {
         applyRpcDownloadState(key, 'idle');
         toast(
           result.error === 'RPC service not running'
-            ? t('远程下载服务未运行，请检查配置', 'Remote download service not running, please check config')
-            : result.error || t('发送失败', 'Send failed'),
+            ? t('useReleaseArtifactActions.remote-download-service-not-running-please-check')
+            : result.error || t('useReleaseArtifactActions.send-failed'),
           'error'
         );
       }
     } catch {
       applyRpcDownloadState(key, 'idle');
-      toast(t('远程下载服务未运行，请检查配置', 'Remote download service not running, please check config'), 'error');
+      toast(t('useReleaseArtifactActions.remote-download-service-not-running-please-check'), 'error');
     }
-  }, [applyRpcDownloadState, t, toast]);
+  }, [applyRpcDownloadState, backendApiSecret, t, toast]);
 
   const generateSummary = useCallback(async (release: Release) => {
     const existing = summaries[release.id];
@@ -114,7 +116,7 @@ export const useReleaseArtifactActions = (): ReleaseArtifactActions => {
     const activeConfig = aiConfigs.find((config) => config.id === activeAIConfig);
     if (!activeConfig) {
       toast(
-        language === 'zh' ? '请先在设置中配置 AI 服务。' : 'Please configure AI service in settings first.',
+        t('useReleaseArtifactActions.please-configure-ai-service-in-settings-first'),
         'error'
       );
       return;
@@ -155,7 +157,7 @@ export const useReleaseArtifactActions = (): ReleaseArtifactActions => {
       const message = error instanceof Error ? error.message : String(error);
       setSummaries((previous) => ({ ...previous, [release.id]: { status: 'error', error: message } }));
       toast(
-        language === 'zh' ? `总结生成失败：${message}` : `Summary failed: ${message}`,
+        t('useReleaseArtifactActions.summary-failed-message', { message: message }),
         'error'
       );
     } finally {
@@ -163,7 +165,7 @@ export const useReleaseArtifactActions = (): ReleaseArtifactActions => {
         delete summaryAbortRefs.current[release.id];
       }
     }
-  }, [activeAIConfig, aiConfigs, language, summaries, toast]);
+  }, [activeAIConfig, aiConfigs, language, summaries, toast, t]);
 
   return useMemo(() => ({
     summaries,

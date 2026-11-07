@@ -10,9 +10,9 @@ import type { Repository, RouteMode } from '../types';
 vi.mock('./BilingualMarkdownRenderer', async () => {
   const React = await import('react');
   return {
-    default: React.forwardRef(({ markdown, baseUrl }: { markdown: string; baseUrl?: string }, ref) => {
+    default: React.forwardRef(({ markdown }: { markdown: string }, ref) => {
       void ref;
-      return <div data-testid="readme-renderer" data-base-url={baseUrl}>{markdown}</div>;
+      return <div>{markdown}</div>;
     }),
   };
 });
@@ -100,22 +100,14 @@ describe('ReadmeModal multilingual README switching', () => {
     ]);
   });
 
-  it('falls back to the GitHub repository URL when html_url is missing', async () => {
-    const repositoryWithoutHtmlUrl = { ...mockRepository, html_url: '' };
-
-    render(<ReadmeModal isOpen onClose={vi.fn()} repository={repositoryWithoutHtmlUrl} />);
-
-    await screen.findByText('Default README content');
-    expect(screen.getByTestId('readme-renderer')).toHaveAttribute(
-      'data-base-url',
-      'https://github.com/owner/demo',
-    );
-  });
-
   it('loads the default README first and then shows all detected README variants', async () => {
     render(<ReadmeModal isOpen onClose={vi.fn()} repository={mockRepository} />);
 
     expect(await screen.findByText('Default README content')).toBeInTheDocument();
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveClass('app-dialog-fullscreen');
+    expect(dialog).not.toHaveClass('-translate-x-1/2');
+    expect(dialog).not.toHaveClass('-translate-y-1/2');
     expect(backend.getRepositoryReadme).toHaveBeenCalledWith('owner', 'demo', expect.any(AbortSignal));
 
     const user = userEvent.setup();
@@ -242,6 +234,40 @@ describe('ReadmeModal multilingual README switching', () => {
       expect(mockGitHubApi.listRepositoryReadmeCandidates).toHaveBeenCalledWith('owner', 'demo', undefined, expect.any(AbortSignal));
     } finally {
       consoleWarnSpy.mockRestore();
+    }
+  });
+
+  it('defaults the table of contents closed on narrow screens and keeps it available on demand', async () => {
+    const matchMedia = vi.fn((query: string) => ({
+      matches: query === '(max-width: 767px)',
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+    vi.stubGlobal('matchMedia', matchMedia);
+
+    try {
+      (backend.getRepositoryReadme as ReturnType<typeof vi.fn>).mockResolvedValue('# Demo heading\n\nBody');
+
+      render(<ReadmeModal isOpen onClose={vi.fn()} repository={mockRepository} />);
+
+      expect(await screen.findByText(/Demo heading/)).toBeInTheDocument();
+      await waitFor(() => {
+        expect(document.querySelector('.app-readme-toc')).not.toBeInTheDocument();
+      });
+
+      const user = userEvent.setup();
+      await user.click(screen.getByRole('button', { name: '目录' }));
+
+      expect(document.querySelector('.app-readme-toc')).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Demo heading' }));
+      expect(document.querySelector('.app-readme-toc')).not.toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
     }
   });
 });

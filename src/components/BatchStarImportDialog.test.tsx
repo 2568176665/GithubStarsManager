@@ -1,107 +1,210 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Repository } from '../types';
-
-const mocks = vi.hoisted(() => ({
-  store: {
-    language: 'en' as 'en' | 'zh',
-    githubToken: 'token' as string | null,
-    user: { id: 1, login: 'alice', name: 'Alice', avatar_url: '', email: null } as null | { id: number; login: string; name: string; avatar_url: string; email: string | null },
-  },
-  rows: [] as Array<{ fullName: string; source: 'text'; status: 'ready'; repository?: Repository; isStarred: boolean | null; selected: boolean }>,
-}));
-
-vi.mock('../store/useAppStore', () => ({
-  useAppStore: (selector: (state: typeof mocks.store) => unknown) => selector(mocks.store),
-}));
-
-vi.mock('../features/repositories/hooks/useBatchStarImport', () => ({
-  BATCH_STAR_IMPORT_LIMIT: 50,
-  useBatchStarImport: () => ({
-    rows: mocks.rows,
-    duplicates: [],
-    invalid: [],
-    isResolving: false,
-    isStarring: false,
-    starProgress: { done: 0, total: 0 },
-    translationError: null,
-    syncError: null,
-    resolveInput: vi.fn(),
-    toggleSelected: vi.fn(),
-    selectAllReady: vi.fn(),
-    starSelected: vi.fn(),
-    reset: vi.fn(),
-  }),
-}));
-
-vi.mock('./ReadmeModal', () => ({
-  ReadmeModal: ({ isOpen, repository }: { isOpen: boolean; repository: Repository | null }) =>
-    <div data-testid="readme-preview">{isOpen ? repository?.full_name : ''}</div>,
-}));
-
 import { BatchStarImportDialog } from './BatchStarImportDialog';
 
-const paste = (element: HTMLElement, text: string) => {
-  fireEvent.paste(element, { clipboardData: { getData: () => text } });
-};
+const mocks = vi.hoisted(() => ({
+  rows: [] as unknown[],
+  duplicateCount: 0, inputError: '', isResolving: false, isStarring: false, syncError: '',
+  isTranslating: false, translationError: '', translationsVisible: false, translations: {} as Record<string, string>,
+  preview: vi.fn(), toggleRow: vi.fn(), selectAll: vi.fn(), invertSelection: vi.fn(),
+  clearPreview: vi.fn(), starSelected: vi.fn(), toggleTranslations: vi.fn(),
+  history: [] as { text: string; generatedAt: number }[], historyError: false, record: vi.fn(() => true), edit: vi.fn(),
+  readmeShouldFail: false,
+}));
+vi.mock('../features/repositories/hooks/useBatchStarHistory', () => ({ useBatchStarHistory: () => mocks }));
+vi.mock('./ReadmeModal', () => ({ ReadmeModal: ({ repository, onClose }: { repository: { full_name: string }; onClose: () => void }) => {
+  if (mocks.readmeShouldFail) throw new Error('readme chunk failed');
+  return <div role="dialog" aria-label="README"><span>{repository.full_name}</span><button onClick={onClose}>Close README</button></div>;
+} }));
+vi.mock('../features/repositories/hooks/useBatchStarImport', () => ({ useBatchStarImport: () => mocks }));
+vi.mock('../i18n/useT', () => ({ useT: () => (key: string, params?: Record<string, unknown>) => `${key}${params?.name ? ` ${params.name}` : ''}` }));
+
+const row = (overrides: Record<string, unknown> = {}) => ({
+  candidate: { repositoryFullName: 'owner/repo', originalValue: 'https://github.com/owner/repo', confidence: 'high' },
+  detail: { full_name: 'owner/repo', html_url: 'https://github.com/owner/repo', description: 'Example repository', language: 'TypeScript', stargazers_count: 10 },
+  status: 'ready', selected: true,
+  ...overrides,
+});
 
 describe('BatchStarImportDialog', () => {
   beforeEach(() => {
-    localStorage.clear();
-    mocks.store.language = 'en';
-    mocks.store.githubToken = 'token';
-    mocks.store.user = { id: 1, login: 'alice', name: 'Alice', avatar_url: '', email: null };
-    mocks.rows = [];
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+    mocks.isResolving = false;
+    mocks.isStarring = false;
+    mocks.isTranslating = false;
+    mocks.translationError = '';
+    mocks.translationsVisible = false;
+    mocks.translations = {};
+    mocks.rows = [row()];
+    mocks.history = [];
+    mocks.readmeShouldFail = false;
+    mocks.record.mockReturnValue(true);
+    mocks.edit.mockReturnValue(true);
   });
 
-  it('stores the last ten pasted inputs per GitHub account and lets the user edit a history entry', async () => {
+  it('previews pasted text without starring until the user confirms', async () => {
     const user = userEvent.setup();
-    const view = render(<BatchStarImportDialog open onClose={vi.fn()} />);
-    const textarea = screen.getByRole('textbox', { name: 'Repository links or JSON' });
-
-    for (let index = 0; index < 11; index += 1) paste(textarea, `owner/repo-${index}`);
-
-    const aliceKey = 'github-stars-batch-star-inputs:alice';
-    expect(JSON.parse(localStorage.getItem(aliceKey) || '[]')).toEqual(
-      Array.from({ length: 10 }, (_, index) => `owner/repo-${10 - index}`),
-    );
-
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Recent pasted inputs' }), '3');
-    expect(textarea).toHaveValue('owner/repo-7');
-
-    mocks.store.user = { id: 2, login: 'bob', name: 'Bob', avatar_url: '', email: null };
-    view.rerender(<BatchStarImportDialog open onClose={vi.fn()} />);
-    await waitFor(() => expect(screen.queryByRole('combobox', { name: 'Recent pasted inputs' })).not.toBeInTheDocument());
-
-    paste(screen.getByRole('textbox', { name: 'Repository links or JSON' }), 'other/project');
-    expect(JSON.parse(localStorage.getItem('github-stars-batch-star-inputs:bob') || '[]')).toEqual(['other/project']);
-    expect(JSON.parse(localStorage.getItem(aliceKey) || '[]')).toHaveLength(10);
+    render(<BatchStarImportDialog isOpen onClose={vi.fn()} />);
+    expect(screen.getByRole('link', { name: 'batchStar.open-github owner/repo' })).toHaveAttribute('href', 'https://github.com/owner/repo');
+    await user.type(screen.getByRole('textbox', { name: 'batchStar.input-label' }), 'https://github.com/owner/repo');
+    await user.click(screen.getByRole('button', { name: 'batchStar.preview' }));
+    expect(mocks.preview).toHaveBeenCalledWith('https://github.com/owner/repo');
+    expect(mocks.record).toHaveBeenCalledWith('https://github.com/owner/repo', undefined);
+    expect(mocks.clearPreview).toHaveBeenCalled();
+    expect(mocks.starSelected).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'batchStar.star-selected' }));
+    expect(mocks.starSelected).toHaveBeenCalledTimes(1);
   });
 
-  it('opens the shared README preview for a resolved repository', async () => {
-    const repository: Repository = {
-      id: 1,
-      name: 'repo',
-      full_name: 'owner/repo',
-      description: null,
-      html_url: 'https://github.com/owner/repo',
-      stargazers_count: 1,
-      forks_count: 0,
-      forks: 0,
-      language: 'TypeScript',
-      created_at: '2026-01-01T00:00:00.000Z',
-      updated_at: '2026-01-01T00:00:00.000Z',
-      pushed_at: '2026-01-01T00:00:00.000Z',
-      owner: { login: 'owner', avatar_url: '' },
-      topics: [],
-    };
-    mocks.rows = [{ fullName: repository.full_name, source: 'text', status: 'ready', repository, isStarred: false, selected: true }];
+  it('opens README without changing selection and restores the batch dialog', async () => {
     const user = userEvent.setup();
-    render(<BatchStarImportDialog open onClose={vi.fn()} />);
+    render(<BatchStarImportDialog isOpen onClose={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: 'batchStar.view-readme owner/repo' }));
+    expect(await screen.findByRole('dialog', { name: 'README' })).toBeVisible();
+    expect(mocks.toggleRow).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Close README' }));
+    expect(screen.getByRole('textbox', { name: 'batchStar.input-label' })).toBeVisible();
+  });
 
-    await user.click(screen.getByRole('button', { name: 'Preview README' }));
+  it('returns to the batch dialog when the README fails to load', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    mocks.readmeShouldFail = true;
+    mocks.rows = [row({
+      candidate: { repositoryFullName: 'broken/repo', originalValue: 'https://github.com/broken/repo', confidence: 'high' },
+      detail: { full_name: 'broken/repo', html_url: 'https://github.com/broken/repo', description: 'Broken', language: 'TypeScript', stargazers_count: 1 },
+    })];
+    render(<BatchStarImportDialog isOpen onClose={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: 'batchStar.view-readme broken/repo' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('batchStar.readme-load-error');
+    await user.click(screen.getByRole('button', { name: 'batchStar.close' }));
+    expect(screen.getByRole('textbox', { name: 'batchStar.input-label' })).toBeVisible();
+  });
 
-    expect(await screen.findByTestId('readme-preview')).toHaveTextContent('owner/repo');
+  it('keeps the previous history target when recording fails', async () => {
+    mocks.history = [{ text: 'old text', generatedAt: 123 }];
+    mocks.record.mockReturnValue(false);
+    const user = userEvent.setup();
+    render(<BatchStarImportDialog isOpen onClose={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: 'batchStar.history' }));
+    await user.click(screen.getByRole('button', { name: /old text/ }));
+    const input = screen.getByRole('textbox', { name: 'batchStar.input-label' });
+    await user.clear(input);
+    await user.type(input, 'edited text');
+    await user.click(screen.getByRole('button', { name: 'batchStar.preview' }));
+    expect(mocks.record).toHaveBeenCalledWith('edited text', 'old text');
+    await user.type(input, ' again');
+    await user.click(screen.getByRole('button', { name: 'batchStar.save-history' }));
+    expect(mocks.edit).toHaveBeenCalledWith('old text', 'edited text again');
+  });
+
+  it('loads history for editing, saves changes and regenerates without starring', async () => {
+    mocks.history = [{ text: 'old text', generatedAt: 123 }];
+    const user = userEvent.setup();
+    render(<BatchStarImportDialog isOpen onClose={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: 'batchStar.history' }));
+    await user.click(screen.getByRole('button', { name: /old text/ }));
+    const input = screen.getByRole('textbox', { name: 'batchStar.input-label' });
+    expect(input).toHaveValue('old text');
+    await user.clear(input);
+    await user.type(input, 'edited text');
+    await user.click(screen.getByRole('button', { name: 'batchStar.save-history' }));
+    expect(mocks.edit).toHaveBeenCalledWith('old text', 'edited text');
+    await user.click(screen.getByRole('button', { name: 'batchStar.preview' }));
+    expect(mocks.record).toHaveBeenCalledWith('edited text', 'edited text');
+    expect(mocks.preview).toHaveBeenCalledWith('edited text');
+    expect(mocks.starSelected).not.toHaveBeenCalled();
+  });
+
+  it('allows editing the repository selection', async () => {
+    const user = userEvent.setup();
+    render(<BatchStarImportDialog isOpen onClose={vi.fn()} />);
+    await user.click(screen.getByRole('checkbox', { name: 'batchStar.select-repository owner/repo' }));
+    expect(mocks.toggleRow).toHaveBeenCalledWith(0);
+  });
+
+  it('shows already-starred repositories as checked and disabled checkboxes', () => {
+    mocks.rows = [
+      row({ status: 'already-starred', selected: false }),
+      row({
+        candidate: { repositoryFullName: 'other/repo', originalValue: 'https://github.com/other/repo', confidence: 'high' },
+        detail: { full_name: 'other/repo', html_url: 'https://github.com/other/repo', description: 'Other', language: 'Go', stargazers_count: 1 },
+      }),
+    ];
+    render(<BatchStarImportDialog isOpen onClose={vi.fn()} />);
+    expect(screen.getByRole('checkbox', { name: 'batchStar.select-repository owner/repo' })).toBeDisabled();
+    expect(screen.getByRole('checkbox', { name: 'batchStar.select-repository owner/repo' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'batchStar.select-repository other/repo' })).toBeEnabled();
+    expect(screen.getByRole('checkbox', { name: 'batchStar.select-repository other/repo' })).toBeChecked();
+  });
+
+  it('shows repositories starred in this batch as checked and disabled too', () => {
+    mocks.rows = [row({ status: 'starred', selected: false })];
+    render(<BatchStarImportDialog isOpen onClose={vi.fn()} />);
+    expect(screen.getByRole('checkbox', { name: 'batchStar.select-repository owner/repo' })).toBeDisabled();
+    expect(screen.getByRole('checkbox', { name: 'batchStar.select-repository owner/repo' })).toBeChecked();
+  });
+
+  it('selects all and inverts the parsed repositories', async () => {
+    const user = userEvent.setup();
+    mocks.rows = [row({ status: 'already-starred', selected: false }), row()];
+    render(<BatchStarImportDialog isOpen onClose={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: 'batchStar.select-all' }));
+    expect(mocks.selectAll).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole('button', { name: 'batchStar.invert-selection' }));
+    expect(mocks.invertSelection).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers translation of the parsed descriptions', async () => {
+    const user = userEvent.setup();
+    render(<BatchStarImportDialog isOpen onClose={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: 'batchStar.translate-descriptions' }));
+    expect(mocks.toggleTranslations).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows translated descriptions while the translation view is on', () => {
+    mocks.translationsVisible = true;
+    mocks.translations = { 'owner/repo': '示例仓库' };
+    render(<BatchStarImportDialog isOpen onClose={vi.fn()} />);
+    expect(screen.getByText('示例仓库')).toBeInTheDocument();
+    expect(screen.queryByText('Example repository')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'batchStar.show-original' })).toBeEnabled();
+  });
+
+  it('falls back to the original description when no translation exists', () => {
+    mocks.translationsVisible = true;
+    render(<BatchStarImportDialog isOpen onClose={vi.fn()} />);
+    expect(screen.getByText('Example repository')).toBeInTheDocument();
+  });
+
+  it('shows the translating state and disables actions while translating', () => {
+    mocks.isTranslating = true;
+    render(<BatchStarImportDialog isOpen onClose={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'batchStar.translating' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'batchStar.select-all' })).toBeDisabled();
+    expect(screen.getByRole('textbox')).toBeDisabled();
+  });
+
+  it('keeps the dialog closable while a translation is running', () => {
+    mocks.isTranslating = true;
+    render(<BatchStarImportDialog isOpen onClose={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'batchStar.close' })).toBeEnabled();
+  });
+
+  it('reports a translation failure separately from star results', () => {
+    mocks.translationError = 'Translation failed: 429';
+    render(<BatchStarImportDialog isOpen onClose={vi.fn()} />);
+    expect(screen.getByRole('alert')).toHaveTextContent('batchStar.translation-failed: Translation failed: 429');
+  });
+
+  it('disables editing and closing while a Star batch is running', () => {
+    mocks.isStarring = true;
+    render(<BatchStarImportDialog isOpen onClose={vi.fn()} />);
+    expect(screen.getByRole('textbox')).toBeDisabled();
+    expect(screen.getByRole('checkbox')).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'batchStar.close' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'batchStar.starring' })).toBeDisabled();
   });
 });

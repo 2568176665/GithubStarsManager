@@ -1,8 +1,10 @@
 import { translateBackendError } from '../utils/backendErrors';
+import { normalizeBackendUrl } from '../utils/backendUrl';
 import { logger } from './logger';
+import { setBackendAvailability, setBackendProbed } from './scrapeSupport';
 
 import { Repository, Release, AIConfig, WebDAVConfig, EmbeddingConfig, VectorSearchConfig } from '../types';
-import type { DiscoveryAnalysisRecord } from './discoveryAnalysisStorage';
+import { useAppStore } from '../store/useAppStore';
 import { isReadmeCandidateItem, type GitHubReadmeCandidateItem } from '../utils/readmeVariants';
 
 interface GitHubContentResponse {
@@ -15,39 +17,134 @@ interface GitHubTreeResponse {
   truncated?: boolean;
 }
 
-// Custom domains can route Worker-to-Worker requests through an additional
-// redirect layer. Use the canonical Worker hostname for API traffic so the
-// custom-domain frontend still shares the same Worker and D1 database.
-export const WORKER_CANONICAL_API_ORIGIN = 'https://github-stars-manager.2568176665.workers.dev';
+const BACKEND_URL_STORAGE_KEY = 'github-stars-manager-backend-url';
 
-export function getBackendProbeUrls(origin: string, hostname: string): string[] {
-  const currentUrl = `${origin}/api`;
-  const isLocal = hostname === 'localhost' || hostname === '127.0.0.1';
-  const isCanonicalWorker = hostname.endsWith('.workers.dev');
-  if (isLocal || isCanonicalWorker) return [currentUrl];
-  return [`${WORKER_CANONICAL_API_ORIGIN}/api`, currentUrl];
-}
+const JSON_ARRAY_SETTING_KEYS = new Set([
+  'hiddenDefaultCategoryIds',
+  'categoryOrder',
+  'customCategories',
+  'assetFilters',
+]);
+const JSON_OBJECT_SETTING_KEYS = new Set([
+  'releaseSourceSettings',
+  'defaultCategoryOverrides',
+]);
 
-export interface SearchIndexResponse {
-  items: Array<{ id: number; score: number; matchedFields: string[] }>;
-  total: number;
-  quality: 'identity' | 'strong-field' | 'weak-text' | 'no-results';
-  source: 'fts' | 'field-fallback';
-  projectionVersion: number;
-}
+/**
+ * Parse a SQLite TEXT setting back into an object or array.
+ * Typed values and malformed JSON are returned unchanged.
+ */
+const parseJsonSetting = (value: unknown, expect: 'object' | 'array'): unknown => {
+  if (typeof value !== 'string') return value;
+  try {
+    const parsed = JSON.parse(value);
+    if (expect === 'array' && Array.isArray(parsed)) return parsed;
+    if (expect === 'object' && parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed;
+    }
+  } catch {
+    return value;
+  }
+  return value;
+};
 
-export interface NativeVectorMatch {
-  id: string;
-  score: number;
-  metadata?: Record<string, unknown>;
-}
+/**
+ * Hydrate backend settings whose object/array values were stored as JSON TEXT.
+ */
+const hydrateBackendSettings = (settings: Record<string, unknown>): Record<string, unknown> => {
+  const next = { ...settings };
+  for (const key of JSON_ARRAY_SETTING_KEYS) {
+    if (key in next) next[key] = parseJsonSetting(next[key], 'array');
+  }
+  for (const key of JSON_OBJECT_SETTING_KEYS) {
+    if (key in next) next[key] = parseJsonSetting(next[key], 'object');
+  }
+  if (typeof next.collapsedSidebarCategoryCount === 'string') {
+    const parsed = Number(next.collapsedSidebarCategoryCount);
+    if (Number.isFinite(parsed) && parsed >= 1) next.collapsedSidebarCategoryCount = parsed;
+  }
+  return next;
+};
+
+/**
+ * 共享 helper：构造后端 API 鉴权头（fullstack Web 模式下 API_SECRET 的
+ * `Authorization: Bearer ...`）。服务端 `authMiddleware` 对所有 `/api/*`
+ * （除 health）要求该头，直接 `fetch(backendUrl/...)` 的传输层必须复用它，
+ * 否则在配置 API_SECRET 时一律 401。
+ */
+export const getBackendAuthHeaders = (): Record<string, string> => {
+  let secret = '';
+  try {
+    secret = useAppStore.getState().backendApiSecret || '';
+  } catch {
+    secret = '';
+  }
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (secret) {
+    headers['Authorization'] = `Bearer ${secret}`;
+  }
+  return headers;
+};
+
+const readStoredBackendUrl = (): string | null => {
+  try {
+    return normalizeBackendUrl(localStorage.getItem(BACKEND_URL_STORAGE_KEY) || '');
+  } catch {
+    return null;
+  }
+};
+
 class BackendAdapter {
   private _backendUrl: string | null = null;
-  private _workerEnvMode = false;
+  private _availabilityListeners = new Set<() => void>();
+  private _beforeInitHook: (() => Promise<void>) | null = null;
 
-  async init(): Promise<void> {
+  registerBeforeInitHook(fn: () => Promise<void>): void {
+    this._beforeInitHook = fn;
+  }
+
+  /**
+   * 订阅可用性结论变化（init 探测结束或可用性翻转时触发）。返回取消订阅
+   * 函数，供 useSyncExternalStore 等 UI 侧响应式使用。
+   */
+  subscribeAvailability(listener: () => void): () => void {
+    this._availabilityListeners.add(listener);
+    return () => this._availabilityListeners.delete(listener);
+  }
+
+  private commitBackendUrl(url: string | null): void {
+    if (this._backendUrl === url) return;
+    this._backendUrl = url;
+    setBackendAvailability(url !== null);
+  }
+
+  async init(preferredUrl?: string): Promise<void> {
+    if (this._beforeInitHook) {
+      try {
+        await this._beforeInitHook();
+      } catch {
+        // Ignore hook errors so init can proceed
+      }
+    }
     try {
-      const urls = getBackendProbeUrls(window.location.origin, window.location.hostname);
+      const configuredUrl = preferredUrl ? normalizeBackendUrl(preferredUrl) : readStoredBackendUrl();
+      // Same-origin probing only makes sense when the UI itself is served over
+      // HTTP(S) (nginx fullstack image / vite dev server). The desktop client
+      // loads the bundle from `file://`, where `location.origin` is `file://`
+      // and `${origin}/api` becomes `file:///api` — Chromium logs every probe
+      // as `net::ERR_FILE_NOT_FOUND` before falling back to local-only mode.
+      const sameOriginApiUrl = (() => {
+        const { protocol, origin } = window.location;
+        return protocol === 'http:' || protocol === 'https:' ? `${origin}/api` : null;
+      })();
+      const urls = preferredUrl
+        ? (configuredUrl ? [configuredUrl] : [])
+        : (configuredUrl ? [configuredUrl] : (sameOriginApiUrl ? [sameOriginApiUrl] : []));
+      if (!preferredUrl && !configuredUrl && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+        urls.push('http://localhost:3000/api');
+      }
 
       for (const baseUrl of urls) {
         const controller = new AbortController();
@@ -64,8 +161,10 @@ class BackendAdapter {
           if (res.ok) {
             const data = await res.json();
             if (data.status === 'ok') {
-              this._backendUrl = baseUrl;
-              this._workerEnvMode = data.mode === 'worker-env';
+              // In-memory commit only. Persistence is an explicit caller
+              // decision (rememberActiveUrl) after its own auth checks, so a
+              // candidate that later fails authentication is never remembered.
+              this.commitBackendUrl(baseUrl);
               logger.info('backendAdapter', 'Backend connected', { url: baseUrl });
               return;
             }
@@ -77,13 +176,16 @@ class BackendAdapter {
         }
       }
 
-      this._backendUrl = null;
-      this._workerEnvMode = false;
+      this.commitBackendUrl(null);
       logger.info('backendAdapter', 'Backend not available, using local-only mode');
     } catch {
-      this._backendUrl = null;
-      this._workerEnvMode = false;
+      this.commitBackendUrl(null);
       logger.info('backendAdapter', 'Backend not available, using local-only mode');
+    } finally {
+      // 探测结束：标记结论已落定并通知订阅者。即使可用性没有翻转
+      // （如纯浏览器模式保持 null），订阅方也需要重新取值。
+      setBackendProbed();
+      for (const listener of this._availabilityListeners) listener();
     }
   }
 
@@ -95,18 +197,31 @@ class BackendAdapter {
     return this._backendUrl;
   }
 
-  get isWorkerEnvMode(): boolean {
-    return this._workerEnvMode;
+  /** 供直接 fetch 后端路由的传输层复用（公开版 getAuthHeaders）。 */
+  get backendAuthHeaders(): Record<string, string> {
+    return getBackendAuthHeaders();
   }
-  async fetchManagedSession(): Promise<{ login: string; [key: string]: unknown }> {
-    if (!this._backendUrl) throw new Error('Backend not available');
-    const res = await this.fetchWithTimeout(`${this._backendUrl}/session`);
-    if (!res.ok) await this.throwTranslatedError(res, 'Fetch managed GitHub session error');
-    return res.json() as Promise<{ login: string; [key: string]: unknown }>;
+
+  get configuredUrl(): string | null {
+    return this._backendUrl || readStoredBackendUrl();
+  }
+
+  /**
+   * Persist the active backend URL (the same storage the login screen prefills
+   * from). Call only after caller-side checks — auth, session restore — have
+   * fully succeeded; init() itself never persists candidate URLs.
+   */
+  rememberActiveUrl(): void {
+    if (!this._backendUrl) return;
+    try {
+      localStorage.setItem(BACKEND_URL_STORAGE_KEY, this._backendUrl);
+    } catch {
+      // A restricted browser may block storage; keep this session connected.
+    }
   }
 
   private getAuthHeaders(): Record<string, string> {
-    return { 'Content-Type': 'application/json' };
+    return getBackendAuthHeaders();
   }
   private async fetchWithTimeout(url: string, options?: RequestInit, timeoutMs = 30000): Promise<Response> {
     const startTime = Date.now();
@@ -150,7 +265,8 @@ class BackendAdapter {
           const parsed = JSON.parse(options.body);
           // Mask any apiKey/password fields recursively
           requestBody = JSON.stringify(parsed, (key, val) => {
-            if (/api[_-]?key|password|secret|token|authorization/i.test(key)) return '***';
+            if (/api[_-]?key|password|secret|token|authorization|mcp/i.test(key)) return '***';
+            if (typeof val === 'string' && val.startsWith('gsm_mcp_')) return '***';
             return val;
           }, 2);
         } catch {
@@ -172,16 +288,18 @@ class BackendAdapter {
           const text = await cloned.text();
           if (text.length > 0) {
             const preview = text.length > 4000 ? text.slice(0, 4000) + '...[truncated]' : text;
-            // Redact secrets inside JSON before exposing the request in logs.
+            // Redact secrets inside JSON (e.g. /mcp/status returns { token: "gsm_mcp_…" })
             try {
               const parsed = JSON.parse(preview.endsWith('...[truncated]') ? text.slice(0, 4000) : preview);
               responseBody = JSON.stringify(parsed, (key, val) => {
-                if (/api[_-]?key|password|secret|token|authorization/i.test(key)) return '***';
+                if (/api[_-]?key|password|secret|token|authorization|mcp/i.test(key)) return '***';
+                if (typeof val === 'string' && val.startsWith('gsm_mcp_')) return '***';
                 return val;
               }, 2);
               if (text.length > 4000) responseBody += '\n...[truncated]';
             } catch {
-              responseBody = preview;
+              // Non-JSON: strip gsm_mcp_ tokens if present
+              responseBody = preview.replace(/gsm_mcp_[A-Za-z0-9_-]+/g, 'gsm_mcp_***');
             }
           }
         } catch { /* body not readable */ }
@@ -536,14 +654,36 @@ class BackendAdapter {
 
   // === WebDAV Proxy ===
 
-  async proxyWebDAV(configId: string, method: string, path: string, body?: string, headers?: Record<string, string>): Promise<Response> {
+  async proxyWebDAV(
+    configId: string,
+    method: string,
+    path: string,
+    body?: string,
+    headers?: Record<string, string>,
+    inlineConfig?: { url: string; username: string; password: string },
+    signal?: AbortSignal,
+    timeoutMs?: number,
+  ): Promise<Response> {
     if (!this._backendUrl) throw new Error('Backend not available');
 
     return this.fetchWithTimeout(`${this._backendUrl}/proxy/webdav`, {
       method: 'POST',
       headers: this.getAuthHeaders(),
-      body: JSON.stringify({ configId, method, path, body, headers })
-    });
+      body: JSON.stringify({
+        configId, method, path, body, headers,
+        // WebDAV 大文件上传可达 300s；不放宽的话代理会先于调用方超时。
+        ...(timeoutMs ? { timeoutMs } : {}),
+        // 配置尚未同步到后端时（例如"测试连接"发生在保存之前），由前端直接带上凭据
+        ...(inlineConfig ? {
+          inlineUrl: inlineConfig.url,
+          inlineUsername: inlineConfig.username,
+          inlinePassword: inlineConfig.password,
+        } : {}),
+      }),
+      ...(signal ? { signal } : {}),
+      // 调用方自带的 AbortController 负责业务级超时；这里只兜底一个硬上限，
+      // 避免 signal 缺失时请求无限挂起。
+    }, timeoutMs ?? 300000);
   }
 
   // === Data Sync ===
@@ -601,28 +741,10 @@ class BackendAdapter {
     return res.json() as Promise<{ releases: Release[]; total: number }>;
   }
 
-  async syncDiscoveryAnalyses(analyses: DiscoveryAnalysisRecord): Promise<void> {
-    if (!this._backendUrl) return;
-    const res = await this.fetchWithRetry(`${this._backendUrl}/discovery-analyses`, {
-      method: 'PUT',
-      headers: this.getAuthHeaders(),
-      body: JSON.stringify({ analyses }),
-    }, 30000, 3);
-    if (!res.ok) await this.throwTranslatedError(res, 'Sync discovery analyses error');
-  }
-
-  async fetchDiscoveryAnalyses(): Promise<DiscoveryAnalysisRecord> {
-    if (!this._backendUrl) throw new Error('Backend not available');
-    const res = await this.fetchWithRetry(`${this._backendUrl}/discovery-analyses`, {
-      headers: this.getAuthHeaders(),
-    }, 30000, 3);
-    if (!res.ok) await this.throwTranslatedError(res, 'Fetch discovery analyses error');
-    return res.json() as Promise<DiscoveryAnalysisRecord>;
-  }
-
   async syncAIConfigs(configs: AIConfig[]): Promise<void> {
     if (!this._backendUrl) return;
 
+    // Pre-sync validation: warn about configs that will likely be skipped
     for (const c of configs) {
       if (!c.apiKey) {
         logger.warn('backendAdapter', 'AI config has empty apiKey, will be skipped', { name: c.name, id: c.id });
@@ -755,86 +877,6 @@ class BackendAdapter {
     return res.json() as Promise<VectorSearchConfig>;
   }
 
-  // === Search Index ===
-
-  async searchRepositoryIndex(payload: Record<string, unknown>, signal?: AbortSignal): Promise<SearchIndexResponse> {
-    if (!this._backendUrl) throw new Error('Backend not available');
-    const res = await this.fetchWithTimeout(`${this._backendUrl}/search/repositories`, {
-      method: 'POST',
-      headers: this.getAuthHeaders(),
-      body: JSON.stringify(payload),
-      signal,
-    }, 30000);
-    if (!res.ok) await this.throwTranslatedError(res, 'Search repositories error');
-    return res.json() as Promise<SearchIndexResponse>;
-  }
-
-  async cacheRepositoryReadme(repositoryId: number, readme: string, signal?: AbortSignal): Promise<void> {
-    if (!this._backendUrl) return;
-    const res = await this.fetchWithTimeout(`${this._backendUrl}/search/readme`, {
-      method: 'PUT',
-      headers: this.getAuthHeaders(),
-      body: JSON.stringify({ repositoryId, readme }),
-      signal,
-    }, 30000);
-    if (!res.ok) await this.throwTranslatedError(res, 'Cache README error');
-  }
-
-  async queryNativeVectorIndex(payload: Record<string, unknown>, signal?: AbortSignal): Promise<{ matches: NativeVectorMatch[] }> {
-    if (!this._backendUrl) throw new Error('Backend not available');
-    const res = await this.fetchWithTimeout(`${this._backendUrl}/search/vector/query`, {
-      method: 'POST',
-      headers: this.getAuthHeaders(),
-      body: JSON.stringify(payload),
-      signal,
-    }, 30000);
-    if (!res.ok) await this.throwTranslatedError(res, 'Query vector index error');
-    return res.json() as Promise<{ matches: NativeVectorMatch[] }>;
-  }
-
-  async upsertNativeVectorIndex(vectors: unknown[], signal?: AbortSignal): Promise<{ upserted: number }> {
-    if (!this._backendUrl) throw new Error('Backend not available');
-    const res = await this.fetchWithTimeout(`${this._backendUrl}/search/vector/upsert`, {
-      method: 'POST',
-      headers: this.getAuthHeaders(),
-      body: JSON.stringify({ vectors }),
-      signal,
-    }, 120000);
-    if (!res.ok) await this.throwTranslatedError(res, 'Upsert vector index error');
-    return res.json() as Promise<{ upserted: number }>;
-  }
-
-  async deleteNativeVectorIndex(ids: string[], signal?: AbortSignal): Promise<{ deleted: number }> {
-    if (!this._backendUrl) throw new Error('Backend not available');
-    const res = await this.fetchWithTimeout(`${this._backendUrl}/search/vector/delete`, {
-      method: 'POST',
-      headers: this.getAuthHeaders(),
-      body: JSON.stringify({ ids }),
-      signal,
-    }, 30000);
-    if (!res.ok) await this.throwTranslatedError(res, 'Delete vector index error');
-    return res.json() as Promise<{ deleted: number }>;
-  }
-
-  async cleanupNativeVectorIndex(keepIds: string[], signal?: AbortSignal): Promise<{ deleted: number }> {
-    if (!this._backendUrl) throw new Error('Backend not available');
-    const res = await this.fetchWithTimeout(`${this._backendUrl}/search/vector/cleanup`, {
-      method: 'POST',
-      headers: this.getAuthHeaders(),
-      body: JSON.stringify({ keepIds }),
-      signal,
-    }, 120000);
-    if (!res.ok) await this.throwTranslatedError(res, 'Cleanup vector index error');
-    return res.json() as Promise<{ deleted: number }>;
-  }
-
-  async getNativeVectorIndexStatus(): Promise<{ connected: boolean; vectorCount: number; dimensions: number }> {
-    if (!this._backendUrl) throw new Error('Backend not available');
-    const res = await this.fetchWithTimeout(`${this._backendUrl}/search/vector/status`, undefined, 10000);
-    if (!res.ok) await this.throwTranslatedError(res, 'Fetch vector index status error');
-    return res.json() as Promise<{ connected: boolean; vectorCount: number; dimensions: number }>;
-  }
-
 
   // === Settings (active selections) ===
 
@@ -856,6 +898,9 @@ class BackendAdapter {
     if (!res.ok) await this.throwTranslatedError(res, 'Sync settings error');
   }
 
+  /**
+   * Fetch frontend settings from the backend and hydrate JSON TEXT values.
+   */
   async fetchSettings(): Promise<Record<string, unknown>> {
     if (!this._backendUrl) throw new Error('Backend not available');
 
@@ -863,6 +908,33 @@ class BackendAdapter {
       headers: this.getAuthHeaders()
     });
     if (!res.ok) await this.throwTranslatedError(res, 'Fetch settings error');
+    const settings = await res.json();
+    if (settings === null || typeof settings !== 'object' || Array.isArray(settings)) {
+      throw new Error('invalid settings response');
+    }
+    return hydrateBackendSettings(settings as Record<string, unknown>);
+  }
+
+  async exportData(): Promise<Record<string, unknown>> {
+    if (!this._backendUrl) throw new Error('Backend not available');
+
+    const res = await this.fetchWithTimeout(`${this._backendUrl}/sync/export`, {
+      method: 'POST',
+      headers: this.getAuthHeaders()
+    });
+    if (!res.ok) await this.throwTranslatedError(res, 'Export error');
+    return res.json() as Promise<Record<string, unknown>>;
+  }
+
+  async importData(data: Record<string, unknown>): Promise<Record<string, unknown>> {
+    if (!this._backendUrl) throw new Error('Backend not available');
+
+    const res = await this.fetchWithTimeout(`${this._backendUrl}/sync/import`, {
+      method: 'POST',
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) await this.throwTranslatedError(res, 'Import error');
     return res.json() as Promise<Record<string, unknown>>;
   }
 
@@ -875,6 +947,40 @@ class BackendAdapter {
       const res = await this.fetchWithTimeout(`${this._backendUrl}/health`, undefined, 5000);
       if (res.ok) return res.json() as Promise<{ status: string; version: string; timestamp: string }>;
       return null;
+    } catch {
+      return null;
+    }
+  }
+
+  async verifyAuth(): Promise<boolean> {
+    if (!this._backendUrl) return false;
+
+    try {
+      const res = await this.fetchWithTimeout(`${this._backendUrl}/settings`, {
+        headers: this.getAuthHeaders(),
+      }, 5000);
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Restore the GitHub token stored on the backend for cross-browser/device
+   * session recovery. Only callable when the backend is reachable AND this
+   * client already authenticates (Bearer API_SECRET) — the backend never hands
+   * it out to unauthenticated callers.
+   */
+  async restoreAuth(): Promise<{ github_token: string | null } | null> {
+    if (!this._backendUrl) return null;
+
+    try {
+      const res = await this.fetchWithTimeout(`${this._backendUrl}/sync/auth`, {
+        method: 'POST',
+        headers: this.getAuthHeaders(),
+      }, 8000);
+      if (!res.ok) return null;
+      return res.json() as Promise<{ github_token: string | null }>;
     } catch {
       return null;
     }
@@ -922,6 +1028,40 @@ class BackendAdapter {
     }> }>;
   }
 
+  // === MCP admin (backend-hosted Streamable HTTP / SSE) ===
+
+  async getMcpStatus(): Promise<{
+    enabled: boolean;
+    token: string;
+    endpoints: { streamableHttp: string; sse: string; messages: string };
+    vectorAvailable: boolean;
+    vectorReason: string | null;
+  }> {
+    if (!this._backendUrl) throw new Error('Backend not available');
+    const res = await this.fetchWithTimeout(`${this._backendUrl}/mcp/status`, {
+      headers: this.getAuthHeaders(),
+    });
+    if (!res.ok) await this.throwTranslatedError(res, 'Fetch MCP status error');
+    return res.json();
+  }
+
+  async updateMcpConfig(body: {
+    enabled?: boolean;
+    resetToken?: boolean;
+  }): Promise<{
+    enabled: boolean;
+    token: string;
+    endpoints: { streamableHttp: string; sse: string; messages: string };
+  }> {
+    if (!this._backendUrl) throw new Error('Backend not available');
+    const res = await this.fetchWithTimeout(`${this._backendUrl}/mcp/config`, {
+      method: 'PUT',
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) await this.throwTranslatedError(res, 'Update MCP config error');
+    return res.json();
+  }
 }
 
 export const backend = new BackendAdapter();

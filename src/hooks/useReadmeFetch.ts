@@ -1,6 +1,8 @@
+
+import { useT } from '../i18n/useT';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { GitHubApiService } from '../services/githubApi';
+import { createGitHubApiService } from '../services/githubApiFactory';
 import { backend } from '../services/backendAdapter';
 import { shouldBypassBackend } from '../services/routeMode';
 import { useAppStore } from '../store/useAppStore';
@@ -18,7 +20,6 @@ const abortOperation = (): Error => new DOMException('Aborted', 'AbortError');
 export interface UseReadmeFetchOptions {
   owner: string;
   name: string;
-  repositoryId?: number;
 }
 
 export interface ReadmeFetchActions {
@@ -28,13 +29,13 @@ export interface ReadmeFetchActions {
   cancel: () => void;
 }
 
-export const useReadmeFetch = ({ owner, name, repositoryId }: UseReadmeFetchOptions): ReadmeFetchActions => {
-  const { githubToken, language } = useAppStore(useShallow((state) => ({
+export const useReadmeFetch = ({ owner, name }: UseReadmeFetchOptions): ReadmeFetchActions => {
+  const { githubToken } = useAppStore(useShallow((state) => ({
     githubToken: state.githubToken,
-    language: state.language,
   })));
 
   const contentAbortRef = useRef<AbortController | null>(null);
+  const t = useT('app');
   const candidatesAbortRef = useRef<AbortController | null>(null);
 
   const cancel = useCallback(() => {
@@ -58,18 +59,11 @@ export const useReadmeFetch = ({ owner, name, repositoryId }: UseReadmeFetchOpti
     contentAbortRef.current = controller;
     const signal = controller.signal;
 
-    const cacheDefaultReadme = (content: string) => {
-      if (!variant.isDefault || repositoryId === undefined || shouldBypassBackend() || !backend.isAvailable || typeof backend.cacheRepositoryReadme !== 'function') return;
-      void backend.cacheRepositoryReadme(repositoryId, content).catch((error) => {
-        console.warn('Failed to cache README in search projection:', error);
-      });
-    };
-
     const fetchFromGitHubApi = async (): Promise<string> => {
       if (!githubToken) {
-        throw new Error(language === 'zh' ? '未登录且后端不可用，无法加载 README' : 'Not logged in and backend unavailable, cannot load README');
+        throw new Error(t('useReadmeFetch.not-logged-in-and-backend-unavailable-cannot-loa'));
       }
-      const githubApi = new GitHubApiService(githubToken);
+      const githubApi = createGitHubApiService(githubToken, { direct: true });
       return variant.isDefault || !variant.path
         ? githubApi.getRepositoryReadme(owner, name, signal)
         : githubApi.getRepositoryReadmeByPath(owner, name, variant.path, signal);
@@ -78,7 +72,6 @@ export const useReadmeFetch = ({ owner, name, repositoryId }: UseReadmeFetchOpti
     if (shouldBypassBackend() || !backend.isAvailable) {
       const directContent = await fetchFromGitHubApi();
       if (signal.aborted) throw abortOperation();
-      cacheDefaultReadme(directContent);
       return directContent;
     }
 
@@ -87,7 +80,6 @@ export const useReadmeFetch = ({ owner, name, repositoryId }: UseReadmeFetchOpti
         ? await backend.getRepositoryReadme(owner, name, signal)
         : await backend.getRepositoryReadmeByPath(owner, name, variant.path, signal);
       if (signal.aborted) throw abortOperation();
-      cacheDefaultReadme(content);
       return content;
     } catch (backendError) {
       if (signal.aborted) throw abortOperation();
@@ -98,10 +90,9 @@ export const useReadmeFetch = ({ owner, name, repositoryId }: UseReadmeFetchOpti
       console.warn('Falling back to direct GitHub README fetch after backend failure:', backendError);
       const content = await fetchFromGitHubApi();
       if (signal.aborted) throw abortOperation();
-      cacheDefaultReadme(content);
       return content;
     }
-  }, [owner, name, repositoryId, githubToken, language]);
+  }, [owner, name, githubToken, t]);
 
   const fetchReadmeCandidates = useCallback(async (defaultBranch: string | undefined): Promise<GitHubReadmeCandidateItem[]> => {
     if (candidatesAbortRef.current) {
@@ -113,7 +104,7 @@ export const useReadmeFetch = ({ owner, name, repositoryId }: UseReadmeFetchOpti
 
     const fetchFromGitHubApi = async (): Promise<GitHubReadmeCandidateItem[]> => {
       if (!githubToken) return [];
-      const githubApi = new GitHubApiService(githubToken);
+      const githubApi = createGitHubApiService(githubToken, { direct: true });
       return githubApi.listRepositoryReadmeCandidates(owner, name, defaultBranch, signal);
     };
 

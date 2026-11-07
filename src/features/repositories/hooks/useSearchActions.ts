@@ -1,23 +1,20 @@
+import { useT } from "../../../i18n/useT";
 import { useCallback, useMemo, useState, type MutableRefObject, useRef } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import type { Category, Repository } from '../../../types';
 import { useAppStore, getAllCategories } from '../../../store/useAppStore';
 import { AIService, isAbortError } from '../../../services/aiService';
 import { EmbeddingClient, VectorSearchService } from '../../../services/vectorSearchService';
-import { GitHubApiService } from '../../../services/githubApi';
-import { createGitHubListsApiService } from '../../../services/githubApiFactory';
+import { CrossEncoderReranker } from '../../../services/crossEncoderReranker';
+import { runVectorSearchPipeline } from '../../../services/vectorSearchPipeline';
+import { createGitHubApiService, createGitHubListsApiService } from '../../../services/githubApiFactory';
 import { forceSyncToBackend } from '../../../services/autoSync';
 import { useDialog } from '../../../hooks/useDialog';
 import type { GitHubList } from '../../../services/githubListsApi';
 import type { VectorQueryResult } from '../../../services/vectorSearchService';
-import { backend } from '../../../services/backendAdapter';
 import { isReservedCategoryName } from '../../../utils/categoryUtils';
-import { mergeRepositoriesPreservingLocalMetadata } from '../../../utils/repositoryMerge';
-import {
-  classifyLocalSearchQuality,
-  mergeHybridSearchResults,
-  performWeightedTextSearch,
-} from '../../../utils/repoSearch';
+import { performBasicTextSearch } from '../../../utils/repoSearch';
+import { assignIdentityMatches } from '../../../utils/repositoryIdentity';
 
 // ===== 提纯纯函数（来源逐字对应 SearchBar 基线行号） =====
 
@@ -40,32 +37,62 @@ export const buildSearchPatch = (
   return new Map(boostedResults.map(r => [r.id, r.score]));
 };
 
+/**
+ * 星标同步的分配结果：与 `newRepos` 一一对齐（`undefined` = 新增）。
+ *
+ * 规则本体在 `utils/repositoryIdentity`（id 优先，合成 id 的名称兜底其次），
+ * 与 `addRepository` 共用同一份实现，避免两处口径漂移。
+ */
+const assignStarredRepositories = (
+  newRepos: Repository[],
+  storeRepos: Repository[],
+): Array<Repository | undefined> => assignIdentityMatches(newRepos, storeRepos);
+
+// 当前在途 AI 搜索的控制器（模块级）：新搜索启动时中止旧请求（超代语义），
+// Quick Access 等外部流程也通过 cancelActiveAiSearch 中止，避免过期结果落盘
+const aiSearchAbortRef: { current: AbortController | null } = { current: null };
+
+export const cancelActiveAiSearch = () => {
+  aiSearchAbortRef.current?.abort();
+};
+
+/** 统计本次同步中真正新增的仓库数（与合并口径一致）。 */
+export const countNewStarredRepositories = (
+  newRepos: Repository[],
+  storeRepos: Repository[],
+): number => assignStarredRepositories(newRepos, storeRepos)
+  .filter(assignment => assignment === undefined).length;
+
 // SearchBar 725-750：星标同步结果与本地仓库逐字段合并（license `?? null` 回填）。
 export const mergeStarredRepositories = (
   newRepos: Repository[],
   storeRepos: Repository[],
 ): Repository[] => {
-  const existingRepoMap = new Map(storeRepos.map(repo => [repo.id, repo]));
-  const existingRepoNameMap = new Map(
-    storeRepos.map(repo => [repo.full_name.trim().toLowerCase(), repo]),
-  );
-  return newRepos.map(newRepo => {
-    // Older versions generated a local ID when a repository was first added.
-    // Match those records by GitHub's stable full_name, then replace the ID
-    // with the real GitHub ID returned by the sync endpoint.
-    const existing = existingRepoMap.get(newRepo.id)
-      ?? existingRepoNameMap.get(newRepo.full_name.trim().toLowerCase());
+  // 与 countNewStarredRepositories 共用同一套分配结果，保证「合并」与
+  // 「新增计数」口径一致，且名称兜底不会把同一份本地记录重复用掉。
+  const assignments = assignStarredRepositories(newRepos, storeRepos);
+  return newRepos.map((newRepo, index) => {
+    const existing = assignments[index];
     if (existing) {
-      const [merged] = mergeRepositoriesPreservingLocalMetadata(
-        [{ ...newRepo, id: existing.id }],
-        [existing],
-      );
       return {
-        ...merged,
-        id: newRepo.id,
-        // GitHub source fields follow the fresh response. Missing optional
-        // health fields fall back to the cached value.
+        ...existing,
+        name: newRepo.name,
+        full_name: newRepo.full_name,
+        description: newRepo.description,
+        html_url: newRepo.html_url,
+        stargazers_count: newRepo.stargazers_count,
+        forks_count: newRepo.forks_count,
+        forks: newRepo.forks,
+        language: newRepo.language,
+        updated_at: newRepo.updated_at,
+        pushed_at: newRepo.pushed_at,
+        starred_at: newRepo.starred_at,
+        owner: newRepo.owner,
+        topics: newRepo.topics,
+        // 回填历史仓库缺失的 license 字段（GitHub 源元数据，跟随 newRepo）
         license: newRepo.license ?? null,
+        // GitHub 原生状态字段：跟随 newRepo 刷新（归档/停用状态会随上游变化）。
+        // 源缺失时保留本地已获得的值，避免把已有 Health 事实退化成「未知」。
         archived: newRepo.archived ?? existing.archived,
         disabled: newRepo.disabled ?? existing.disabled,
         fork: newRepo.fork ?? existing.fork,
@@ -254,172 +281,194 @@ export const useSearchActions = (): SearchActions => {
   const [searchPhase, setSearchPhase] = useState<string | null>(null);
   const vectorScoreMapRef = useRef<{ query: string; scores: Map<string, number> } | null>(null);
   const skipNextTextSearchRef = useRef(false);
-  // 当前在途 AI 搜索的控制器：新搜索启动时中止旧请求（超代语义）
-  const aiSearchAbortRef = useRef<AbortController | null>(null);
-  const t = useCallback((zh: string, en: string) => language === 'zh' ? zh : en, [language]);
-
-  type LexicalSearchResult = {
-    repositories: Repository[];
-    quality: 'identity' | 'strong-field' | 'weak-text' | 'no-results';
-  };
-
-  const executeLexicalSearch = useCallback(async (
-    query: string,
-    signal?: AbortSignal,
-  ): Promise<LexicalSearchResult> => {
-    if (backend.isAvailable) {
-      try {
-        const response = await backend.searchRepositoryIndex({
-          query,
-          filters: useAppStore.getState().searchFilters,
-          limit: 50,
-        }, signal);
-        const order = new Map(response.items.map((item, index) => [String(item.id), index]));
-        const indexed = repositories.filter((repository) => order.has(String(repository.id)));
-        indexed.sort((a, b) => (order.get(String(a.id)) ?? Number.MAX_SAFE_INTEGER) - (order.get(String(b.id)) ?? Number.MAX_SAFE_INTEGER));
-        return { repositories: indexed, quality: response.quality };
-      } catch (error) {
-        if (isAbortError(error)) throw error;
-        console.warn('D1 search failed, falling back to local weighted search:', error);
-      }
-    }
-
-    const localResults = performWeightedTextSearch(repositories, query);
-    return { repositories: localResults, quality: classifyLocalSearchQuality(localResults, query) };
-  }, [repositories]);
+  const t = useT('repositories');
 
   const keywordSearch = useCallback(async (
     query: string,
     applyFilters: (repos: Repository[]) => Repository[],
     options?: { signal?: AbortSignal },
   ): Promise<void> => {
-    if (!query.trim()) return;
-    const controllerSignal = options?.signal;
-    const throwIfAborted = () => {
-      if (controllerSignal?.aborted) throw new DOMException('Aborted', 'AbortError');
-    };
-    const raw = await executeLexicalSearch(query, controllerSignal);
-    throwIfAborted();
-    let selected = raw.repositories;
+    const activeConfig = aiConfigs.find(config => config.id === activeAIConfig);
 
-    const vsConfig = useAppStore.getState().vectorSearchConfig;
-    const activeEmbeddingConfig = useAppStore.getState().embeddingConfigs.find(
-      (config) => config.id === vsConfig?.embeddingConfigId,
-    );
-    const qualityRank = (quality: LexicalSearchResult['quality']): number => ({
-      'no-results': 0,
-      'weak-text': 1,
-      'strong-field': 2,
-      identity: 3,
-    }[quality]);
-
-    if (raw.quality === 'weak-text' || raw.quality === 'no-results') {
-      // Native Vectorize is a Worker capability. If the Worker is unavailable,
-      // keep the search local and do not use legacy external vector settings.
-      if (vsConfig?.enabled && backend.isAvailable) {
-        if (activeEmbeddingConfig) {
-          try {
-            setSearchPhase(t('生成查询向量…', 'Generating query vector…'));
-            const embeddingClient = new EmbeddingClient(activeEmbeddingConfig);
-            const vectorService = new VectorSearchService(vsConfig);
-            const vectors = await embeddingClient.embed([query], 'query', controllerSignal);
-            throwIfAborted();
-            if (vectors[0]) {
-              setSearchPhase(t('搜索向量索引…', 'Searching vector index…'));
-              const vectorResults = await vectorService.query(vectors[0], {
-                topK: vsConfig.searchTopK ?? 30,
-                threshold: vsConfig.searchThreshold ?? 0.35,
-              }, controllerSignal);
-              throwIfAborted();
-              if (vectorResults.length > 0) {
-                selected = mergeHybridSearchResults(repositories, raw.repositories, vectorResults);
-                const hybridScores = buildSearchPatch(query, vectorResults);
-                selected.forEach((repository, index) => {
-                  if (!hybridScores.has(String(repository.id))) {
-                    hybridScores.set(String(repository.id), 1 / (100 + index));
-                  }
-                });
-                vectorScoreMapRef.current = {
-                  query,
-                  scores: hybridScores,
-                };
-              }
+    let filtered = repositories;
+    let aiOrdered = false;
+    if (activeConfig) {
+      try {
+        // 无向量降级链：查询扩展+意图复述 → 词法候选召回 → LLM 精选排序
+        setSearchPhase(t('useSearchActions.ai-semantic-analysis'));
+        const aiService = new AIService(activeConfig, language);
+        const aiResults = await aiService.searchRepositoriesWithSelection(repositories, query, {
+          signal: options?.signal,
+          onPhase: (phase) => {
+            setSearchPhase(phase === 'selecting'
+              ? t('useSearchActions.ai-selecting-relevant-repositories')
+              : t('useSearchActions.ai-semantic-analysis'));
+          },
+          onFallback: (reason) => {
+            // 端点抖动/配置问题时用户看到的不能只是"空结果"：明确告知已降级
+            if (reason === 'ai_failed') {
+              toast(t('useSearchActions.ai-request-failed-fell-back-to-local-lexical-sea'), 'warning');
             }
-          } catch (error) {
-            if (isAbortError(error)) throw error;
-            console.warn('Vector search failed, returning FTS results:', error);
-          }
+          },
+        });
+        console.log('✅ AI selection search completed, results:', aiResults.length);
+        filtered = aiResults;
+        aiOrdered = true;
+      } catch (error) {
+        // 取消不是失败：向上传播交给 aiSearch 静默结束，不产出兜底结果
+        if (options?.signal?.aborted || isAbortError(error)) {
+          throw new DOMException('Search cancelled', 'AbortError');
         }
-      } else if (activeAIConfig) {
-        try {
-          setSearchPhase(t('改写搜索查询…', 'Rewriting search query…'));
-          const config = aiConfigs.find((item) => item.id === activeAIConfig);
-          if (config) {
-            const rewritten = await new AIService(config, language).rewriteSearchQuery(query, controllerSignal);
-            throwIfAborted();
-            if (rewritten && rewritten.trim().toLocaleLowerCase() !== query.trim().toLocaleLowerCase()) {
-              const rewrittenResult = await executeLexicalSearch(rewritten, controllerSignal);
-              throwIfAborted();
-              if (rewrittenResult.repositories.length > 0
-                && (qualityRank(rewrittenResult.quality) > qualityRank(raw.quality)
-                  || (qualityRank(rewrittenResult.quality) === qualityRank(raw.quality)
-                    && rewrittenResult.repositories.length > raw.repositories.length))) {
-                selected = rewrittenResult.repositories;
-              }
-            }
-          }
-        } catch (error) {
-          if (isAbortError(error)) throw error;
-          console.warn('AI query rewrite failed, returning FTS results:', error);
-        }
+        console.warn('❌ AI search failed, falling back to basic search:', error);
+        toast(t('useSearchActions.ai-request-failed-fell-back-to-local-lexical-sea'), 'warning');
+        filtered = performBasicTextSearch(repositories, query);
       }
+    } else {
+      console.log('⚠️ No AI config found, using basic text search');
+      // Basic text search if no AI config
+      filtered = performBasicTextSearch(repositories, query);
     }
 
-    throwIfAborted();
-    const selectedOrder = new Map(selected.map((repository, index) => [String(repository.id), index]));
-    const finalResults = applyFilters(selected).sort(
-      (a, b) => (selectedOrder.get(String(a.id)) ?? Number.MAX_SAFE_INTEGER)
-        - (selectedOrder.get(String(b.id)) ?? Number.MAX_SAFE_INTEGER),
-    );
-    skipNextTextSearchRef.current = true;
-    setSearchResults(finalResults);
+    if (options?.signal?.aborted) {
+      throw new DOMException('Search cancelled', 'AbortError');
+    }
+
+    // Apply other filters and update results
+    const finalFiltered = applyFilters(filtered);
+    if (aiOrdered) {
+      // AI 返回的顺序（LLM 精选序或词法兜底序）就是相关性顺序；applyFilters 会按
+      // 排序控件重排（默认 star 降序），这里恢复 AI 顺序——与向量路径的
+      // rerankOrder 恢复逻辑同构。
+      const aiOrder = new Map(filtered.map((repo, index) => [String(repo.id), index]));
+      finalFiltered.sort((a, b) =>
+        (aiOrder.get(String(a.id)) ?? Number.MAX_SAFE_INTEGER)
+        - (aiOrder.get(String(b.id)) ?? Number.MAX_SAFE_INTEGER));
+      // 下面 setSearchFilters({ query }) 会触发 SearchBar 的过滤 effect，用基础
+      // 文本搜索+star 排序重设结果——LLM 精选的顺序、子集与显式空态都会被覆盖。
+      // 与向量路径同用 skipNextTextSearchRef 挡掉这次 effect（含空结果场景）。
+      skipNextTextSearchRef.current = true;
+    }
+    setSearchResults(finalFiltered);
+
+    // Update search filters to mark that AI search was performed
     setSearchFilters({ query });
-  }, [activeAIConfig, aiConfigs, executeLexicalSearch, language, repositories, setSearchFilters, setSearchResults, t]);
+  }, [repositories, aiConfigs, activeAIConfig, language, setSearchResults, setSearchFilters, toast, t]);
 
   const aiSearch = useCallback(async (
     query: string,
     applyFilters: (repos: Repository[]) => Repository[],
   ): Promise<void> => {
     if (!query.trim()) return;
+
+    // 新搜索接管：中止上一次仍在途的 AI 请求（搜索进行中按 Enter 可再次触发），
+    // 防止过期结果落盘覆盖新结果。被取代的搜索在 finally 里不复位搜索状态。
     aiSearchAbortRef.current?.abort();
     const controller = new AbortController();
     aiSearchAbortRef.current = controller;
+
     setIsSearching(true);
     setSearchPhase(null);
     vectorScoreMapRef.current = null;
 
     try {
+      // ====== 向量搜索分支 ======
+      // 保持原时机：非响应式 getState() 读取（原文件如此，不改成响应式 selector）
+      const vsConfig = useAppStore.getState().vectorSearchConfig;
+      const embConfigs = useAppStore.getState().embeddingConfigs;
+      const activeEmbConfig = embConfigs.find(c => c.id === vsConfig?.embeddingConfigId);
+
+      if (vsConfig?.enabled && vsConfig?.workerUrl && activeEmbConfig) {
+        try {
+          const embeddingClient = new EmbeddingClient(activeEmbConfig);
+          const vectorService = new VectorSearchService(vsConfig);
+          const aiConfig = aiConfigs.find(config => config.id === activeAIConfig);
+          const aiService = aiConfig
+            && (vsConfig.enableHyDE !== false || vsConfig.enableReranking !== false)
+            ? new AIService(aiConfig, language)
+            : null;
+          const crossEncoder = activeEmbConfig.apiType === 'siliconflow'
+            ? new CrossEncoderReranker(activeEmbConfig)
+            : null;
+          const result = await runVectorSearchPipeline({
+            query,
+            repositories,
+            vectorConfig: vsConfig,
+            embeddingConfig: activeEmbConfig,
+            aiService,
+            embeddingClient,
+            vectorService,
+            crossEncoder,
+            signal: controller.signal,
+            onPhase: (phase) => {
+              setSearchPhase(
+                phase === 'analyzing'
+                  ? t('useSearchActions.ai-analyzing-query')
+                  : phase === 'embedding'
+                    ? t('useSearchActions.generating-query-vector')
+                    : phase === 'recalling'
+                      ? t('useSearchActions.searching-vector-index')
+                      : t('useSearchActions.ai-semantic-reranking'),
+              );
+            },
+          });
+
+          if (controller.signal.aborted || aiSearchAbortRef.current !== controller) {
+            throw new DOMException('Search superseded', 'AbortError');
+          }
+          if (result === null) {
+            await keywordSearch(query, applyFilters, { signal: controller.signal });
+            return;
+          }
+
+          const finalFiltered = applyFilters([...result.repositories]);
+          const order = new Map(
+            result.repositories.map((repo, index) => [String(repo.id), index]),
+          );
+          finalFiltered.sort((a, b) =>
+            (order.get(String(a.id)) ?? Number.MAX_SAFE_INTEGER)
+            - (order.get(String(b.id)) ?? Number.MAX_SAFE_INTEGER));
+          vectorScoreMapRef.current = { query, scores: result.scoreMap };
+          skipNextTextSearchRef.current = true;
+          setSearchResults(finalFiltered);
+          setSearchFilters({ query });
+          return;
+        } catch (vectorError) {
+          if (controller.signal.aborted || isAbortError(vectorError)) {
+            throw new DOMException('Search superseded', 'AbortError');
+          }
+          console.warn('❌ Vector search failed, falling back to keyword search:', vectorError);
+        }
+      }
+      // ====== 向量搜索分支结束 ======
+
       await keywordSearch(query, applyFilters, { signal: controller.signal });
     } catch (error) {
-      if (!isAbortError(error)) console.error('Search failed:', error);
+      // 取消不是失败：静默结束当前搜索（不产出结果），不当作可恢复的 AI 失败
+      if (isAbortError(error)) {
+        console.log('🚫 AI search cancelled');
+        return;
+      }
+      console.error('💥 Search failed:', error);
     } finally {
+      // 仅当本次搜索仍是"当前搜索"时才复位状态：被新搜索取代的旧搜索
+      // 不把新搜索的 isSearching/searchPhase 状态清掉
       if (aiSearchAbortRef.current === controller) {
         aiSearchAbortRef.current = null;
         setIsSearching(false);
         setSearchPhase(null);
       }
     }
-  }, [keywordSearch]);
+  }, [repositories, aiConfigs, activeAIConfig, language, setSearchResults, setSearchFilters, keywordSearch, t]);
 
   const syncStars = useCallback(async (mode: 'auto' | 'stars-only' | 'stars-and-lists' = 'auto') => {
     if (!githubToken) {
-      toast(t('GitHub token 未找到，请重新登录。', 'GitHub token not found. Please login again.'), 'error');
+      toast(t('useSearchActions.github-token-not-found-please-login-again'), 'error');
       return;
     }
 
     setSyncingStars(true);
     try {
-      const githubApi = new GitHubApiService(githubToken);
+      const githubApi = createGitHubApiService(githubToken);
       const newRepositories = await githubApi.getAllStarredRepositories();
 
       const storeRepos = useAppStore.getState().repositories;
@@ -438,7 +487,7 @@ export const useSearchActions = (): SearchActions => {
           const listsApi = createGitHubListsApiService(githubToken);
           const login = user?.login;
           if (!login) {
-            throw new Error(t('无法获取 GitHub 用户名，请重新登录。', 'Failed to get GitHub username. Please login again.'));
+            throw new Error(t('useSearchActions.failed-to-get-github-username-please-login-again'));
           }
           const lists = await listsApi.getUserLists(login);
 
@@ -467,34 +516,24 @@ export const useSearchActions = (): SearchActions => {
               .map(([name, count]) => `${name}(${count})`)
               .join('、');
             const createdHint = createdCategoriesCount > 0
-              ? t(
-                  `（新建 ${createdCategoriesCount} 个分类）`,
-                  ` (${createdCategoriesCount} new categor${createdCategoriesCount > 1 ? 'ies' : 'y'} created)`
-                )
+              ? t('useSearchActions.list-sync-new-categories', { count: createdCategoriesCount })
               : '';
-            toast(t(
-              `已同步 ${lists.length} 个 list，并应用到 ${appliedTotal} 个未锁定仓库：${listSummary}${createdHint}`,
-              `Synced ${lists.length} lists, applied to ${appliedTotal} unlocked repositories: ${listSummary}${createdHint}`
-            ), 'info');
+            toast(t('useSearchActions.synced-v1-lists-applied-to-appliedtotal-unlocked', { v1: lists.length, appliedTotal: appliedTotal, listSummary: listSummary, createdHint: createdHint }), 'info');
           } else if (createdCategoriesCount > 0) {
             // 命中数为 0，但本次新建了分类（云端 list 与本地无交集但仍有其名分类）
-            toast(t(
-              `已同步 ${lists.length} 个 list（新建 ${createdCategoriesCount} 个分类）。`,
-              `Synced ${lists.length} lists (${createdCategoriesCount} new categor${createdCategoriesCount > 1 ? 'ies' : 'y'} created).`
-            ), 'info');
+            toast(t('useSearchActions.list-sync-complete', { lists: lists.length, newCount: createdCategoriesCount }), 'info');
           }
         } catch (listError) {
           console.error('List sync failed:', listError);
-          toast(t(
-            'List 同步失败，星标仓库已同步。请稍后重试，或检查 GitHub Token 权限（需 user scope）。',
-            'List sync failed, starred repositories were synced. Retry later, or check the GitHub Token has the user scope.'
-          ), 'error');
+          toast(t('useSearchActions.list-sync-failed-starred-repositories-were-synce'), 'error');
           // 不中断：星标同步结果仍然生效
         }
       }
 
-      const existingRepoIds = new Set(storeRepos.map(repo => repo.id));
-      const newRepoCount = newRepositories.filter(repo => !existingRepoIds.has(repo.id)).length;
+      // 「新增仓库」计数必须与 mergeStarredRepositories 用同一套匹配口径
+      // （id 优先，full_name 兜底）：否则被 full_name 兜底救回的存量仓库
+      // 会被误报为新增，弹出「发现 N 个新仓库」的错误提示。
+      const newRepoCount = countNewStarredRepositories(newRepositories, storeRepos);
 
       setRepositories(finalRepositories);
       await forceSyncToBackend();
@@ -502,17 +541,17 @@ export const useSearchActions = (): SearchActions => {
       setLastSync(new Date().toISOString());
 
       if (newRepoCount > 0) {
-        toast(t(`同步完成！发现 ${newRepoCount} 个新仓库。`, `Sync completed! Found ${newRepoCount} new repositories.`), 'success');
+        toast(t('useSearchActions.sync-completed-found-newrepocount-new-repositori', { newRepoCount: newRepoCount }), 'success');
       } else {
-        toast(t('同步完成！所有仓库都是最新的。', 'Sync completed! All repositories are up to date.'), 'info');
+        toast(t('useSearchActions.sync-completed-all-repositories-are-up-to-date'), 'info');
       }
 
     } catch (error) {
       console.error('Sync failed:', error);
       if (error instanceof Error && error.message.includes('token')) {
-        toast(t('GitHub token 已过期或无效，请重新登录。', 'GitHub token has expired or is invalid. Please login again.'), 'error');
+        toast(t('useSearchActions.github-token-has-expired-or-is-invalid-please-lo'), 'error');
       } else {
-        toast(t('同步失败，请检查网络连接或稍后重试。', 'Sync failed. Please check your network connection or try again later.'), 'error');
+        toast(t('useSearchActions.sync-failed-please-check-your-network-connection'), 'error');
       }
     } finally {
       setSyncingStars(false);

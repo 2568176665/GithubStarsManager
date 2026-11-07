@@ -1,13 +1,11 @@
+
+import { useT } from '../../../i18n/useT';
 import { useCallback, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import type { AIConfig } from '../../../types';
 import { useAppStore } from '../../../store/useAppStore';
 import { useDialog } from '../../../hooks/useDialog';
 import { AIService } from '../../../services/aiService';
-
-interface UseAIConfigActionsOptions {
-  t: (zh: string, en: string) => string;
-}
 
 export interface AIConfigActions {
   testingId: string | null;
@@ -20,7 +18,8 @@ export interface AIConfigActions {
  * Encapsulates AI connection tests so settings presentation code never creates
  * service instances or turns provider failures into UI messages directly.
  */
-export const useAIConfigActions = ({ t }: UseAIConfigActionsOptions): AIConfigActions => {
+export const useAIConfigActions = (): AIConfigActions => {
+  const t = useT('settings');
   const language = useAppStore(useShallow((state) => state.language));
   const { toast } = useDialog();
   const [testingId, setTestingId] = useState<string | null>(null);
@@ -30,17 +29,14 @@ export const useAIConfigActions = ({ t }: UseAIConfigActionsOptions): AIConfigAc
     try {
       const result = await new AIService(config, language).testConnection();
       if (result.success) {
-        toast(t('AI服务连接成功！', 'AI service connection successful!'), 'success');
+        toast(t('useAIConfigActions.ai-service-connection-successful'), 'success');
       } else {
         toast(result.message, 'error');
       }
     } catch (error) {
       console.error('AI test failed:', error);
       toast(
-        t(
-          'AI服务测试失败，请检查网络连接和配置。',
-          'AI service test failed. Please check network connection and configuration.',
-        ),
+        t('useAIConfigActions.ai-service-test-failed-please-check-network-conn'),
         'error',
       );
     }

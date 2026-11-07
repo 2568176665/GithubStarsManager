@@ -1,5 +1,8 @@
-import React from 'react';
-import { ExternalLink, Github, Globe, Mail, Package, Twitter } from 'lucide-react';
+
+import { TranslateFn } from '../../i18n/useT';
+import React, { useState } from 'react';
+import { ArrowRight, ExternalLink, Key, Mail, Package } from 'lucide-react';
+import { Github, Twitter } from '../ui/brand-icons';
 import { UpdateChecker } from '../UpdateChecker';
 import { useAppStore } from '../../store/useAppStore';
 import { useShallow } from 'zustand/react/shallow';
@@ -7,87 +10,41 @@ import { version } from '../../../package.json';
 import { PROJECT_REPO_URL } from '../../constants/project';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog';
+import { Input } from '../ui/input';
 import { Label } from '../ui/label';
-import { RadioGroup, RadioGroupItem } from '../ui/radio-group';
-import { ThemeSettingsCard } from './ThemeSettingsCard';
+import { useGitHubTokenActions } from '../../features/settings/hooks/useGitHubTokenActions';
+import { GitHubTokenPermissions } from '../GitHubTokenPermissions';
 
 interface GeneralPanelProps {
-  t: (zh: string, en: string) => string;
+  t: TranslateFn;
 }
 
 export const GeneralPanel: React.FC<GeneralPanelProps> = ({ t }) => {
-  const { language, setLanguage } = useAppStore(useShallow((state) => ({
-    language: state.language,
-    setLanguage: state.setLanguage,
+  const { user } = useAppStore(useShallow((state) => ({
+    user: state.user,
   })));
+  const githubToken = useGitHubTokenActions();
+  const [guideOpen, setGuideOpen] = useState(false);
 
   return (
     <div className="space-y-6">
       <div className="flex items-center space-x-3">
         <Package className="h-6 w-6 text-muted-foreground dark:text-muted-foreground" />
-        <h3 className="text-lg font-semibold text-foreground dark:text-foreground">{t('通用设置', 'General Settings')}</h3>
+        <h3 className="text-lg font-semibold text-foreground dark:text-foreground">{t('generalPanel.general-settings')}</h3>
       </div>
-
-      <ThemeSettingsCard t={t} />
-
-      <Card>
-        <CardHeader>
-          <div className="flex items-center space-x-3">
-            <Globe className="h-5 w-5 text-muted-foreground dark:text-muted-foreground" />
-            <CardTitle id="language-settings-title">{t('语言设置', 'Language Settings')}</CardTitle>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <RadioGroup aria-labelledby="language-settings-title" value={language} onValueChange={(value) => setLanguage(value as 'zh' | 'en')} className="grid max-w-md grid-cols-2 gap-4">
-            <Label htmlFor="language-zh" className="flex cursor-pointer items-center gap-3 rounded-lg border border-border p-3 transition-colors hover:bg-background dark:border-border dark:hover:bg-card/[0.10]">
-              <RadioGroupItem value="zh" id="language-zh" aria-labelledby="language-zh-label" />
-              <span>
-                <span id="language-zh-label" className="block text-base font-medium text-foreground dark:text-foreground">中文</span>
-                <span className="mt-1 block text-xs font-normal text-muted-foreground dark:text-muted-foreground">Simplified Chinese</span>
-              </span>
-            </Label>
-            <Label htmlFor="language-en" className="flex cursor-pointer items-center gap-3 rounded-lg border border-border p-3 transition-colors hover:bg-background dark:border-border dark:hover:bg-card/[0.10]">
-              <RadioGroupItem value="en" id="language-en" aria-labelledby="language-en-label" />
-              <span>
-                <span id="language-en-label" className="block text-base font-medium text-foreground dark:text-foreground">English</span>
-                <span className="mt-1 block text-xs font-normal text-muted-foreground dark:text-muted-foreground">US English</span>
-              </span>
-            </Label>
-          </RadioGroup>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <div className="flex items-center space-x-3">
-            <Github className="h-5 w-5 text-muted-foreground dark:text-muted-foreground" />
-            <CardTitle>{t('GitHub Token 权限', 'GitHub Token Permissions')}</CardTitle>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-3 text-sm text-muted-foreground dark:text-muted-foreground">
-          <p>{t('如果批量 Star 失败，请确认当前 token 具备以下权限：', 'If batch starring fails, make sure the current token has the following permissions:')}</p>
-          <div className="space-y-2 text-xs leading-5">
-            <p><span className="font-medium text-foreground">{t('经典 token：', 'Classic token:')}</span> {t('勾选 user 权限；访问私有仓库时还需 repo。', 'Enable the user scope; repo is also required for private repositories.')}</p>
-            <p><span className="font-medium text-foreground">{t('细粒度 token：', 'Fine-grained token:')}</span> {t('授予 Starring（读写）和 Metadata（只读）权限，并选择可访问的仓库。', 'Grant Starring (read and write) and Metadata (read-only), then select the repositories it can access.')}</p>
-          </div>
-          <a href="https://github.com/settings/tokens" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline">
-            {t('管理 GitHub token →', 'Manage GitHub tokens →')}
-            <ExternalLink className="h-3.5 w-3.5" />
-          </a>
-        </CardContent>
-      </Card>
 
       <Card>
         <CardHeader>
           <div className="flex items-center space-x-3">
             <Package className="h-5 w-5 text-muted-foreground dark:text-muted-foreground" />
-            <CardTitle>{t('检查更新', 'Check for Updates')}</CardTitle>
+            <CardTitle>{t('generalPanel.check-for-updates')}</CardTitle>
           </div>
         </CardHeader>
-        <CardContent className="flex items-center justify-between">
+        <CardContent className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <p className="mb-1 text-sm text-muted-foreground dark:text-muted-foreground">{t(`当前版本: v${version}`, `Current Version: v${version}`)}</p>
-            <p className="text-xs text-muted-foreground dark:text-muted-foreground">{t('检查是否有新版本可用', 'Check if a new version is available')}</p>
+            <p className="mb-1 text-sm text-muted-foreground dark:text-muted-foreground">{t('generalPanel.current-version-v-version', { version: version })}</p>
+            <p className="text-xs text-muted-foreground dark:text-muted-foreground">{t('generalPanel.check-if-a-new-version-is-available')}</p>
           </div>
           <UpdateChecker />
         </CardContent>
@@ -96,12 +53,56 @@ export const GeneralPanel: React.FC<GeneralPanelProps> = ({ t }) => {
       <Card>
         <CardHeader>
           <div className="flex items-center space-x-3">
+            <Key className="h-5 w-5 text-muted-foreground dark:text-muted-foreground" />
+            <CardTitle>{t('generalPanel.github-token')}</CardTitle>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground dark:text-muted-foreground">
+            {user?.login
+              ? t('generalPanel.account-token-hint', { login: user.login })
+              : t('generalPanel.token-hint')}
+          </p>
+          <div className="space-y-2">
+            <Label htmlFor="settings-github-token">GitHub Personal Access Token</Label>
+            <Input
+              id="settings-github-token"
+              type="password"
+              autoComplete="off"
+              placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+              value={githubToken.tokenInput}
+              onChange={(event) => githubToken.setTokenInput(event.target.value)}
+              disabled={githubToken.isSaving}
+            />
+          </div>
+          <Button type="button" onClick={() => { void githubToken.updateToken(); }} disabled={githubToken.isSaving || !githubToken.tokenInput.trim()}>
+            {githubToken.isSaving ? t('generalPanel.updating') : t('generalPanel.update-token')}
+          </Button>
+          <Button type="button" variant="link" className="mt-2 h-auto p-0 text-sm" onClick={() => setGuideOpen(true)}>
+            {t('generalPanel.token-permission-guide')}
+            <ArrowRight className="h-4 w-4" />
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Dialog open={guideOpen} onOpenChange={setGuideOpen}>
+        <DialogContent className="max-h-[80vh] overflow-y-auto sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{t('generalPanel.token-permission-guide')}</DialogTitle>
+          </DialogHeader>
+          <GitHubTokenPermissions heading={false} />
+        </DialogContent>
+      </Dialog>
+
+      <Card>
+        <CardHeader>
+          <div className="flex items-center space-x-3">
             <Mail className="h-5 w-5 text-muted-foreground dark:text-muted-foreground" />
-            <CardTitle>{t('联系方式', 'Contact Information')}</CardTitle>
+            <CardTitle>{t('generalPanel.contact-information')}</CardTitle>
           </div>
         </CardHeader>
         <CardContent>
-          <p className="mb-4 text-sm text-muted-foreground dark:text-muted-foreground">{t('如果您在使用过程中遇到任何问题或有建议，欢迎通过以下方式联系我：', 'If you encounter any issues or have suggestions while using the app, feel free to contact me through:')}</p>
+          <p className="mb-4 text-sm text-muted-foreground dark:text-muted-foreground">{t('generalPanel.if-you-encounter-any-issues-or-have-suggestions')}</p>
           <div className="flex flex-col gap-3 sm:flex-row">
             <Button type="button" onClick={() => { const newWindow = window.open('https://x.com/GoodMan_Lee', '_blank', 'noopener,noreferrer'); if (newWindow) newWindow.opener = null; }} className="gap-2">
               <Twitter className="h-5 w-5" />
@@ -110,7 +111,7 @@ export const GeneralPanel: React.FC<GeneralPanelProps> = ({ t }) => {
             </Button>
             <Button type="button" variant="outline" onClick={() => { const newWindow = window.open(PROJECT_REPO_URL, '_blank', 'noopener,noreferrer'); if (newWindow) newWindow.opener = null; }} className="gap-2">
               <Github className="h-5 w-5" />
-              <span>{t('GitHub', 'GitHub')}</span>
+              <span>{t('generalPanel.github')}</span>
               <ExternalLink className="h-4 w-4" />
             </Button>
           </div>

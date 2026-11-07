@@ -1,6 +1,14 @@
 import type { AppStoreState } from './types';
 
 /**
+ * 将显示模式偏好解析为实际深浅主题：system 跟随操作系统，其余直接生效。
+ */
+export const resolveTheme = (
+  themeMode: AppStoreState['themeMode'],
+  systemTheme: AppStoreState['systemTheme'],
+): 'light' | 'dark' => (themeMode === 'system' ? systemTheme : themeMode);
+
+/**
  * Domain selectors intentionally return only the state and actions a caller
  * renders or invokes. Consumers must wrap aggregate selectors with
  * `useShallow` so unrelated Store changes retain the previous selection.
@@ -9,8 +17,12 @@ export const selectAppShellState = (state: AppStoreState) => ({
   isAuthenticated: state.isAuthenticated,
   currentView: state.currentView,
   selectedCategory: state.selectedCategory,
-  theme: state.theme,
-  themePreset: state.themePreset,
+  themeMode: state.themeMode,
+  systemTheme: state.systemTheme,
+  themePresetLight: state.themePresetLight,
+  themePresetDark: state.themePresetDark,
+  themeTokens: state.themeTokens,
+  language: state.language,
   hasHydrated: state.hasHydrated,
   searchResults: state.searchResults,
   searchFilters: state.searchFilters,
@@ -36,8 +48,8 @@ export const selectRepositoryListState = (state: AppStoreState) => ({
 
 export const selectPreferenceState = (state: AppStoreState) => ({
   language: state.language,
-  theme: state.theme,
-  themePreset: state.themePreset,
+  themeMode: state.themeMode,
+  systemTheme: state.systemTheme,
   currentView: state.currentView,
   selectedCategory: state.selectedCategory,
   isSidebarCollapsed: state.isSidebarCollapsed,
@@ -118,9 +130,6 @@ export const selectGistViewState = (state: AppStoreState) => ({
 export const selectDiscoveryViewState = (state: AppStoreState) => ({
   githubToken: state.githubToken,
   language: state.language,
-  customCategories: state.customCategories,
-  hiddenDefaultCategoryIds: state.hiddenDefaultCategoryIds,
-  defaultCategoryOverrides: state.defaultCategoryOverrides,
   discoveryChannels: state.discoveryChannels,
   discoveryRepos: state.discoveryRepos,
   discoveryLastRefresh: state.discoveryLastRefresh,
@@ -149,6 +158,14 @@ export const selectDiscoveryViewState = (state: AppStoreState) => ({
   setDiscoverySortOrder: state.setDiscoverySortOrder,
   discoverySearchQuery: state.discoverySearchQuery,
   setDiscoverySearchQuery: state.setDiscoverySearchQuery,
+  discoverySearchMode: state.discoverySearchMode,
+  setDiscoverySearchMode: state.setDiscoverySearchMode,
+  discoverySearchPhase: state.discoverySearchPhase,
+  setDiscoverySearchPhase: state.setDiscoverySearchPhase,
+  discoverySearchPhaseDetail: state.discoverySearchPhaseDetail,
+  setDiscoverySearchPhaseDetail: state.setDiscoverySearchPhaseDetail,
+  discoverySearchEmptyReason: state.discoverySearchEmptyReason,
+  setDiscoverySearchEmptyReason: state.setDiscoverySearchEmptyReason,
   discoverySelectedTopic: state.discoverySelectedTopic,
   setDiscoverySelectedTopic: state.setDiscoverySelectedTopic,
   discoveryHasMore: state.discoveryHasMore,
@@ -161,4 +178,21 @@ export const selectDiscoveryViewState = (state: AppStoreState) => ({
   appendDiscoveryRepos: state.appendDiscoveryRepos,
   trendingTimeRange: state.trendingTimeRange,
   setTrendingTimeRange: state.setTrendingTimeRange,
+  weeklyOnlyCollected: state.weeklyOnlyCollected,
+  weeklySyncStatus: state.weeklySyncStatus,
+  setWeeklyOnlyCollected: state.setWeeklyOnlyCollected,
+  xTweetFollows: state.xTweetFollows,
+  xTweetAuth: state.xTweetAuth,
+  xTweetAuthRevision: state.xTweetAuthRevision,
+  xTweetSyncStatus: state.xTweetSyncStatus,
+  setXTweetSyncStatus: state.setXTweetSyncStatus,
+  addXTweetFollow: state.addXTweetFollow,
+  removeXTweetFollow: state.removeXTweetFollow,
+  setXTweetAuth: state.setXTweetAuth,
+  clearXTweetAuth: state.clearXTweetAuth,
+  telegramFollows: state.telegramFollows,
+  telegramSyncStatus: state.telegramSyncStatus,
+  setTelegramSyncStatus: state.setTelegramSyncStatus,
+  addTelegramFollow: state.addTelegramFollow,
+  removeTelegramFollow: state.removeTelegramFollow,
 });

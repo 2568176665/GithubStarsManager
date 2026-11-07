@@ -1,8 +1,9 @@
+import { useT } from "../../../i18n/useT";
 import { useCallback, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '../../../store/useAppStore';
 import { selectReleaseTimelineState } from '../../../store/selectors';
-import { GitHubApiService } from '../../../services/githubApi';
+import { createGitHubApiService } from '../../../services/githubApiFactory';
 import { forceSyncToBackend } from '../../../services/autoSync';
 import { backend } from '../../../services/backendAdapter';
 import { useDialog } from '../../../hooks/useDialog';
@@ -12,7 +13,6 @@ import {
   getSourcesForReleaseRepository,
   normalizeRepoKey,
   releaseBelongsToResolvedSources,
-  repositoryToCustomReleaseRepository,
   resolveReleaseSources,
   STARRED_RELEASE_SOURCE_ID,
   WATCH_CUSTOM_RELEASE_SOURCE_ID,
@@ -25,19 +25,14 @@ import { findReleasesWithChangedAssets } from '../../../utils/releaseAssets';
  */
 export const useReleaseTimelineActions = () => {
   const state = useAppStore(useShallow(selectReleaseTimelineState));
-  // 共享 selector 未收录的 store 写入用独立单值 selector 获取（B1）；
-  // store action 引用稳定，单值订阅不会引入多余重渲染。
-  const setReleaseSourceRepositories = useAppStore((s) => s.setReleaseSourceRepositories);
   const { toast, confirm } = useDialog();
   const [lastRefreshTime, setLastRefreshTime] = useState<string | null>(null);
   const [isMarkingAllRead, setIsMarkingAllRead] = useState(false);
-  const [isSyncingWatchedSources, setIsSyncingWatchedSources] = useState(false);
-  const t = useCallback((zh: string, en: string) => state.language === 'zh' ? zh : en, [state.language]);
+  const t = useT('releases');
 
   const handleRefresh = useCallback(async () => {
     const {
       githubToken,
-      language,
       setReleaseIsRefreshing,
       updateRepository,
       updateReleaseSourceRepository,
@@ -46,7 +41,7 @@ export const useReleaseTimelineActions = () => {
       includePreRelease,
     } = state;
     if (!githubToken) {
-      toast(language === 'zh' ? 'GitHub token 未找到，请重新登录。' : 'GitHub token not found. Please login again.', 'error');
+      toast(t('useReleaseTimelineActions.github-token-not-found-please-login-again'), 'error');
       return;
     }
 
@@ -54,17 +49,17 @@ export const useReleaseTimelineActions = () => {
     const resolvedSources = resolveReleaseSources(currentState);
     const subscribedRepos = resolvedSources.repositories;
     if (resolvedSources.enabledSourceIds.length === 0) {
-      toast(language === 'zh' ? '没有启用的 Release 来源。' : 'No release sources enabled.', 'error');
+      toast(t('useReleaseTimelineActions.no-release-sources-enabled'), 'error');
       return;
     }
     if (subscribedRepos.length === 0) {
-      toast(language === 'zh' ? '所选来源中没有可检查的仓库。' : 'No repositories to check in the selected sources.', 'error');
+      toast(t('useReleaseTimelineActions.no-repositories-to-check-in-the-selected-sources'), 'error');
       return;
     }
 
     setReleaseIsRefreshing(true);
     try {
-      const githubApi = new GitHubApiService(githubToken);
+      const githubApi = createGitHubApiService(githubToken);
       const { releases: newReleases, latestReleases, failedRepos } = await githubApi.getMultipleRepositoryReleases(
         subscribedRepos,
         { includePreRelease, refreshExistingAssets: true },
@@ -98,25 +93,19 @@ export const useReleaseTimelineActions = () => {
 
       // updatedReleases 既含资产变化也含正文回填（空日志补回），文案不再只提资产。
       const updatedPart = updatedReleases.length > 0
-        ? (language === 'zh'
-          ? `，${updatedReleases.length} 个Release有更新`
-          : `, ${updatedReleases.length} release${updatedReleases.length === 1 ? '' : 's'} updated`)
+        ? t('useReleaseTimelineActions.releases-updated', { count: updatedReleases.length })
         : '';
       const message = failedRepos.length > 0
-        ? (language === 'zh'
-          ? `刷新完成！发现 ${actuallyNewReleases.length} 个新Release${updatedPart}，${failedRepos.length} 个仓库刷新失败。`
-          : `Refresh completed! Found ${actuallyNewReleases.length} new releases${updatedPart}, ${failedRepos.length} repos failed.`)
-        : (language === 'zh'
-          ? `刷新完成！发现 ${actuallyNewReleases.length} 个新Release${updatedPart}。`
-          : `Refresh completed! Found ${actuallyNewReleases.length} new releases${updatedPart}.`);
+        ? (t('useReleaseTimelineActions.refresh-completed-found-v1-new-releases-updatedp', { v1: actuallyNewReleases.length, updatedPart: updatedPart, v3: failedRepos.length }))
+        : (t('useReleaseTimelineActions.refresh-completed-found-v1-new-releases-updatedp-2', { v1: actuallyNewReleases.length, updatedPart: updatedPart }));
       toast(message, actuallyNewReleases.length > 0 || updatedReleases.length > 0 ? 'success' : 'info');
     } catch (error) {
       console.error('Refresh failed:', error);
-      toast(language === 'zh' ? 'Release刷新失败，请检查网络连接。' : 'Release refresh failed. Please check your network connection.', 'error');
+      toast(t('useReleaseTimelineActions.release-refresh-failed-please-check-your-network'), 'error');
     } finally {
       setReleaseIsRefreshing(false);
     }
-  }, [state, toast]);
+  }, [state, toast, t]);
 
   const handleMarkAllRead = useCallback(async () => {
     const readReleasesBeforeUpdate = new Set(useAppStore.getState().readReleases);
@@ -124,10 +113,10 @@ export const useReleaseTimelineActions = () => {
     try {
       state.markAllReleasesAsRead();
       await backend.markAllReleasesAsRead();
-      toast(t('已全部标记为已读', 'All marked as read'), 'success');
+      toast(t('useReleaseTimelineActions.all-marked-as-read'), 'success');
     } catch {
       useAppStore.setState({ readReleases: readReleasesBeforeUpdate });
-      toast(t('标记全部已读失败', 'Failed to mark all as read'), 'error');
+      toast(t('useReleaseTimelineActions.failed-to-mark-all-as-read'), 'error');
     } finally {
       setIsMarkingAllRead(false);
     }
@@ -137,7 +126,7 @@ export const useReleaseTimelineActions = () => {
     const release = state.releases.find(item => item.repository.id === repoId);
     const releaseRepo = release?.repository;
     if (!releaseRepo) {
-      toast(t('仓库信息不完整，无法取消订阅。', 'Repository information missing. Cannot unsubscribe.'), 'error');
+      toast(t('useReleaseTimelineActions.repository-information-missing-cannot-unsubscrib'), 'error');
       return;
     }
 
@@ -148,21 +137,17 @@ export const useReleaseTimelineActions = () => {
     const sourceLabels = sourcesToRemove.map(sourceId => getReleaseSourceLabel(sourceId, state.language));
     let confirmMessage: string;
     if (sourcesToRemove.length === 0) {
-      confirmMessage = state.language === 'zh'
-        ? `"${releaseRepo.full_name}" 当前不在任何 Release 来源中。确认后仅移除本地已缓存的 Release 记录。`
-        : `"${releaseRepo.full_name}" is not in any release source. Confirming will only remove locally cached releases.`;
+      confirmMessage = t('useReleaseTimelineActions.v1-is-not-in-any-release-source-confirming-will', { v1: releaseRepo.full_name });
     } else if (sourcesToRemove.length > 1) {
-      confirmMessage = state.language === 'zh'
-        ? `"${releaseRepo.full_name}" 同时来自多个 Release 来源：${sourceLabels.join('、')}。确认后将从这些来源中一并取消订阅。`
-        : `"${releaseRepo.full_name}" comes from multiple release sources: ${sourceLabels.join(', ')}. Confirming will unsubscribe it from all of these sources.`;
+      confirmMessage = t('useReleaseTimelineActions.v1-comes-from-multiple-release-sources-v2-confir', { v1: releaseRepo.full_name, v2: sourceLabels.join('、') });
     } else if (sourcesToRemove[0] === WATCH_CUSTOM_RELEASE_SOURCE_ID) {
-      confirmMessage = t(`确定取消订阅 "${releaseRepo.full_name}" 吗？确认后将一并取消 Watch 仓库来源。`, `Unsubscribe from "${releaseRepo.full_name}"? This will also remove it from Watch repositories.`);
+      confirmMessage = t('useReleaseTimelineActions.unsubscribe-from-v1-this-will-also-remove-it-fro', { v1: releaseRepo.full_name });
     } else if (sourcesToRemove[0] === CUSTOM_RELEASE_SOURCE_ID) {
-      confirmMessage = t(`确定取消订阅 "${releaseRepo.full_name}" 吗？确认后将从自定义仓库列表中移除。`, `Unsubscribe from "${releaseRepo.full_name}"? This will remove it from the custom repository list.`);
+      confirmMessage = t('useReleaseTimelineActions.unsubscribe-from-v1-this-will-remove-it-from-the', { v1: releaseRepo.full_name });
     } else {
-      confirmMessage = t(`确定取消订阅 "${releaseRepo.full_name}" 的 Release 吗？`, `Unsubscribe from releases for "${releaseRepo.full_name}"?`);
+      confirmMessage = t('useReleaseTimelineActions.unsubscribe-from-releases-for-v1', { v1: releaseRepo.full_name });
     }
-    const confirmed = await confirm(t('取消订阅确认', 'Unsubscribe Confirmation'), confirmMessage, { type: 'warning' });
+    const confirmed = await confirm(t('useReleaseTimelineActions.unsubscribe-confirmation'), confirmMessage, { type: 'warning' });
     if (!confirmed) return;
 
     const rollbackState = {
@@ -188,57 +173,19 @@ export const useReleaseTimelineActions = () => {
     } catch (error) {
       console.error('Failed to unsubscribe release:', error);
       useAppStore.setState(rollbackState);
-      toast(t('取消订阅失败，请检查后端连接。', 'Failed to unsubscribe. Please check backend connection.'), 'error');
+      toast(t('useReleaseTimelineActions.failed-to-unsubscribe-please-check-backend-conne'), 'error');
       return;
     }
-    toast(t('已取消订阅该仓库的 Release。', 'Unsubscribed from repository releases.'), 'success');
+    toast(t('useReleaseTimelineActions.unsubscribed-from-repository-releases'), 'success');
   }, [state, t, toast, confirm]);
-
-  // 同步 Watch 仓库为 Release 来源（原 ReleaseSourceSettingsModal →
-  // WatchCustomReleaseSyncPanel.handleSync）：无 confirm、无 forceSync、无 Abort。
-  const syncWatchedSources = useCallback(async () => {
-    if (!state.githubToken || isSyncingWatchedSources) return;
-
-    setIsSyncingWatchedSources(true);
-    try {
-      const githubApi = new GitHubApiService(state.githubToken);
-      // 只拉 /user/subscriptions（含私有仓）。/users/{login}/subscriptions 已被 GitHub 改为
-      // 恒定返回 204 空响应体，且其结果本就是前者的公开子集，并行合并只会拖垮整个同步。
-      const watchedRepos = await githubApi.getAllWatchedRepositories();
-      // hiddenByRepo 在 await 之后从最新 state 读取：同步期间用户仍可在设置面板
-      // 切换 release_hidden，旧快照会在 setReleaseSourceRepositories 时覆盖该修改。
-      const hiddenByRepo = new Map(
-        useAppStore.getState().releaseSourceSettings.watchCustomReleaseRepos.map(repo => [normalizeRepoKey(repo.full_name), repo.release_hidden]),
-      );
-      const sourceRepos = watchedRepos.map(repo => ({
-        ...repositoryToCustomReleaseRepository(repo, WATCH_CUSTOM_RELEASE_SOURCE_ID),
-        release_hidden: hiddenByRepo.get(normalizeRepoKey(repo.full_name)) || undefined,
-      }));
-      setReleaseSourceRepositories(WATCH_CUSTOM_RELEASE_SOURCE_ID, sourceRepos);
-      toast(
-        t(
-          `已同步 ${sourceRepos.length} 个 Watch 仓库。`,
-          `Synced ${sourceRepos.length} Watch repositories.`
-        ),
-        'success'
-      );
-    } catch (error) {
-      console.error('Failed to sync watched repositories:', error);
-      toast(t('同步 Watch 仓库失败，请检查网络或 Token 权限。', 'Failed to sync Watch repositories. Check network or token permissions.'), 'error');
-    } finally {
-      setIsSyncingWatchedSources(false);
-    }
-  }, [state, isSyncingWatchedSources, setReleaseSourceRepositories, t, toast]);
 
   return {
     ...state,
     lastRefreshTime,
     isMarkingAllRead,
-    isSyncingWatchedSources,
     handleRefresh,
     handleMarkAllRead,
     handleUnsubscribeRelease,
-    syncWatchedSources,
   };
 };
 

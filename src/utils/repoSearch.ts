@@ -1,113 +1,45 @@
 import type { Category, Repository, SearchFilters } from '../types';
 import { isRepoCustomized } from './repoUtils';
 import { normalizeLicense } from './licenseFilter';
-import { hasDeclaredLicense, hasRecentActivity } from './repositoryHealth';
+import {
+  hasDeclaredLicense,
+  hasRecentActivity,
+  isArchivedRepository,
+} from './repositoryHealth';
 
-/** Partial filters used by UI and Worker search endpoints. */
+/** Partial filters used by MCP and UI search (all fields optional except when provided). */
 export type RepoSearchFilterInput = Partial<SearchFilters> & {
   category?: string;
   limit?: number;
   offset?: number;
 };
 
-export type SearchQuality = 'identity' | 'strong-field' | 'weak-text' | 'no-results';
-
-export const getRepositorySearchFields = (repo: Repository): Record<string, string> => ({
-  full_name: repo.full_name,
-  name: repo.name,
-  description: repo.description || '',
-  custom_description: repo.custom_description || '',
-  language: repo.language || '',
-  topics: (repo.topics || []).join(' '),
-  ai_summary: repo.ai_summary || '',
-  tags: [...(repo.ai_tags || []), ...(repo.custom_tags || [])].join(' '),
-  ai_platforms: (repo.ai_platforms || []).join(' '),
-  custom_category: repo.custom_category || '',
-  license: normalizeLicense(repo.license),
-});
-
-const LOCAL_SEARCH_WEIGHTS: Record<string, number> = {
-  full_name: 12,
-  name: 10,
-  topics: 7,
-  tags: 7,
-  description: 5,
-  ai_summary: 5,
-  custom_description: 4,
-  language: 3,
-  ai_platforms: 3,
-  custom_category: 2,
-  license: 2,
-};
-
-export function scoreRepositoryText(repo: Repository, query: string): number {
-  const terms = query.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
-  if (!terms.length) return 0;
-  const fields = getRepositorySearchFields(repo);
-  let score = 0;
-  for (const [field, rawValue] of Object.entries(fields)) {
-    const value = rawValue.toLocaleLowerCase();
-    for (const term of terms) {
-      if (!value.includes(term)) continue;
-      score += LOCAL_SEARCH_WEIGHTS[field] || 1;
-      if (field === 'name' || field === 'full_name') {
-        if (value === term) score += 40;
-        else if (value.startsWith(term)) score += 20;
-      }
-    }
-  }
-  return score;
-}
-
-export function performWeightedTextSearch<T extends Repository>(repos: T[], query: string): T[] {
-  const normalizedQuery = query.toLocaleLowerCase().trim();
-  if (!normalizedQuery) return repos;
-  const terms = normalizedQuery.split(/\s+/).filter(Boolean);
-  return repos
-    .filter((repo) => {
-      const fields = getRepositorySearchFields(repo);
-      const searchableText = Object.values(fields).join(' ').toLocaleLowerCase();
-      return terms.every((term) => searchableText.includes(term));
-    })
-    .sort((a, b) => scoreRepositoryText(b, normalizedQuery) - scoreRepositoryText(a, normalizedQuery));
-}
-
 export function performBasicTextSearch<T extends Repository>(repos: T[], query: string): T[] {
-  return performWeightedTextSearch(repos, query);
-}
+  const normalizedQuery = query.toLowerCase().trim();
+  if (!normalizedQuery) return repos;
 
-export function classifyLocalSearchQuality(repos: Repository[], query: string): SearchQuality {
-  if (!repos.length) return 'no-results';
-  const normalizedQuery = query.toLocaleLowerCase().trim();
-  const top = repos[0];
-  const fullName = top.full_name.toLocaleLowerCase();
-  const name = top.name.toLocaleLowerCase();
-  if (normalizedQuery && (
-    fullName === normalizedQuery
-    || name === normalizedQuery
-    || name.startsWith(normalizedQuery)
-    || fullName.startsWith(`${normalizedQuery}/`)
-  )) return 'identity';
-  const fields = getRepositorySearchFields(top);
-  const strongText = [fields.full_name, fields.name, fields.topics, fields.tags].join(' ').toLocaleLowerCase();
-  const terms = normalizedQuery.split(/\s+/).filter(Boolean);
-  return terms.length > 0 && terms.every((term) => strongText.includes(term)) ? 'strong-field' : 'weak-text';
-}
+  const queryWords = normalizedQuery.split(/\s+/).filter(Boolean);
 
-export function mergeHybridSearchResults<T extends Repository>(
-  repositories: T[],
-  lexicalResults: T[],
-  vectorResults: Array<{ id: string; score: number }>,
-): T[] {
-  const byId = new Map(repositories.map((repo) => [String(repo.id), repo]));
-  const vectorOrder = [...vectorResults].sort((a, b) => b.score - a.score);
-  const scores = new Map<string, number>();
-  lexicalResults.forEach((repo, index) => scores.set(String(repo.id), 0.55 / (60 + index + 1)));
-  vectorOrder.forEach((result, index) => scores.set(String(result.id), (scores.get(String(result.id)) || 0) + 0.45 / (60 + index + 1)));
-  return [...scores.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .map(([id]) => byId.get(id))
-    .filter((repo): repo is T => repo !== undefined);
+  return repos.filter((repo) => {
+    const searchableText = [
+      repo.name,
+      repo.full_name,
+      repo.description || '',
+      repo.custom_description || '',
+      repo.language || '',
+      ...(repo.topics || []),
+      repo.ai_summary || '',
+      ...(repo.ai_tags || []),
+      ...(repo.ai_platforms || []),
+      ...(repo.custom_tags || []),
+      repo.custom_category || '',
+      normalizeLicense(repo.license),
+    ]
+      .join(' ')
+      .toLowerCase();
+
+    return queryWords.every((word) => searchableText.includes(word));
+  });
 }
 
 const toSortableTimestamp = (value?: string): number => {
@@ -116,8 +48,14 @@ const toSortableTimestamp = (value?: string): number => {
 };
 
 /**
- * “按更新排序”按最近代码变更排序：优先用 pushed_at（缺失/非法时回退 updated_at），
- * 与仓库卡片“最近提交”及搜索统计近期更新口径保持一致（#45，#342）。
+ * Resolve the sort key for "recently updated" ordering.
+ *
+ * Prefers `pushed_at` (last code push) and falls back to `updated_at` when
+ * `pushed_at` is missing or unparsable, keeping list sorting consistent with
+ * the card "Last pushed" label and stats (#45, #342).
+ *
+ * @param repo Repository to score.
+ * @returns Milliseconds since epoch, or 0 when neither timestamp parses.
  */
 const toUpdatedSortValue = (repo: Repository): number => {
   const pushed = toSortableTimestamp(repo.pushed_at);
@@ -125,6 +63,13 @@ const toUpdatedSortValue = (repo: Repository): number => {
   return toSortableTimestamp(repo.updated_at);
 };
 
+/**
+ * Resolve the comparable sort value for a repository.
+ *
+ * @param repo Repository to score.
+ * @param sortBy Active sort mode; `updated`/default prefer last push time.
+ * @returns Numeric timestamp, star count, or lowercase name for comparison.
+ */
 function getSortValue(repo: Repository, sortBy: SearchFilters['sortBy']): number | string {
   switch (sortBy) {
     case 'stars': {
@@ -139,6 +84,7 @@ function getSortValue(repo: Repository, sortBy: SearchFilters['sortBy']): number
     case 'starred':
       return toSortableTimestamp(repo.starred_at);
     case 'created':
+      // “按创建时间排序”用于成熟度视角：越新创建的仓库排在越前（desc）。
       return toSortableTimestamp(repo.created_at);
     default:
       return toUpdatedSortValue(repo);
@@ -257,27 +203,29 @@ export function applyRepoFilters<T extends Repository>(
     });
   }
 
-  if (searchFilters.healthArchived !== undefined) {
-    filtered = filtered.filter((repo) => repo.archived === searchFilters.healthArchived);
-  }
-
-  if (searchFilters.healthRecentActivity !== undefined) {
-    filtered = filtered.filter((repo) => (
-      hasRecentActivity(repo) === searchFilters.healthRecentActivity
-    ));
-  }
-
-  if (searchFilters.healthHasLicense !== undefined) {
-    filtered = filtered.filter((repo) => (
-      hasDeclaredLicense(repo) === searchFilters.healthHasLicense
-    ));
-  }
-
   if (searchFilters.minStars !== undefined) {
     filtered = filtered.filter((repo) => repo.stargazers_count >= searchFilters.minStars!);
   }
   if (searchFilters.maxStars !== undefined) {
     filtered = filtered.filter((repo) => repo.stargazers_count <= searchFilters.maxStars!);
+  }
+
+  // Repository Health 客观事实筛选。三态：undefined = 不筛选，true/false = 要求成立/不成立。
+  // 判定逻辑集中在 src/utils/repositoryHealth.ts，避免与 Health 面板的口径分裂。
+  if (searchFilters.healthArchived !== undefined) {
+    filtered = filtered.filter(
+      (repo) => isArchivedRepository(repo) === searchFilters.healthArchived,
+    );
+  }
+  if (searchFilters.healthRecentActivity !== undefined) {
+    filtered = filtered.filter(
+      (repo) => hasRecentActivity(repo) === searchFilters.healthRecentActivity,
+    );
+  }
+  if (searchFilters.healthHasLicense !== undefined) {
+    filtered = filtered.filter(
+      (repo) => hasDeclaredLicense(repo) === searchFilters.healthHasLicense,
+    );
   }
 
   const sortBy = searchFilters.sortBy ?? 'stars';
@@ -311,7 +259,7 @@ export function hasActiveSearchFilters(filters: SearchFilters): boolean {
   );
 }
 
-/** Full text search + filters + optional category + pagination for API use. */
+/** Full text search + filters + optional category + pagination for MCP/API use. */
 export function searchRepositories<T extends Repository>(
   repos: T[],
   input: RepoSearchFilterInput,

@@ -8,11 +8,10 @@ import { useBulkRepositoryActions } from '../features/repositories/hooks/useBulk
 import { useRepositoryAnalysisJob } from '../features/repositories/hooks/useRepositoryAnalysisJob';
 import { useRepositoryCardActions } from '../features/repositories/hooks/useRepositoryCardActions';
 import { useAIConfigActions } from '../features/settings/hooks/useAIConfigActions';
-import { useBackupActions } from '../features/settings/hooks/useBackupActions';
-import { useNetworkActions } from '../features/settings/hooks/useNetworkActions';
+import { useBackendSettingsActions } from '../features/settings/hooks/useBackendSettingsActions';
+import { useDiagnosticBackendActions } from '../features/settings/hooks/useDiagnosticBackendActions';
 import { useStarSyncActions } from '../features/settings/hooks/useStarSyncActions';
 import { useVectorSearchActions } from '../features/settings/hooks/useVectorSearchActions';
-import { useWebDAVActions } from '../features/settings/hooks/useWebDAVActions';
 
 type ActualStoreModule = typeof import('./useAppStore');
 type AppStore = ActualStoreModule['useAppStore'];
@@ -45,8 +44,10 @@ const currentPersistedKeys = [
   'user',
   'githubToken',
   'isAuthenticated',
+  'accountWorkspaces',
   'repositories',
   'lastSync',
+  'themeTokens',
   'gists',
   'starredGists',
   'gistSearchFilters',
@@ -59,6 +60,7 @@ const currentPersistedKeys = [
   'activeEmbeddingConfig',
   'vectorSearchConfig',
   'vectorSearchStatus',
+  'mcpConfig',
   'webdavConfigs',
   'activeWebDAVConfig',
   'lastBackup',
@@ -75,14 +77,20 @@ const currentPersistedKeys = [
   'categoryMatchMode',
   'defaultCategoryOverrides',
   'assetFilters',
-  'theme',
-  'themePreset',
+  'repositoryCardFields',
+  'repositoryCardActions',
+  'trendingSnapshots',
+  'themeMode',
+  'themePresetLight',
+  'themePresetDark',
   'currentView',
   'selectedCategory',
   'language',
   'translationEngine',
+  'autoTranslateRepoDescription',
   'isSidebarCollapsed',
   'headerMenuConfig',
+  'backendApiSecret',
   'syncMode',
   'syncModeConfigured',
   'categoryListIdMap',
@@ -106,7 +114,13 @@ const currentPersistedKeys = [
   'discoveryLanguage',
   'discoverySortBy',
   'discoverySortOrder',
+  'discoverySearchMode',
   'discoverySelectedTopic',
+  'weeklyOnlyCollected',
+  'xTweetFollows',
+  'xTweetAuthRevision',
+  'telegramFollows',
+  'proxyConfig',
   'rpcDownloadConfig',
   'routeMode',
 ] as const;
@@ -135,6 +149,7 @@ const historicalSnapshots = (): PersistedSnapshot[] => [
   }),
   buildPersistedSnapshot({
     ...buildTransientDiscoverySnapshot(),
+    mcpConfig: { enabled: true, token: 'historical-token' },
     vectorSearchConfig: {
       enabled: true,
       workerUrl: 'https://vector.example.com',
@@ -156,12 +171,14 @@ describe('PR-07 Store modularization compatibility', () => {
     const options = persistenceOptions();
     const persisted = partialize({
       analyzingGistIds: new Set(['gist-1']),
+      proxyConfig: { enabled: true, type: 'http', host: 'proxy.example.com', port: 7890, password: 'proxy-password' },
       rpcDownloadConfig: { enabled: true, host: 'rpc.example.com', port: 6800, secret: 'rpc-secret' },
     });
 
-    expect(options.version).toBe(14);
+    expect(options.version).toBe(16);
     expect(Object.keys(persisted)).toEqual(currentPersistedKeys);
     expect(persisted.analyzingGistIds).toEqual(['gist-1']);
+    expect(persisted.proxyConfig).toMatchObject({ password: 'proxy-password' });
     expect(persisted.rpcDownloadConfig).toMatchObject({ secret: 'rpc-secret' });
 
     for (const transientKey of [
@@ -193,6 +210,144 @@ describe('PR-07 Store modularization compatibility', () => {
       expect(options.merge(once, actualStore.useAppStore.getInitialState())).toEqual(
         options.merge(twice, actualStore.useAppStore.getInitialState()),
       );
+    }
+  });
+
+  it('normalizes theme tokens at the hydration boundary without a persistence version bump', () => {
+    const merged = persistenceOptions().merge(
+      buildPersistedSnapshot({ themeTokens: { accentColor: 'javascript:bad', fontScale: 9 } as never }),
+      actualStore.useAppStore.getInitialState(),
+    );
+
+    expect(merged.themeTokens).toEqual({
+      accentColor: null,
+      fontScale: 1.5,
+      radius: 'default',
+      animation: 'normal',
+    });
+  });
+
+  it('retains a valid external discovery channel through migration and hydration', async () => {
+    const feed = {
+      id: 'external:example', name: 'Example feed', nameEn: 'Example feed',
+      icon: 'search', description: 'https://example.com/feed.json',
+      sourceUrl: 'https://example.com/feed.json', enabled: true,
+    } as const;
+    const snapshot = buildPersistedSnapshot({
+      discoveryChannels: [...actualStore.useAppStore.getInitialState().discoveryChannels, feed],
+      selectedDiscoveryChannel: feed.id,
+    });
+    const migrated = await persistenceOptions().migrate(structuredClone(snapshot), 0);
+    const merged = persistenceOptions().merge(migrated, actualStore.useAppStore.getInitialState());
+    expect(merged.discoveryChannels).toContainEqual(feed);
+    expect(merged.selectedDiscoveryChannel).toBe(feed.id);
+  });
+
+  it('adds, selects, and removes only user-created discovery channels', () => {
+    const store = actualStore.useAppStore;
+    const originalChannels = store.getState().discoveryChannels;
+    const originalSelected = store.getState().selectedDiscoveryChannel;
+    try {
+      const id = store.getState().addExternalDiscoveryChannel('My feed', 'https://example.com/feed.json');
+      expect(id).toMatch(/^external:/);
+      expect(store.getState().selectedDiscoveryChannel).toBe(id);
+      expect(store.getState().addExternalDiscoveryChannel('Duplicate', 'https://example.com/feed.json')).toBeNull();
+      const rssId = store.getState().addExternalDiscoveryChannel('RSS feed', 'https://example.com/feed.xml', 'rss');
+      expect(store.getState().discoveryChannels.find(channel => channel.id === rssId)?.sourceKind).toBe('rss');
+      store.getState().removeExternalDiscoveryChannel(id!);
+      expect(store.getState().discoveryChannels.some(channel => channel.id === id)).toBe(false);
+      expect(store.getState().selectedDiscoveryChannel).not.toBe(id);
+      store.setState({
+        discoveryChannels: store.getState().discoveryChannels.map(channel => ({ ...channel, enabled: false }))
+          .concat({
+            id: 'external:only', name: 'Only feed', nameEn: 'Only feed', icon: 'search',
+            description: 'https://example.com/feed.json', sourceUrl: 'https://example.com/feed.json', enabled: true,
+          }),
+        selectedDiscoveryChannel: 'external:only',
+      });
+      store.getState().removeExternalDiscoveryChannel('external:only');
+      expect(store.getState().selectedDiscoveryChannel).toBe('trending');
+      expect(store.getState().discoveryChannels.find(channel => channel.id === 'trending')?.enabled).toBe(true);
+      store.getState().removeExternalDiscoveryChannel('trending');
+      expect(store.getState().discoveryChannels.some(channel => channel.id === 'trending')).toBe(true);
+    } finally {
+      store.setState({ discoveryChannels: originalChannels, selectedDiscoveryChannel: originalSelected });
+    }
+  });
+
+  it('falls back to trending over browser-hidden channels when removing feeds', () => {
+    const store = actualStore.useAppStore;
+    const originalChannels = store.getState().discoveryChannels;
+    const originalSelected = store.getState().selectedDiscoveryChannel;
+    try {
+      // 纯浏览器模式（测试环境无桌面壳、无后端）下 x-tweet/telegram 被隐藏但仍是 enabled
+      store.setState({
+        discoveryChannels: store.getState().discoveryChannels.map(channel => ({
+          ...channel,
+          enabled: channel.id === 'x-tweet' || channel.id === 'telegram',
+        })),
+        selectedDiscoveryChannel: 'trending',
+      });
+      const id = store.getState().addExternalDiscoveryChannel('Last feed', 'https://example.com/last.json');
+      store.getState().removeExternalDiscoveryChannel(id!);
+      // 隐藏频道的启用不能替代可见频道：删除最后一个可见启用频道后必须恢复趋势
+      expect(store.getState().discoveryChannels.find(channel => channel.id === 'trending')?.enabled).toBe(true);
+      expect(store.getState().selectedDiscoveryChannel).toBe('trending');
+
+      // 隐藏频道仍启用时，关闭最后一个可见启用频道应被阻止
+      store.setState({
+        discoveryChannels: store.getState().discoveryChannels.map(channel => ({
+          ...channel,
+          enabled: channel.id === 'trending' || channel.id === 'x-tweet',
+        })),
+      });
+      store.getState().toggleDiscoveryChannel('trending');
+      expect(store.getState().discoveryChannels.find(channel => channel.id === 'trending')?.enabled).toBe(true);
+    } finally {
+      store.setState({ discoveryChannels: originalChannels, selectedDiscoveryChannel: originalSelected });
+    }
+  });
+
+  it('keeps a persisted scraping-channel selection before backend availability settles', () => {
+    const store = actualStore.useAppStore;
+    const originalChannels = store.getState().discoveryChannels;
+    const originalSelected = store.getState().selectedDiscoveryChannel;
+    try {
+      // Web+后端用户水合时探测尚未完成：x-tweet 选择必须保留，
+      // 由 DiscoveryView 在抓取支持结论落定后再决定是否纠偏
+      store.setState({
+        discoveryChannels: originalChannels.map(channel => ({ ...channel, enabled: true })),
+        selectedDiscoveryChannel: 'trending',
+      });
+      const hydrated = actualStore.normalizePersistedState(
+        buildPersistedSnapshot({ selectedDiscoveryChannel: 'x-tweet' }) as never,
+        store.getState(),
+      );
+      expect(hydrated.selectedDiscoveryChannel).toBe('x-tweet');
+    } finally {
+      store.setState({ discoveryChannels: originalChannels, selectedDiscoveryChannel: originalSelected });
+    }
+  });
+
+  it('preserves persisted enabled flags while scrape support is unsettled', () => {
+    const store = actualStore.useAppStore;
+    const originalChannels = store.getState().discoveryChannels;
+    const originalSelected = store.getState().selectedDiscoveryChannel;
+    try {
+      // Web 探测未完成（测试环境无桌面壳、无探测）：只启用 x-tweet 的用户偏好
+      // 不得被强制启用的「趋势」覆盖
+      store.setState({
+        discoveryChannels: originalChannels.map(channel => ({ ...channel, enabled: channel.id === 'x-tweet' })),
+        selectedDiscoveryChannel: 'x-tweet',
+      });
+      const hydrated = actualStore.normalizePersistedState({
+        discoveryChannels: store.getState().discoveryChannels,
+        selectedDiscoveryChannel: 'x-tweet',
+      } as never, store.getState());
+      expect(hydrated.discoveryChannels?.find(channel => channel.id === 'trending')?.enabled).toBe(false);
+      expect(hydrated.selectedDiscoveryChannel).toBe('x-tweet');
+    } finally {
+      store.setState({ discoveryChannels: originalChannels, selectedDiscoveryChannel: originalSelected });
     }
   });
 
@@ -231,8 +386,8 @@ describe('PR-07 Store modularization compatibility', () => {
     const normalized = actualStore.normalizePersistedState(snapshot, actualStore.useAppStore.getInitialState());
 
     expect(normalized.analyzingGistIds).toEqual(new Set());
-    expect(normalized.discoveryRepos).toEqual({ trending: [], 'hot-release': [], 'most-popular': [], topic: [], search: [] });
-    expect(normalized.discoveryIsLoading).toEqual({ trending: false, 'hot-release': false, 'most-popular': false, topic: false, search: false });
+    expect(normalized.discoveryRepos).toEqual({ trending: [], 'hot-release': [], 'most-popular': [], topic: [], 'x-tweet': [], telegram: [], weekly: [], search: [], 'code-search': [] });
+    expect(normalized.discoveryIsLoading).toEqual({ trending: false, 'hot-release': false, 'most-popular': false, topic: false, 'x-tweet': false, telegram: false, weekly: false, search: false, 'code-search': false });
     expect(normalized.repositories?.[0]).toMatchObject({
       has_fetched_releases: true,
       last_release_fetch_time: '2026-02-01T00:00:00.000Z',
@@ -253,11 +408,10 @@ describe('PR-07 Store modularization compatibility', () => {
       useRepositoryAnalysisJob,
       useBulkRepositoryActions,
       useAIConfigActions,
-      useBackupActions,
-      useNetworkActions,
+      useBackendSettingsActions,
+      useDiagnosticBackendActions,
       useStarSyncActions,
       useVectorSearchActions,
-      useWebDAVActions,
     ]) {
       expect(hook).toBeTypeOf('function');
     }

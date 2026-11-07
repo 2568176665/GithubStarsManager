@@ -1,10 +1,11 @@
-
 import type { StoreApi } from 'zustand';
+import type { AppLanguage } from '../i18n/languages';
 import type {
   AppState,
   Gist,
   GistCategoryId,
   GistSearchFilters,
+  ThemeMode,
   Repository,
   Release,
   ForkRepo,
@@ -13,7 +14,9 @@ import type {
   EmbeddingConfig,
   VectorSearchConfig,
   VectorSearchStatus,
+  McpServiceConfig,
   VectorIndexingState,
+  ProxyConfig,
   RpcDownloadConfig,
   SearchFilters,
   GitHubUser,
@@ -24,10 +27,13 @@ import type {
   DiscoveryChannelId,
   DiscoveryRepo,
   DiscoveryPlatform,
+  ExternalFeedKind,
   ProgrammingLanguage,
   SortBy,
   SortOrder,
   TrendingTimeRange,
+  WeeklySyncStatus,
+  XTweetAuth,
   TopicCategory,
   CustomReleaseRepository,
   ReleaseSourceId,
@@ -35,7 +41,11 @@ import type {
   HeaderMenuItem,
   SyncMode,
   TranslationEngine,
+  RepositoryCardFieldId,
+  RepositoryCardActionPreference,
   RepositoryChatSettings,
+  ThemeTokens,
+  TrendingSnapshot,
 } from '../types';
 import type { ThemePresetId } from '../constants/themePresets';
 import type { GitHubListsApiService } from '../services/githubListsApi';
@@ -47,7 +57,7 @@ export interface AppActions {
   logout: () => void;
 
   // Repository actions
-  setRepositories: (repos: Repository[]) => void;
+  setRepositories: (repos: Repository[], options?: { allowEmpty?: boolean }) => void;
   updateRepository: (repo: Repository) => void;
   /** 批量更新多个仓库的指定字段，保留当前过滤的 searchResults 不被重置 */
   updateRepositoriesMetadata: (updates: { id: number; patch: Partial<Repository> }[]) => void;
@@ -57,7 +67,7 @@ export interface AppActions {
   setLastSync: (timestamp: string) => void;
   setSyncMode: (mode: SyncMode) => void;
   setSyncModeConfigured: (configured: boolean) => void;
-  pushCategoriesToLists: (api: GitHubListsApiService) => Promise<void>;
+  pushCategoriesToLists: (api: GitHubListsApiService, categoryIds?: string[]) => Promise<void>;
   resetListsPush: () => void;
   setListsPushError: (error: string | null) => void;
   setCategoryListIdMap: (categoryId: string, listId: string) => void;
@@ -65,8 +75,8 @@ export interface AppActions {
   setAnalyzingRepository: (repoId: number, isAnalyzing: boolean) => void;
 
   // Gist actions
-  setGists: (gists: Gist[]) => void;
-  setStarredGists: (gists: Gist[]) => void;
+  setGists: (gists: Gist[], options?: { allowEmpty?: boolean }) => void;
+  setStarredGists: (gists: Gist[], options?: { allowEmpty?: boolean }) => void;
   updateGist: (gist: Gist) => void;
   deleteGist: (gistId: string) => void;
   setGistSearchFilters: (filters: Partial<GistSearchFilters>) => void;
@@ -102,6 +112,9 @@ export interface AppActions {
   setVectorSearchStatus: (status: VectorSearchStatus | undefined) => void;
   setVectorIndexingState: (state: Partial<VectorIndexingState>) => void;
 
+  // MCP service (local prefs; backend SQLite is source of truth when connected)
+  setMcpConfig: (config: Partial<McpServiceConfig>) => void;
+
   // Similar repositories view actions
   enterSimilarView: (repos: Repository[], anchor: Repository) => void;
   resetSimilarView: () => void;
@@ -112,7 +125,7 @@ export interface AppActions {
   setSearchResults: (results: Repository[]) => void;
 
   // Release actions
-  setReleases: (releases: Release[]) => void;
+  setReleases: (releases: Release[], options?: { allowEmpty?: boolean }) => void;
   addReleases: (releases: Release[]) => void;
   /** 按 id 合并更新已存在 Release 的资产/元数据；内容变化后重置为未读（is_read=false 并从 readReleases 移除） */
   upsertReleases: (releases: Release[]) => void;
@@ -134,7 +147,7 @@ export interface AppActions {
   updateReleaseSourceRepository: (sourceId: ReleaseSourceId, fullName: string, updates: Partial<CustomReleaseRepository>) => void;
 
   // Fork actions
-  setForks: (forks: ForkRepo[]) => void;
+  setForks: (forks: ForkRepo[], options?: { allowEmpty?: boolean }) => void;
   addForks: (forks: ForkRepo[]) => void;
   updateFork: (fork: ForkRepo) => void;
   markForkAsRead: (forkId: number) => void;
@@ -161,12 +174,15 @@ export interface AppActions {
   deleteAssetFilter: (id: string) => void;
 
   // UI actions
-  setTheme: (theme: 'light' | 'dark') => void;
-  setThemePreset: (preset: ThemePresetId) => void;
+  setThemeMode: (mode: ThemeMode) => void;
+  setSystemTheme: (systemTheme: 'light' | 'dark') => void;
+  setThemePresetLight: (preset: ThemePresetId) => void;
+  setThemePresetDark: (preset: ThemePresetId) => void;
   setCurrentView: (view: 'repositories' | 'gists' | 'releases' | 'forks' | 'settings' | 'subscription') => void;
   setSelectedCategory: (category: string) => void;
-  setLanguage: (language: 'zh' | 'en') => void;
+  setLanguage: (language: AppLanguage) => void;
   setTranslationEngine: (engine: TranslationEngine) => void;
+  setAutoTranslateRepoDescription: (enabled: boolean) => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
   setReadmeModalOpen: (open: boolean) => void;
   setHeaderMenuConfig: (config: HeaderMenuItem[]) => void;
@@ -181,7 +197,11 @@ export interface AppActions {
   // Update Analysis Progress
   setAnalysisProgress: (newProgress: AnalysisProgress) => void;
 
-  // Worker routing preferences
+  // Backend actions
+  setBackendApiSecret: (secret: string | null) => void;
+
+  // Proxy actions
+  setProxyConfig: (updates: Partial<ProxyConfig>) => void;
   setRouteMode: (mode: import('../types').RouteMode) => void;
 
   // RPC Download actions
@@ -225,18 +245,47 @@ export interface AppActions {
   setDiscoveryLastRefresh: (channel: DiscoveryChannelId, timestamp: string) => void;
   updateDiscoveryRepo: (repo: DiscoveryRepo) => void;
   toggleDiscoveryChannel: (channelId: DiscoveryChannelId) => void;
+  addExternalDiscoveryChannel: (name: string, sourceUrl: string, kind?: ExternalFeedKind) => DiscoveryChannelId | null;
+  removeExternalDiscoveryChannel: (channelId: DiscoveryChannelId) => void;
   setDiscoveryPlatform: (platform: DiscoveryPlatform) => void;
   setDiscoveryLanguage: (language: ProgrammingLanguage) => void;
   setDiscoverySortBy: (sortBy: SortBy) => void;
   setDiscoverySortOrder: (sortOrder: SortOrder) => void;
   setDiscoverySearchQuery: (query: string) => void;
+  setDiscoverySearchMode: (mode: 'keyword' | 'semantic') => void;
+  setDiscoverySearchPhase: (phase: string | null) => void;
+  setDiscoverySearchPhaseDetail: (detail: string | null) => void;
+  setDiscoverySearchEmptyReason: (reason: 'recall_empty' | 'ai_empty' | null) => void;
   setDiscoverySelectedTopic: (topic: TopicCategory | null) => void;
   setDiscoveryHasMore: (channel: DiscoveryChannelId, hasMore: boolean) => void;
   setDiscoveryNextPage: (channel: DiscoveryChannelId, page: number) => void;
   setDiscoveryTotalCount: (channel: DiscoveryChannelId, count: number) => void;
   setDiscoveryScrollPosition: (channel: DiscoveryChannelId, position: number) => void;
   setTrendingTimeRange: (range: TrendingTimeRange) => void;
+  setWeeklyOnlyCollected: (only: boolean) => void;
+  setWeeklySyncStatus: (status: WeeklySyncStatus | null) => void;
+  setXTweetSyncStatus: (status: WeeklySyncStatus | null) => void;
+  /** 添加 X 推文频道关注（接受 @handle / handle / x.com 链接，重复添加忽略） */
+  addXTweetFollow: (handle: string) => void;
+  removeXTweetFollow: (handle: string) => void;
+  /** 保存 X 推文频道登录鉴权 Cookie（覆盖旧值） */
+  setXTweetAuth: (auth: XTweetAuth) => void;
+  clearXTweetAuth: () => void;
+  setTelegramSyncStatus: (status: WeeklySyncStatus | null) => void;
+  /** 添加 Telegram 频道关注（接受 @channel / channel / t.me 链接，重复添加忽略） */
+  addTelegramFollow: (channel: string) => void;
+  removeTelegramFollow: (channel: string) => void;
   appendDiscoveryRepos: (channel: DiscoveryChannelId, repos: DiscoveryRepo[]) => void;
+
+  // Theme tokens（开发守则 §14）
+  /** 局部更新：内部与当前值合并，调用方不必自己展开（避免拿到过期的渲染值）。 */
+  updateThemeTokens: (patch: Partial<ThemeTokens>) => void;
+  /** Trending 快照（开发守则 §7）：记一份榜单快照，去重与上限在 utils 里处理。 */
+  recordTrendingSnapshot: (snapshot: TrendingSnapshot) => void;
+  // 仓库卡片可见字段（开发守则 §14）
+  /** 切换某个字段的显示；未提供的字段沿用当前值。 */
+  setRepositoryCardField: (id: RepositoryCardFieldId, visible: boolean) => void;
+  setRepositoryCardActions: (actions: RepositoryCardActionPreference[]) => void;
 }
 
 export type AppStoreState = AppState & AppActions;

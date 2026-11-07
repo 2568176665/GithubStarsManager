@@ -1,15 +1,19 @@
+
+import { useT } from '../../../i18n/useT';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import type { Category, Repository } from '../../../types';
 import { useAppStore } from '../../../store/useAppStore';
-import type { AppStoreState } from '../../../store/types';
 import { useDialog } from '../../../hooks/useDialog';
-import { EmbeddingClient, VectorSearchService, findSimilarRepositories } from '../../../services/vectorSearchService';
+import { AIService, isAbortError } from '../../../services/aiService';
+import { CrossEncoderReranker } from '../../../services/crossEncoderReranker';
+import { runSimilarRepositoryPipeline } from '../../../services/similarRepositoryPipeline';
+import { EmbeddingClient, VectorSearchService } from '../../../services/vectorSearchService';
 import { analyzeRepository, createFailedAnalysisResult } from '../../../services/aiAnalysisHelper';
 import { forceSyncToBackend } from '../../../services/autoSync';
-import { GitHubApiService } from '../../../services/githubApi';
+import { createGitHubApiService } from '../../../services/githubApiFactory';
 import { logger } from '../../../services/logger';
-import { applyAnalysisFailure, applyAnalysisSuccess, setReleaseSubscriptionMarker } from '../application/repositoryPatches';
-import { resolveActiveAIConfig } from '../../../utils/aiConfig';
+import { applyAnalysisFailure, applyAnalysisSuccess } from '../application/repositoryPatches';
 
 interface UseRepositoryCardActionsOptions {
   repository: Repository;
@@ -28,26 +32,6 @@ export interface RepositoryCardActions {
   vectorSearchAvailable: boolean;
 }
 
-const isVectorSearchAvailable = (state: Pick<
-  AppStoreState,
-  'vectorSearchConfig' | 'vectorSearchStatus' | 'embeddingConfigs' | 'activeEmbeddingConfig'
->) => {
-  const activeConfig = state.embeddingConfigs.find(
-    (config) => config.id === state.activeEmbeddingConfig,
-  );
-  const configComplete = !!activeConfig
-    && !!activeConfig.baseUrl
-    && !!activeConfig.model
-    && (activeConfig.apiType === 'ollama' || !!activeConfig.apiKey);
-
-  return (
-    state.vectorSearchConfig.enabled
-    && !!state.vectorSearchStatus?.connected
-    && (state.vectorSearchStatus?.vectorCount ?? 0) > 0
-    && configComplete
-  );
-};
-
 /**
  * Encapsulates RepositoryCard's domain operations while leaving card-local UI
  * state, layout, keyboard handling, and drag behaviour in the view component.
@@ -56,6 +40,7 @@ export const useRepositoryCardActions = ({
   repository,
   allCategories,
 }: UseRepositoryCardActionsOptions): RepositoryCardActions => {
+  const t = useT('repositories');
   const repoId = repository.id;
   const isSubscribed = useAppStore(
     useCallback((state) => state.releaseSubscriptions.has(repoId), [repoId]),
@@ -63,45 +48,89 @@ export const useRepositoryCardActions = ({
   const isStoreAnalyzing = useAppStore(
     useCallback((state) => state.analyzingRepositoryIds.has(repoId), [repoId]),
   );
-  const vectorSearchAvailable = useAppStore(
-    useCallback((state) => isVectorSearchAvailable(state), []),
+  const {
+    githubToken,
+    activeAIConfig,
+    setAnalyzingRepository,
+    language,
+    updateRepository,
+    deleteRepository,
+    vectorSearchConfig,
+    vectorSearchStatus,
+    embeddingConfigs,
+    activeEmbeddingConfig,
+    repositories,
+    enterSimilarView,
+    aiConfigs,
+    toggleReleaseSubscription: toggleStoreReleaseSubscription,
+  } = useAppStore(
+    useShallow(
+      useCallback(
+        (state) => ({
+          githubToken: state.githubToken,
+          activeAIConfig: state.activeAIConfig,
+          setAnalyzingRepository: state.setAnalyzingRepository,
+          language: state.language,
+          updateRepository: state.updateRepository,
+          deleteRepository: state.deleteRepository,
+          vectorSearchConfig: state.vectorSearchConfig,
+          vectorSearchStatus: state.vectorSearchStatus,
+          embeddingConfigs: state.embeddingConfigs,
+          activeEmbeddingConfig: state.activeEmbeddingConfig,
+          repositories: state.repositories,
+          enterSimilarView: state.enterSimilarView,
+          aiConfigs: state.aiConfigs,
+          toggleReleaseSubscription: state.toggleReleaseSubscription,
+        }),
+        [],
+      ),
+    ),
   );
   const { toast, confirm } = useDialog();
   const abortControllerRef = useRef<AbortController | null>(null);
+  const similarityAbortRef = useRef<AbortController | null>(null);
   const [isLocallyAnalyzing, setIsLocallyAnalyzing] = useState(false);
   const [isFindingSimilar, setIsFindingSimilar] = useState(false);
   const [isUnstarring, setIsUnstarring] = useState(false);
 
   useEffect(() => () => {
     abortControllerRef.current?.abort();
-    useAppStore.getState().setAnalyzingRepository(repoId, false);
-  }, [repoId]);
+    abortControllerRef.current = null;
+    similarityAbortRef.current?.abort();
+    similarityAbortRef.current = null;
+    setAnalyzingRepository(repoId, false);
+  }, [repoId, setAnalyzingRepository]);
+
+  const vectorSearchAvailable = useMemo(() => {
+    const activeConfig = embeddingConfigs.find((config) => config.id === activeEmbeddingConfig);
+    const configComplete = !!activeConfig
+      && !!activeConfig.baseUrl
+      && !!activeConfig.model
+      && (activeConfig.apiType === 'ollama' || !!activeConfig.apiKey);
+
+    return (
+      vectorSearchConfig.enabled
+      && !!vectorSearchStatus?.connected
+      && (vectorSearchStatus?.vectorCount ?? 0) > 0
+      && configComplete
+      && !!vectorSearchConfig.workerUrl
+      && !!vectorSearchConfig.authToken
+    );
+  }, [embeddingConfigs, activeEmbeddingConfig, vectorSearchConfig, vectorSearchStatus]);
 
   const analyze = useCallback(async () => {
-    const {
-      githubToken,
-      activeAIConfig,
-      aiConfigs,
-      language,
-      setAnalyzingRepository,
-      updateRepository,
-    } = useAppStore.getState();
     if (!githubToken) {
       toast(
-        language === 'zh'
-          ? 'GitHub token 未找到，请重新登录。'
-          : 'GitHub token not found. Please login again.',
+        t('useRepositoryCardActions.github-token-not-found-please-login-again'),
         'error',
       );
       return;
     }
 
-    const activeConfig = resolveActiveAIConfig(aiConfigs, activeAIConfig);
+    const activeConfig = aiConfigs.find((config) => config.id === activeAIConfig);
     if (!activeConfig) {
       toast(
-        language === 'zh'
-          ? '请先在设置中配置AI服务。'
-          : 'Please configure AI service in settings first.',
+        t('useRepositoryCardActions.please-configure-ai-service-in-settings-first'),
         'error',
       );
       return;
@@ -109,9 +138,7 @@ export const useRepositoryCardActions = ({
 
     if (activeConfig.apiKeyStatus === 'decrypt_failed' || activeConfig.apiKeyStatus === 'empty') {
       toast(
-        language === 'zh'
-          ? 'AI服务的API密钥无法解密或为空，请在设置中重新输入并保存该配置。'
-          : 'The AI service API key could not be decrypted or is empty. Please re-enter and save the configuration in settings.',
+        t('useRepositoryCardActions.the-ai-service-api-key-could-not-be-decrypted-or'),
         'error',
       );
       return;
@@ -119,21 +146,17 @@ export const useRepositoryCardActions = ({
 
     if (!activeConfig.baseUrl || !activeConfig.apiKey || !activeConfig.model) {
       toast(
-        language === 'zh'
-          ? 'AI服务配置不完整，请检查API端点、密钥和模型名称。'
-          : 'AI service configuration is incomplete. Please check the API endpoint, key, and model name.',
+        t('useRepositoryCardActions.ai-service-configuration-is-incomplete-please-ch'),
         'error',
       );
       return;
     }
 
     if (repository.analyzed_at) {
-      const confirmMessage = language === 'zh'
-        ? `此仓库已于 ${new Date(repository.analyzed_at).toLocaleString()} 进行过AI分析。\n\n是否要重新分析？这将覆盖现有的分析结果。`
-        : `This repository was analyzed on ${new Date(repository.analyzed_at).toLocaleString()}.\n\nDo you want to re-analyze? This will overwrite the existing analysis results.`;
+      const confirmMessage = t('useRepositoryCardActions.this-repository-was-analyzed-on-v1-do-you-want-t', { v1: new Date(repository.analyzed_at).toLocaleString() });
 
       if (!await confirm(
-        language === 'zh' ? '重新分析确认' : 'Re-analyze Confirmation',
+        t('useRepositoryCardActions.re-analyze-confirmation'),
         confirmMessage,
         { type: 'warning' },
       )) {
@@ -201,8 +224,8 @@ export const useRepositoryCardActions = ({
 
       toast(
         repository.analyzed_at
-          ? (language === 'zh' ? 'AI重新分析完成！' : 'AI re-analysis completed!')
-          : (language === 'zh' ? 'AI分析完成！' : 'AI analysis completed!'),
+          ? (t('useRepositoryCardActions.ai-re-analysis-completed'))
+          : (t('useRepositoryCardActions.ai-analysis-completed')),
         'success',
       );
     } catch (error) {
@@ -211,9 +234,7 @@ export const useRepositoryCardActions = ({
 
         const errorMessage = error instanceof Error && error.message
           ? error.message
-          : (language === 'zh'
-            ? 'AI分析失败，请检查AI配置和网络连接'
-            : 'AI analysis failed, please check AI configuration and network connection');
+          : (t('useRepositoryCardActions.ai-analysis-failed-please-check-ai-configuration'));
         const failedResult = createFailedAnalysisResult(errorMessage);
         const failedRepo = applyAnalysisFailure(repository, {
           analyzedAt: failedResult.analyzed_at,
@@ -230,37 +251,37 @@ export const useRepositoryCardActions = ({
         });
 
         toast(
-          language === 'zh'
-            ? 'AI分析失败，请检查AI配置和网络连接。'
-            : 'AI analysis failed. Please check AI configuration and network connection.',
+          t('useRepositoryCardActions.ai-analysis-failed-please-check-ai-configuration-2'),
           'error',
         );
       }
     } finally {
-      setIsLocallyAnalyzing(false);
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+        setIsLocallyAnalyzing(false);
+      }
       if (!controller.signal.aborted) {
         setAnalyzingRepository(repoId, false);
       }
     }
-  }, [allCategories, confirm, repoId, repository, toast]);
+  }, [
+    activeAIConfig,
+    aiConfigs,
+    allCategories,
+    confirm,
+    githubToken,
+    language,
+    repoId,
+    repository,
+    setAnalyzingRepository,
+    toast,
+    updateRepository, t]);
 
   const findSimilar = useCallback(async () => {
-    const state = useAppStore.getState();
-    const {
-      activeEmbeddingConfig,
-      embeddingConfigs,
-      enterSimilarView,
-      githubToken,
-      language,
-      repositories,
-      vectorSearchConfig,
-    } = state;
     if (isFindingSimilar) return;
-    if (!isVectorSearchAvailable(state)) {
+    if (!vectorSearchAvailable) {
       toast(
-        language === 'zh'
-          ? '向量搜索未就绪：请先在设置中开启向量搜索并完成索引。'
-          : 'Vector search is not ready. Please enable vector search and build the index in settings first.',
+        t('useRepositoryCardActions.vector-search-is-not-ready-please-enable-vector'),
         'error',
       );
       return;
@@ -269,6 +290,9 @@ export const useRepositoryCardActions = ({
     const activeConfig = embeddingConfigs.find((config) => config.id === activeEmbeddingConfig);
     if (!activeConfig) return;
 
+    similarityAbortRef.current?.abort();
+    const controller = new AbortController();
+    similarityAbortRef.current = controller;
     setIsFindingSimilar(true);
     try {
       const embeddingClient = new EmbeddingClient({
@@ -285,71 +309,92 @@ export const useRepositoryCardActions = ({
       });
       // Indexing enriches documents with README text in readme mode. Mirror that
       // source representation for card-level similarity without changing SearchBar.
-      const githubApi = githubToken ? new GitHubApiService(githubToken) : null;
+      const githubApi = githubToken ? createGitHubApiService(githubToken) : null;
       const readmeFetcher = githubApi
         ? (owner: string, repo: string, signal?: AbortSignal) => githubApi.getRepositoryReadme(owner, repo, signal)
         : undefined;
-      const similar = await findSimilarRepositories(repository, {
+      const aiConfig = aiConfigs.find((config) => config.id === activeAIConfig);
+      const aiService = aiConfig
+        && aiConfig.apiKeyStatus !== 'decrypt_failed'
+        && aiConfig.apiKeyStatus !== 'empty'
+        && aiConfig.baseUrl
+        && aiConfig.apiKey
+        && aiConfig.model
+        ? new AIService(aiConfig, language)
+        : null;
+      const result = await runSimilarRepositoryPipeline({
+        source: repository,
+        repositories,
+        vectorConfig: vectorSearchConfig,
         embeddingClient,
+        embeddingConfig: activeConfig,
         vectorService,
-        allRepos: repositories,
-        topK: vectorSearchConfig.searchTopK ?? 30,
-        threshold: vectorSearchConfig.searchThreshold ?? 0.35,
+        aiService,
+        crossEncoder: new CrossEncoderReranker(activeConfig),
         readmeFetcher,
-        indexMode: vectorSearchConfig.indexMode,
-        readmeMaxChars: vectorSearchConfig.readmeMaxChars,
+        signal: controller.signal,
       });
+      if (
+        controller.signal.aborted
+        || similarityAbortRef.current !== controller
+      ) {
+        throw new DOMException('Similar search superseded', 'AbortError');
+      }
 
-      enterSimilarView(similar, repository);
+      enterSimilarView(result.repositories, repository);
 
-      if (similar.length === 0) {
-        toast(language === 'zh' ? '未找到相似的仓库。' : 'No similar repositories found.', 'info');
+      if (result.repositories.length === 0) {
+        toast(t('useRepositoryCardActions.no-similar-repositories-found'), 'info');
       }
     } catch (error) {
+      if (isAbortError(error) || controller.signal.aborted) return;
       console.error('Find similar repositories failed:', error);
       const errorMessage = error instanceof Error && error.message
         ? error.message
-        : (language === 'zh'
-          ? '查找相似仓库失败，请检查向量搜索配置。'
-          : 'Failed to find similar repositories. Please check vector search configuration.');
+        : (t('useRepositoryCardActions.failed-to-find-similar-repositories-please-check'));
       toast(errorMessage, 'error');
     } finally {
-      setIsFindingSimilar(false);
+      if (similarityAbortRef.current === controller) {
+        similarityAbortRef.current = null;
+        setIsFindingSimilar(false);
+      }
     }
-  }, [isFindingSimilar, repository, toast]);
+  }, [
+    activeAIConfig,
+    activeEmbeddingConfig,
+    aiConfigs,
+    embeddingConfigs,
+    enterSimilarView,
+    githubToken,
+    isFindingSimilar,
+    language,
+    repositories,
+    repository,
+    toast,
+    vectorSearchAvailable,
+    vectorSearchConfig, t]);
 
   const toggleReleaseSubscription = useCallback(() => {
-    const state = useAppStore.getState();
-    const subscribed = state.releaseSubscriptions.has(repoId);
-    state.toggleReleaseSubscription(repoId);
-    const currentRepository = state.repositories.find((item) => item.id === repoId);
-    if (currentRepository) {
-      state.updateRepository(setReleaseSubscriptionMarker(currentRepository, !subscribed));
-    }
-  }, [repoId]);
+    toggleStoreReleaseSubscription(repoId);
+  }, [repoId, toggleStoreReleaseSubscription]);
 
   const unstar = useCallback(async () => {
-    const { githubToken, language, deleteRepository } = useAppStore.getState();
     if (!githubToken) {
       toast(
-        language === 'zh'
-          ? '未找到 GitHub Token，请重新登录。'
-          : 'GitHub token not found. Please login again.',
+        t('useRepositoryCardActions.github-token-not-found-please-login-again-2'),
         'error',
       );
       return;
     }
 
-    const confirmMessage = language === 'zh'
-      ? `确定要取消 Star "${repository.full_name}" 吗？\n\n这将会从您的 GitHub 收藏中移除该仓库。`
-      : `Are you sure you want to unstar "${repository.full_name}"?\n\nThis will remove the repository from your GitHub stars.`;
+    const confirmMessage = t('useRepositoryCardActions.are-you-sure-you-want-to-unstar-v1-this-will-rem', { v1: repository.full_name });
 
     if (!await confirm(
-      language === 'zh' ? '取消Star确认' : 'Unstar Confirmation',
+      t('useRepositoryCardActions.unstar-confirmation'),
       confirmMessage,
       {
         type: 'danger',
-        confirmText: language === 'zh' ? '取消Star' : 'Unstar',
+        confirmText: t('useRepositoryCardActions.unstar'),
       },
     )) {
       return;
@@ -357,24 +402,22 @@ export const useRepositoryCardActions = ({
 
     setIsUnstarring(true);
     try {
-      const githubApi = new GitHubApiService(githubToken);
+      const githubApi = createGitHubApiService(githubToken);
       const [owner, repo] = repository.full_name.split('/');
       await githubApi.unstarRepository(owner, repo);
       deleteRepository(repository.id);
       await forceSyncToBackend();
-      toast(language === 'zh' ? '已成功取消 Star' : 'Successfully unstarred', 'success');
+      toast(t('useRepositoryCardActions.successfully-unstarred'), 'success');
     } catch (error) {
       console.error('Failed to unstar repository:', error);
       toast(
-        language === 'zh'
-          ? '取消 Star 失败，请检查网络连接或重新登录。'
-          : 'Failed to unstar repository. Please check your network connection or login again.',
+        t('useRepositoryCardActions.failed-to-unstar-repository-please-check-your-ne'),
         'error',
       );
     } finally {
       setIsUnstarring(false);
     }
-  }, [confirm, repository, toast]);
+  }, [confirm, deleteRepository, githubToken, repository, toast, t]);
 
   return useMemo(() => ({
     analyze,

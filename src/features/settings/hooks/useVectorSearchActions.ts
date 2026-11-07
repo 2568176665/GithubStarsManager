@@ -6,12 +6,12 @@ import {
   EmbeddingClient,
   indexAllRepos,
   needsReindex,
+  selectIndexableRepos,
   VectorSearchService,
 } from '../../../services/vectorSearchService';
-import { GitHubApiService } from '../../../services/githubApi';
+import { createGitHubApiService } from '../../../services/githubApiFactory';
 import { LEGACY_EMBEDDING_FORMAT_VERSION, isKnownEmbeddingFormatVersion, useAppStore } from '../../../store/useAppStore';
 import { normalizeLicense } from '../../../utils/licenseFilter';
-import { backend } from '../../../services/backendAdapter';
 
 export interface EmbeddingDraft {
   apiType: EmbeddingApiType;
@@ -37,12 +37,12 @@ export interface VectorSearchActions {
   testingWorker: boolean;
   workerTestResult: { success: boolean; vectorCount: number; dimensions: number; error?: string } | null;
   incrementalTargetCount: number;
+  unindexedRepoCount: number;
   testEmbedding: (draft: EmbeddingDraft) => Promise<void>;
   testWorker: (draft: VectorWorkerDraft) => Promise<void>;
   rebuildIndex: (draft: VectorIndexDraft) => Promise<void>;
   incrementalIndex: (draft: VectorIndexDraft) => Promise<void>;
   abortIndexing: () => void;
-  refreshVectorStatus: () => Promise<void>;
 }
 
 /**
@@ -71,14 +71,34 @@ export const useVectorSearchActions = (): VectorSearchActions => {
     [state.activeEmbeddingConfig, state.embeddingConfigs],
   );
 
-  const incrementalTargetCount = useMemo(() => {
-    const indexable = state.repositories.filter((repository) => repository.analyzed_at && !repository.analysis_failed).length;
-    const unindexed = state.repositories.filter((repository) => repository.analyzed_at && !repository.analysis_failed && needsReindex(repository, false)).length;
+  const formatVersionChanged = useMemo(() => {
     const storedVersion = isKnownEmbeddingFormatVersion(state.vectorSearchConfig.embeddingFormatVersion)
       ? state.vectorSearchConfig.embeddingFormatVersion
       : LEGACY_EMBEDDING_FORMAT_VERSION;
-    return storedVersion < EMBEDDING_FORMAT_VERSION ? indexable : unindexed;
-  }, [state.repositories, state.vectorSearchConfig.embeddingFormatVersion]);
+    return storedVersion < EMBEDDING_FORMAT_VERSION;
+  }, [state.vectorSearchConfig.embeddingFormatVersion]);
+
+  const { incrementalTargetCount, unindexedRepoCount } = useMemo(() => {
+    // 与 selectIndexableRepos 的顺序一致：先按增量谓词筛选，再按 id 去重，
+    // 否则同 id 首条无需重建时会漏计第二条待索引记录。mode=null 表示全量目标，
+    // 只做分析状态过滤（对应 formatVersionChanged 时的增量目标）。
+    const countAfter = (mode: boolean | null): number => {
+      const seen = new Set<number>();
+      let count = 0;
+      for (const repository of state.repositories) {
+        if (!repository.analyzed_at || repository.analysis_failed) continue;
+        if (mode !== null && !needsReindex(repository, mode)) continue;
+        if (seen.has(repository.id)) continue;
+        seen.add(repository.id);
+        count += 1;
+      }
+      return count;
+    };
+    return {
+      incrementalTargetCount: formatVersionChanged ? countAfter(null) : countAfter(false),
+      unindexedRepoCount: state.vectorSearchConfig.enabled ? countAfter(formatVersionChanged) : 0,
+    };
+  }, [formatVersionChanged, state.repositories, state.vectorSearchConfig.enabled]);
 
   const testEmbedding = useCallback(async (draft: EmbeddingDraft) => {
     setTestingEmbedding(true);
@@ -113,7 +133,7 @@ export const useVectorSearchActions = (): VectorSearchActions => {
     if (!activeConfig) return null;
     const embeddingClient = new EmbeddingClient({ ...activeConfig, ...draft, isActive: activeConfig.isActive });
     const vectorService = new VectorSearchService({ workerUrl: draft.workerUrl, authToken: draft.authToken });
-    const githubApi = state.githubToken ? new GitHubApiService(state.githubToken) : null;
+    const githubApi = state.githubToken ? createGitHubApiService(state.githubToken) : null;
     const readmeFetcher = githubApi
       ? (owner: string, repository: string, signal?: AbortSignal) => githubApi.getRepositoryReadme(owner, repository, signal)
       : undefined;
@@ -138,7 +158,13 @@ export const useVectorSearchActions = (): VectorSearchActions => {
         ? currentState.vectorSearchConfig.embeddingFormatVersion
         : LEGACY_EMBEDDING_FORMAT_VERSION;
       const now = new Date().toISOString();
-      const licenseById = new Map(repositories.map((repository) => [repository.id, repository.license ?? null]));
+      // 标记必须来自实际上传的副本：与 indexAllRepos 共用同一候选选择规则
+      // （分析/增量过滤 + 按 id 首条去重），避免重复 id 时标记与向量元数据错位。
+      const uploadCandidates = selectIndexableRepos(repositories, { incremental, formatVersion: currentFormatVersion, currentFormatVersion: EMBEDDING_FORMAT_VERSION });
+      const licenseById = new Map<number, string | null>();
+      for (const repository of uploadCandidates) {
+        if (!licenseById.has(repository.id)) licenseById.set(repository.id, repository.license ?? null);
+      }
       const stamp = (id: number) => ({ id, patch: { vector_indexed_at: now, vector_indexed_license: normalizeLicense(licenseById.get(id) ?? null) } });
       const newlyIndexed = new Set(repositories.filter((repository) => !repository.vector_indexed_at).map((repository) => repository.id));
       if (!incremental) {
@@ -154,11 +180,6 @@ export const useVectorSearchActions = (): VectorSearchActions => {
         onProgress: (progress) => state.setVectorIndexingState({ phase: progress.phase, phaseDone: progress.done, phaseTotal: progress.total }),
         signal: controller.signal,
         readmeFetcher: clients.readmeFetcher,
-        onReadmeCached: (repositoryId, readme) => {
-          void backend.cacheRepositoryReadme(repositoryId, readme).catch((error) => {
-            console.warn('Failed to cache indexed README in search projection:', error);
-          });
-        },
         indexMode: draft.indexMode,
         readmeMaxChars: draft.readmeMaxChars,
         incremental,
@@ -181,7 +202,7 @@ export const useVectorSearchActions = (): VectorSearchActions => {
         connected: true,
         vectorCount: incremental
           ? previousCount + result.indexedRepoIds.filter((id) => newlyIndexed.has(id)).length
-          : result.indexed + excludedVectorIds.length,
+            : result.indexed + excludedVectorIdSet.size,
         dimensions: draft.dimensions,
         lastSyncAt: new Date().toISOString(),
       });
@@ -196,7 +217,7 @@ export const useVectorSearchActions = (): VectorSearchActions => {
         state.setVectorIndexingState({ isIndexing: false, phase: null, result: null });
       } else {
         const repositories = useAppStore.getState().repositories;
-        const indexable = repositories.filter((repository) => repository.analyzed_at && !repository.analysis_failed && (!incremental || needsReindex(repository, currentFormatVersion < EMBEDDING_FORMAT_VERSION))).length;
+        const indexable = selectIndexableRepos(repositories, { incremental, formatVersion: currentFormatVersion, currentFormatVersion: EMBEDDING_FORMAT_VERSION }).length;
         state.setVectorIndexingState({
           isIndexing: false,
           phase: null,
@@ -211,18 +232,9 @@ export const useVectorSearchActions = (): VectorSearchActions => {
   const rebuildIndex = useCallback((draft: VectorIndexDraft) => runIndex(draft, false), [runIndex]);
   const incrementalIndex = useCallback((draft: VectorIndexDraft) => runIndex(draft, true), [runIndex]);
   const abortIndexing = useCallback(() => abortController?.abort(), [abortController]);
-  const refreshVectorStatus = useCallback(async () => {
-    if (!backend.isAvailable || typeof backend.getNativeVectorIndexStatus !== 'function') return;
-    try {
-      state.setVectorSearchStatus(await backend.getNativeVectorIndexStatus());
-    } catch {
-      // The FTS search path remains available when Vectorize is not configured.
-    }
-  }, [state]);
 
   return {
     testingEmbedding, embeddingTestResult, testingWorker, workerTestResult,
-    incrementalTargetCount, testEmbedding, testWorker, rebuildIndex, incrementalIndex, abortIndexing,
-    refreshVectorStatus,
+    incrementalTargetCount, unindexedRepoCount, testEmbedding, testWorker, rebuildIndex, incrementalIndex, abortIndexing,
   };
 };
