@@ -270,3 +270,41 @@ describe('backendAdapter 探测源协议（file:// 桌面端不探测同源 /api
     expect(backend.isAvailable).toBe(true);
   });
 });
+
+function makeCollectionResponse(payload: unknown, etag: string | null, status = 200): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    text: async () => JSON.stringify(payload),
+    headers: { get: (name: string) => (name.toLowerCase() === 'etag' ? etag : null) },
+  } as unknown as Response;
+}
+
+describe('backendAdapter 集合条件请求（ETag/304）', () => {
+  const adapter = backend as unknown as BackendAdapterLike;
+  const backendUrl = 'http://localhost:3002/api';
+
+  afterEach(() => {
+    vi.mocked(window.fetch).mockReset();
+    adapter._backendUrl = null;
+  });
+
+  it('304 复用上次响应体，并在请求头带上 If-None-Match', async () => {
+    adapter._backendUrl = backendUrl;
+    const payload = { repositories: [{ id: 'repo-1' }], total: 1 };
+    vi.mocked(window.fetch)
+      .mockResolvedValueOnce(makeCollectionResponse(payload, '"etag-1"'))
+      .mockResolvedValueOnce(makeCollectionResponse(null, '"etag-1"', 304));
+
+    await expect(backend.fetchRepositories()).resolves.toEqual(payload);
+    await expect(backend.fetchRepositories()).resolves.toEqual(payload);
+
+    expect(window.fetch).toHaveBeenNthCalledWith(
+      2,
+      `${backendUrl}/repositories?limit=10000`,
+      expect.objectContaining({
+        headers: expect.objectContaining({ 'If-None-Match': '"etag-1"' }),
+      }),
+    );
+  });
+});

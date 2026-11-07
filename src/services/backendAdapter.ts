@@ -19,6 +19,12 @@ interface GitHubTreeResponse {
 
 const BACKEND_URL_STORAGE_KEY = 'github-stars-manager-backend-url';
 
+/**
+ * Revalidation cache for the large collection endpoints. Stores the raw JSON
+ * text so a 304 can return the previous payload without a second download.
+ */
+const conditionalResponseCache = new Map<string, { etag: string; body: string }>();
+
 const JSON_ARRAY_SETTING_KEYS = new Set([
   'hiddenDefaultCategoryIds',
   'categoryOrder',
@@ -358,6 +364,29 @@ class BackendAdapter {
     }
     throw lastError!;
   }
+  /**
+   * GET a collection with ETag revalidation. A 304 answer returns the previous
+   * payload, so polling an unchanged collection transfers no body.
+   */
+  private async fetchRevalidated<T>(url: string): Promise<T> {
+    const cached = conditionalResponseCache.get(url);
+    const headers = this.getAuthHeaders();
+    if (cached) headers['If-None-Match'] = cached.etag;
+
+    const res = await this.fetchWithRetry(url, { headers }, 120000, 3);
+    if (res.status === 304 && cached) return JSON.parse(cached.body) as T;
+    if (!res.ok) await this.throwTranslatedError(res, 'Fetch error');
+
+    const body = await res.text();
+    const etag = res.headers.get('ETag');
+    if (etag) {
+      conditionalResponseCache.set(url, { etag, body });
+    } else {
+      conditionalResponseCache.delete(url);
+    }
+    return JSON.parse(body) as T;
+  }
+
   private async throwTranslatedError(res: Response, fallbackPrefix: string): Promise<never> {
     let code: string | undefined;
     let detail = '';
@@ -702,11 +731,9 @@ class BackendAdapter {
   async fetchRepositories(): Promise<{ repositories: Repository[]; total: number }> {
     if (!this._backendUrl) throw new Error('Backend not available');
 
-    const res = await this.fetchWithRetry(`${this._backendUrl}/repositories?limit=10000`, {
-      headers: this.getAuthHeaders()
-    }, 120000, 3);
-    if (!res.ok) await this.throwTranslatedError(res, 'Fetch error');
-    return res.json() as Promise<{ repositories: Repository[]; total: number }>;
+    return this.fetchRevalidated<{ repositories: Repository[]; total: number }>(
+      `${this._backendUrl}/repositories?limit=10000`,
+    );
   }
 
   async syncReleases(releases: Release[]): Promise<void> {
@@ -734,11 +761,9 @@ class BackendAdapter {
   async fetchReleases(): Promise<{ releases: Release[]; total: number }> {
     if (!this._backendUrl) throw new Error('Backend not available');
 
-    const res = await this.fetchWithRetry(`${this._backendUrl}/releases?limit=10000`, {
-      headers: this.getAuthHeaders()
-    }, 120000, 3);
-    if (!res.ok) await this.throwTranslatedError(res, 'Fetch error');
-    return res.json() as Promise<{ releases: Release[]; total: number }>;
+    return this.fetchRevalidated<{ releases: Release[]; total: number }>(
+      `${this._backendUrl}/releases?limit=10000`,
+    );
   }
 
   async syncAIConfigs(configs: AIConfig[]): Promise<void> {
