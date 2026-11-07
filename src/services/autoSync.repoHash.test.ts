@@ -35,7 +35,7 @@ vi.mock('../store/useAppStore', async () => await vi.importActual('../store/useA
 // RAW backend hash. Committing quickHash(merged) instead made the next poll's
 // backend hash differ forever (the merge injects client-only metadata such as
 // analysis_error / has_fetched_releases that the backend never stores), so
-// setRepositories — which used to reset searchResults — fired on every 5s poll
+// setRepositories — which used to reset searchResults — fired on every poll
 // cycle and unmounted the card whose edit modal was open.
 //
 // The same loop-breaker applies to the push side: syncToBackend commits the
