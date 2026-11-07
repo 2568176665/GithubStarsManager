@@ -7,6 +7,7 @@
 - `src/` contains the Vite React/TypeScript frontend: components, feature logic, Zustand state, services, utilities, and types are grouped by directory.
 - `cloudflare-worker/` contains the Worker, `/api/*` routes, Wrangler configuration, and D1 migrations.
 - Put static assets in `public/` or `assets/`, documentation in `docs/`, and treat `dist/` as generated output.
+- 静态资源长缓存只在 `public/_headers` 里声明 `/assets/*` → `immutable`；不要新增 `/*` 规则，Cloudflare 会把同名头拼成逗号分隔值，`max-age` 反而失效。
 - Do not add server, desktop, container, or reverse-proxy code back to this fork. Keep frontend local-cache/direct-fallback behavior because it is part of the browser client.
 
 ## Build, Test, and Development Commands
@@ -31,6 +32,8 @@ Run `npm ci` at the repository root first; run `npm ci` in `cloudflare-worker/` 
 ## Coding Style & Naming Conventions
 
 Use TypeScript with two-space indentation, single quotes, semicolons, and the existing ESLint configuration. Use `PascalCase` for React components, `camelCase` for functions/variables, and descriptive `*.test.ts` or `*.test.tsx` names. Keep application commands pure; put service calls in feature hooks or services. Frontend API calls must use the existing Worker adapter and preserve browser-direct fallback where supported.
+
+第三方图片（GitHub 头像等）必须经 `src/services/avatarUrl.ts` 的 `avatarSrc()` 走同域 `/api/avatar` 代理，组件里不要直接用上游图片 URL；Worker 侧白名单只放 GitHub 图片域名。列表图片加 `loading="lazy"`，首屏用图保持 eager。
 
 浏览器状态按分片引用判脏持久化。更新 `repositories`、`gists`、`starredGists`、`releases`、`forks` 时必须创建新数组，禁止对 store 中的数组或元素原地修改；清空缓存必须 await 持久化层的串行删除。
 
