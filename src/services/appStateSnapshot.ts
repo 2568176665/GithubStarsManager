@@ -64,8 +64,6 @@ export const APP_STATE_SNAPSHOT_KEYS = [
   'includeKeysInBackup',
   'themeMode',
   'systemTheme',
-  'themePresetLight',
-  'themePresetDark',
   'currentView',
   'selectedCategory',
   'language',
@@ -150,8 +148,6 @@ export function buildAppStateSnapshot(state: AppStoreState): Record<string, unkn
     currentView: state.currentView,
     selectedCategory: state.selectedCategory,
     language: state.language,
-    themePresetLight: state.themePresetLight,
-    themePresetDark: state.themePresetDark,
     translationEngine: state.translationEngine,
     isSidebarCollapsed: state.isSidebarCollapsed,
     lastSync: state.lastSync,
@@ -191,7 +187,7 @@ export function applyAppStateSnapshot(snapshot: Record<string, unknown>): void {
     'isSidebarCollapsed', 'repositoryViewMode', 'rpcDownloadConfig',
     'activeAIConfig', 'activeWebDAVConfig', 'activeEmbeddingConfig', 'collapsedSidebarCategoryCount',
     'categoryMatchMode', 'includePreRelease', 'includeKeysInBackup', 'lastSync', 'lastBackup',
-    'themePresetLight', 'themePresetDark', 'translationEngine', 'vectorSearchStatus',
+    'translationEngine', 'vectorSearchStatus',
   ] as const;
 
   for (const field of arrayFields) {

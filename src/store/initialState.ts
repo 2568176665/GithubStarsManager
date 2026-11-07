@@ -2,7 +2,6 @@
 import type { AppState, TrendingTimeRange } from '../types';
 import { defaultHeaderMenuConfig, defaultReleaseSourceSettings, defaultSubscriptionChannels } from '../types';
 import { defaultRepositoryChatSettings } from '../types/repositoryChat';
-import { DEFAULT_THEME_PRESET_ID } from '../constants/themePresets';
 import { DEFAULT_THEME_TOKENS } from '../utils/themeTokens';
 import { DEFAULT_REPOSITORY_CARD_FIELDS } from '../types/repositoryCardFields';
 import { DEFAULT_REPOSITORY_CARD_ACTIONS } from '../types/repositoryCardActions';
@@ -77,8 +76,6 @@ export const createInitialState = (): AppState => ({
           && window.matchMedia('(prefers-color-scheme: dark)').matches
           ? 'dark'
           : 'light',
-      themePresetLight: DEFAULT_THEME_PRESET_ID,
-      themePresetDark: DEFAULT_THEME_PRESET_ID,
       hasHydrated: false,
       currentView: 'repositories',
       selectedCategory: 'all',

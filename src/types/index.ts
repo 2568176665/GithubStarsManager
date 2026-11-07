@@ -1,4 +1,3 @@
-import type { ThemePresetId } from '../constants/themePresets';
 import type { AppLanguage } from '../i18n/languages';
 
 import type { RepositoryCardFields } from './repositoryCardFields';
@@ -576,9 +575,6 @@ export interface AppState {
   themeMode: ThemeMode;
   /** 操作系统当前深浅偏好（不持久化，仅跟随 system 模式使用） */
   systemTheme: 'light' | 'dark';
-  /** 主题配色预设（默认 + 内置精选），见 constants/themePresets */
-  themePresetLight: ThemePresetId;
-  themePresetDark: ThemePresetId;
   currentView: 'repositories' | 'gists' | 'releases' | 'forks' | 'settings' | 'subscription';
   selectedCategory: string;
   language: AppLanguage;

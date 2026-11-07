@@ -8,7 +8,6 @@ const mocks = vi.hoisted(() => {
     currentView: 'repositories',
     selectedCategory: 'all',
     theme: 'light',
-    themePreset: null,
     themeTokens: null,
     language: 'zh',
     setCurrentView: vi.fn(),

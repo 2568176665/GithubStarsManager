@@ -81,8 +81,6 @@ export const PERSISTENCE_SHARD_FIELDS: Record<PersistenceShardName, readonly str
     'repositoryCardActions',
     'lastSync',
     'themeMode',
-    'themePresetLight',
-    'themePresetDark',
     'currentView',
     'selectedCategory',
     'language',

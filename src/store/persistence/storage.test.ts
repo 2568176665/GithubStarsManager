@@ -80,8 +80,6 @@ const buildState = (): Record<string, unknown> => ({
   // state.gistSearchFilters.sortBy），手写的稀疏对象会让它抛错。
   ...(createInitialState() as unknown as Record<string, unknown>),
   themeMode: 'dark',
-  themePresetLight: 'default',
-  themePresetDark: 'default',
   language: 'zh',
   repositories: [{ id: 1, name: 'repo-one' }],
   lastSync: '2026-01-01T00:00:00.000Z',

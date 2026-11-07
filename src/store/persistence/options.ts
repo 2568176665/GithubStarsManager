@@ -100,8 +100,6 @@ sortOrder: state.gistSearchFilters.sortOrder,
 
   // 持久化UI设置
   themeMode: state.themeMode,
-  themePresetLight: state.themePresetLight,
-  themePresetDark: state.themePresetDark,
   currentView: state.currentView,
   selectedCategory: state.selectedCategory,
   language: state.language,

@@ -80,7 +80,7 @@ upstream v0.9.0
 | **react 18 → 19 / zustand 4 → 5** | 上游 hook 形态依赖 zustand 5；react 19 影响 `@testing-library/react` 14 → 16 |
 | **i18next 引入** | 上游有 `src/i18n/`（8 文件）+ `src/locales/`（140 文件 / 10 语言）。fork 现在用 21 个文件里的 `t: (zh,en)=>string` 闭包。上游 `useTPair()`/`makeTPair()` 是其等价物 → 21 个文件是转换目标 |
 | **`src/services/chat/`** | 11 文件 / 6,192 行（`loop.ts` 1,827、`fastPath.ts` 564、`retrieval.ts` 549、`citations.ts` 477）。fork 的 `repositoryChatService.ts` 1,787 行要变成上游那个 64 行 re-export |
-| **主题预设回潮** | fork `5a296430` 删掉了主题配色；上游 0.9.0 有 `src/lib/themePresets.ts` + `constants/themePresets.generated.ts`（9 文件 / 81 KiB，14 个预设）→ 追平会**自动带回**，需要单独决策 |
+| **主题预设回潮** | fork `5a296430` 删掉了主题配色；上游 0.9.0 有 `src/lib/themePresets.ts` + `constants/themePresets.generated.ts`（9 文件 / 81 KiB，14 个预设）→ 追平会**自动带回**；已定：不带回，只保留浅色/深色/跟随系统 |
 | **`react-router-dom` 反向删除** | fork 用 `BrowserRouter` + 5 条路由（`App.tsx` 288–316）；**上游 0.9.0 完全没有 react-router-dom** → 追平会删掉它，得按上游方式重写导航 |
 | **`@tanstack/react-virtual` 反向删除** | fork 的虚拟列表只有 `VirtualizedRepositoryRows.tsx` 用；**上游零使用** → `VirtualizedRepositoryRows` 等 fork-only 文件要自己改回非虚拟实现 |
 
@@ -228,7 +228,7 @@ cd cloudflare-worker && npx tsc -p tsconfig.json --noEmit
 
 ## 7. 待决事项
 
-1. **`react-router-dom` 去留** —— 上游没有它。是接受上游方式重写导航（省维护），还是把 fork 的路由模式重新加回 0.9.0 之上（保留 `/repositories` 等顶层路径）？
-2. **主题预设是否随追平带回** —— fork 当初主动删掉了 14 个预设；追平会自动恢复。
+1. **`react-router-dom` 去留**（已定：保留路由）—— 上游没有它。是接受上游方式重写导航（省维护），还是把 fork 的路由模式重新加回 0.9.0 之上（保留 `/repositories` 等顶层路径）？
+2. **主题预设是否随追平带回**（已定：不带回）—— fork 当初主动删掉了 14 个预设，追平引入后已再次移除，主题只保留 `themeMode`/`systemTheme`。
 3. **30 个 fork-only 功能全部保留，还是有取舍** —— 尤其是虚拟列表（上游无 `@tanstack/react-virtual`）和 `appStateSnapshot`/`discoveryAnalysisMerge`。
 4. **是否分步发布** —— 建议 `rebase/0.9.0` 上按 Stage 打 checkpoint（阶段 1/2/3 各一个 commit），先在 preview 验证 Worker 契约再合并 `main`，避免一次性大爆炸。

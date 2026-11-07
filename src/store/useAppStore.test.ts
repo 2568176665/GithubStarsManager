@@ -1083,41 +1083,22 @@ describe('useAppStore repository view mode', () => {
   });
 });
 
-describe('useAppStore theme preset', () => {
-  it('defaults the theme mode and presets for legacy persisted state', () => {
+describe('useAppStore theme mode', () => {
+  it('defaults the theme mode for legacy persisted state', () => {
     const normalized = normalizePersistedState({}, useAppStore.getState());
 
     expect(normalized.themeMode).toBe('dark');
-    expect(normalized.themePresetLight).toBe('default');
-    expect(normalized.themePresetDark).toBe('default');
   });
 
-  it('falls back to the default presets for unknown persisted values', () => {
+  it('migrates the legacy theme key and drops removed preset keys', () => {
     const normalized = normalizePersistedState(
-      { themePresetLight: 'does-not-exist' as never, themePresetDark: 'does-not-exist' as never },
+      { theme: 'light', themePreset: 'deep-purple', themePresetLight: 'deep-purple' } as never,
       useAppStore.getState(),
     );
 
-    expect(normalized.themePresetLight).toBe('default');
-    expect(normalized.themePresetDark).toBe('default');
-  });
-
-  it('migrates legacy theme/themePreset into the new mode-aware fields', () => {
-    const normalized = normalizePersistedState(
-      { theme: 'light', themePreset: 'deep-purple' } as never,
-      useAppStore.getState(),
-    );
     expect(normalized.themeMode).toBe('light');
-    expect(normalized.themePresetLight).toBe('deep-purple');
-    expect(normalized.themePresetDark).toBe('deep-purple');
-  });
-
-  it('keeps light and dark presets independent at runtime', () => {
-    useAppStore.setState({ themePresetLight: 'default', themePresetDark: 'default' });
-    useAppStore.getState().setThemePresetLight('deep-purple');
-    useAppStore.getState().setThemePresetDark('zen-inspired');
-    expect(useAppStore.getState().themePresetLight).toBe('deep-purple');
-    expect(useAppStore.getState().themePresetDark).toBe('zen-inspired');
+    expect(normalized).not.toHaveProperty('themePresetLight');
+    expect(normalized).not.toHaveProperty('themePresetDark');
   });
 });
 

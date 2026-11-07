@@ -85,8 +85,6 @@ export type PersistedAppState = Partial<
     | 'repositoryCardFields'
     | 'repositoryCardActions'
     | 'themeMode'
-    | 'themePresetLight'
-    | 'themePresetDark'
     | 'currentView'
     | 'selectedCategory'
     | 'language'

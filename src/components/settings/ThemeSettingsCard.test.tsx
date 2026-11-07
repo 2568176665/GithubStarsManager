@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 /**
  * The global test setup mocks the app store module, so this suite installs its
  * own controllable double that mimics the tiny slice of store behavior the
- * card needs (theme/themePreset plus their setters). Real store logic is
+ * card needs (theme mode plus theme tokens and their store actions). Real store logic is
  * covered in useAppStore.test.ts.
  */
 const mocks = vi.hoisted(() => {
@@ -34,7 +34,6 @@ vi.mock('../../store/useAppStore', async () => {
 
 import { makeT } from '../../i18n/useT';
 import { ThemeSettingsCard } from './ThemeSettingsCard';
-import { THEME_PRESETS } from '../../constants/themePresets';
 import { DEFAULT_REPOSITORY_CARD_FIELDS } from '../../types/repositoryCardFields';
 import { DEFAULT_REPOSITORY_CARD_ACTIONS } from '../../types/repositoryCardActions';
 
@@ -45,11 +44,7 @@ beforeEach(() => {
     language: 'zh',
     themeMode: 'dark',
     systemTheme: 'light',
-    themePresetLight: 'default',
-    themePresetDark: 'default',
     setThemeMode: vi.fn((mode: 'light' | 'dark' | 'system') => mocks.setState({ themeMode: mode })),
-    setThemePresetLight: vi.fn((preset: string) => mocks.setState({ themePresetLight: preset })),
-    setThemePresetDark: vi.fn((preset: string) => mocks.setState({ themePresetDark: preset })),
     // Theme token（开发守则 §14）：局部更新，内部与当前值合并
     themeTokens: { accentColor: null, fontScale: 1, radius: 'default', animation: 'normal' },
     updateThemeTokens: vi.fn((patch: Record<string, unknown>) => mocks.setState({
@@ -111,47 +106,6 @@ describe('ThemeSettingsCard', () => {
     expect(mocks.state.setRepositoryCardActions).toHaveBeenCalledWith(DEFAULT_REPOSITORY_CARD_ACTIONS);
   });
 
-  it('renders every registered preset as a radio option', () => {
-    render(<ThemeSettingsCard t={t} />);
-    const presetGroup = screen.getByRole('radiogroup', { name: '主题配色' });
-    expect(presetGroup).toBeTruthy();
-    expect(within(presetGroup).getAllByRole('radio')).toHaveLength(THEME_PRESETS.length);
-  });
-
-  it('keeps a single tab stop inside the preset radiogroup (roving tabindex)', () => {
-    render(<ThemeSettingsCard t={t} />);
-    const presetGroup = screen.getByRole('radiogroup', { name: '主题配色' });
-    const radios = within(presetGroup).getAllByRole('radio');
-    expect(radios.filter((el) => el.getAttribute('tabindex') === '0')).toHaveLength(1);
-  });
-
-  it('selects the focused preset when navigating with arrow keys', async () => {
-    const user = userEvent.setup();
-    render(<ThemeSettingsCard t={t} />);
-    const presetGroup = screen.getByRole('radiogroup', { name: '主题配色' });
-    const radios = within(presetGroup).getAllByRole('radio');
-    radios[0].focus();
-    await user.keyboard('{ArrowRight}');
-    expect(mocks.state.themePresetDark).toBe(THEME_PRESETS[1].id);
-  });
-
-  it('marks exactly one preset active by default', () => {
-    render(<ThemeSettingsCard t={t} />);
-    const presetGroup = screen.getByRole('radiogroup', { name: '主题配色' });
-    const checked = within(presetGroup)
-      .getAllByRole('radio')
-      .filter((el) => el.getAttribute('aria-checked') === 'true');
-    expect(checked).toHaveLength(1);
-  });
-
-  it('switches presets on click and persists through the store action', async () => {
-    const user = userEvent.setup();
-    render(<ThemeSettingsCard t={t} />);
-    await user.click(screen.getByRole('radio', { name: /深邃紫/ }));
-    expect(mocks.state.themePresetDark).toBe('deep-purple');
-    expect(mocks.state.themeMode).toBe('dark');
-  });
-
   it('switches display mode through the mode radio group', async () => {
     const user = userEvent.setup();
     render(<ThemeSettingsCard t={t} />);
@@ -159,25 +113,8 @@ describe('ThemeSettingsCard', () => {
     await user.click(within(modeGroup).getByText('浅色'));
     expect(mocks.state.themeMode).toBe('light');
 
-    await user.click(screen.getByRole('radio', { name: /深邃紫/ }));
-    expect(mocks.state.themePresetLight).toBe('deep-purple');
-    expect(mocks.state.themePresetDark).toBe('default');
-  });
-
-  it('moves the preset edit target with arrow keys inside the mode radiogroup', async () => {
-    const user = userEvent.setup();
-    render(<ThemeSettingsCard t={t} />);
-    const editGroup = screen.getByRole('radiogroup', { name: '配色适用模式' });
-    const lightButton = within(editGroup).getByText('浅色');
-    expect(within(editGroup).getByText('深色').closest('button')).toHaveAttribute('aria-checked', 'true');
-    lightButton.focus();
-    await user.keyboard('{ArrowRight}');
-
-    expect(lightButton.closest('button')).toHaveAttribute('aria-checked', 'true');
-
-    await user.keyboard('{ArrowRight}');
-    expect(within(editGroup).getByText('深色').closest('button')).toHaveAttribute('aria-checked', 'true');
-    expect(lightButton.closest('button')).toHaveAttribute('aria-checked', 'false');
+    await user.click(within(modeGroup).getByText('深色'));
+    expect(mocks.state.themeMode).toBe('dark');
   });
 
   it('writes theme tokens through the store action', async () => {
@@ -208,16 +145,16 @@ describe('ThemeSettingsCard', () => {
     expect((screen.getByRole('option', { name: `${Math.round(fontScale * 100)}%` }) as HTMLOptionElement).selected).toBe(true);
   });
 
-  it('labels palette colors and shows the active preset color in the picker', async () => {
+  it('labels palette colors and shows the current accent color in the picker', async () => {
     const user = userEvent.setup();
     render(<ThemeSettingsCard t={t} />);
     await user.click(screen.getByRole('button', { name: '微调外观' }));
 
     expect(screen.getByRole('button', { name: '蓝色 (#2563eb)' })).toHaveAttribute('aria-pressed', 'false');
-    expect(screen.getByLabelText('自定义强调色')).toHaveValue('#f8fafc');
+    expect(screen.getByLabelText('自定义强调色')).toHaveValue('#2563eb');
   });
 
-  it('resets every token back to the presets', async () => {
+  it('resets every token back to the defaults', async () => {
     const user = userEvent.setup();
     mocks.state.themeTokens = { accentColor: '#2563eb', fontScale: 1.25, radius: 'large', animation: 'reduced' };
     render(<ThemeSettingsCard t={t} />);

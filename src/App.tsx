@@ -16,7 +16,6 @@ import { useAppStore, getAllCategories } from './store/useAppStore';
 import { useSystemThemeSync } from './hooks/useSystemThemeSync';
 import { resolveTheme, selectAppShellState } from './store/selectors';
 import { useShallow } from 'zustand/react/shallow';
-import { applyThemePreset } from './lib/themePresets';
 import { applyThemeTokens } from './utils/themeTokens';
 import { changeAppLanguage } from './i18n';
 import { useAutoUpdateCheck } from './hooks/useAutoUpdateCheck';
@@ -281,8 +280,6 @@ function App() {
     selectedCategory,
     themeMode,
     systemTheme,
-    themePresetLight,
-    themePresetDark,
     themeTokens,
     language,
     hasHydrated,
@@ -344,18 +341,11 @@ function App() {
     };
   }, [theme]);
 
-  // Theme preset (palette/radius/font/shadow skin) rides on data-theme;
-  // 深浅模式可分别配置，随解析出的主题切换生效。
-  const activeThemePreset = theme === 'dark' ? themePresetDark : themePresetLight;
-  useEffect(() => {
-    applyThemePreset(activeThemePreset);
-  }, [activeThemePreset]);
-
-  // Theme token（开发守则 §14）：内联 CSS 变量覆盖预设；恢复默认时删掉内联值，
-  // 预设的 --radius / --primary 自然重新生效。排在预设 effect 之后即可。
+  // Theme token（开发守则 §14）：内联 CSS 变量覆盖样式表默认值；恢复默认时
+  // 删掉内联值，样式表的 --radius / --primary 自然重新生效。
   useEffect(() => {
     applyThemeTokens(themeTokens);
-  }, [themeTokens, theme, activeThemePreset]);
+  }, [themeTokens, theme]);
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'auto' });

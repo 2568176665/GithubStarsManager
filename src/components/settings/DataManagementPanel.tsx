@@ -55,8 +55,6 @@ import { Github } from '../ui/brand-icons';
 import { useAppStore } from '../../store/useAppStore';
 import { removePersistedSnapshot } from '../../store/persistence/storage';
 import { useShallow } from 'zustand/react/shallow';
-import { isThemePresetId } from '../../constants/themePresets';
-import type { ThemePresetId } from '../../constants/themePresets';
 import { IncludeKeysToggle } from './IncludeKeysToggle';
 import type { 
   Repository, 
@@ -136,9 +134,6 @@ interface ExportData {
     categoryOrder?: string[];
     theme?: 'light' | 'dark';
     themeMode?: 'light' | 'dark' | 'system';
-    themePreset?: ThemePresetId;
-    themePresetLight?: ThemePresetId;
-    themePresetDark?: ThemePresetId;
     language?: AppLanguage;
     isSidebarCollapsed?: boolean;
     releaseViewMode?: 'timeline' | 'repository';
@@ -183,9 +178,6 @@ const hasMaskedSecrets = (data: ExportData['data']): boolean => {
 const UI_SETTINGS_DATA_KEYS = [
   'theme',
   'themeMode',
-  'themePreset',
-  'themePresetLight',
-  'themePresetDark',
   'language',
   'isSidebarCollapsed',
   'releaseViewMode',
@@ -682,8 +674,6 @@ export const DataManagementPanel: React.FC<DataManagementPanelProps> = ({ t }) =
       }
       if (selectedTypes.includes('uiSettings')) {
         exportDataObj.data.themeMode = store.themeMode;
-        exportDataObj.data.themePresetLight = store.themePresetLight;
-        exportDataObj.data.themePresetDark = store.themePresetDark;
         exportDataObj.data.language = store.language;
         exportDataObj.data.isSidebarCollapsed = store.isSidebarCollapsed;
         exportDataObj.data.releaseViewMode = store.releaseViewMode;
@@ -851,18 +841,6 @@ export const DataManagementPanel: React.FC<DataManagementPanelProps> = ({ t }) =
             : (importedData.theme === 'light' || importedData.theme === 'dark' ? importedData.theme : null);
           if (importedMode) {
             useAppStore.getState().setThemeMode(importedMode);
-          }
-          const importedPresetLight = isThemePresetId(importedData.themePresetLight)
-            ? importedData.themePresetLight
-            : (isThemePresetId(importedData.themePreset) ? importedData.themePreset : null);
-          const importedPresetDark = isThemePresetId(importedData.themePresetDark)
-            ? importedData.themePresetDark
-            : (isThemePresetId(importedData.themePreset) ? importedData.themePreset : null);
-          if (importedPresetLight) {
-            useAppStore.getState().setThemePresetLight(importedPresetLight);
-          }
-          if (importedPresetDark) {
-            useAppStore.getState().setThemePresetDark(importedPresetDark);
           }
           if (importedData.language) {
             useAppStore.setState({ language: importedData.language });
@@ -1066,21 +1044,9 @@ export const DataManagementPanel: React.FC<DataManagementPanelProps> = ({ t }) =
           const importedMode = importedUiSettings.themeMode === 'light' || importedUiSettings.themeMode === 'dark' || importedUiSettings.themeMode === 'system'
             ? importedUiSettings.themeMode
             : (importedUiSettings.theme === 'light' || importedUiSettings.theme === 'dark' ? importedUiSettings.theme : null);
-          const importedPresetLight = isThemePresetId(importedUiSettings.themePresetLight)
-            ? importedUiSettings.themePresetLight
-            : (isThemePresetId(importedUiSettings.themePreset) ? importedUiSettings.themePreset : null);
-          const importedPresetDark = isThemePresetId(importedUiSettings.themePresetDark)
-            ? importedUiSettings.themePresetDark
-            : (isThemePresetId(importedUiSettings.themePreset) ? importedUiSettings.themePreset : null);
           useAppStore.setState({
             ...(importedMode
               ? { themeMode: importedMode }
-              : {}),
-            ...(importedPresetLight
-              ? { themePresetLight: importedPresetLight }
-              : {}),
-            ...(importedPresetDark
-              ? { themePresetDark: importedPresetDark }
               : {}),
             ...(importedUiSettings.language ? { language: importedUiSettings.language } : {}),
             ...(typeof importedUiSettings.isSidebarCollapsed === 'boolean'

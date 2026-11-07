@@ -7,7 +7,6 @@ import type {
   TrendingTimeRange,
 } from '../../types';
 import { defaultHeaderMenuConfig, defaultSubscriptionChannels } from '../../types';
-import { DEFAULT_THEME_PRESET_ID, isThemePresetId } from '../../constants/themePresets';
 import { isAppLanguage } from '../../i18n/languages';
 import { normalizeReleaseSourceSettings } from '../../utils/releaseSources';
 import { normalizeAssetFilters } from '../../utils/assetFilters';
@@ -41,23 +40,24 @@ export const normalizePersistedState = (
   currentState: AppStoreState
 ): Partial<AppStoreState> => {
   const safePersisted = persisted ?? {};
-  // 旧版持久化只有 theme/themePreset 单值；新契约是 themeMode +
-  // 按深浅分开的 themePresetLight/themePresetDark。旧键在此消费，
-  // 不再进入水合后的状态（避免残留僵尸字段）。
-  const { theme: legacyTheme, themePreset: legacyThemePreset, ...persistedRest } = safePersisted as
-    PersistedAppState & { theme?: unknown; themePreset?: unknown };
+  // 旧版持久化只有 theme 单值，主题配色预设的记录键也已移除；这些僵尸键
+  // 在此丢弃，不再进入水合后的状态。themeMode 是主题的唯一事实源。
+  const persistedRest = { ...safePersisted } as PersistedAppState & {
+    theme?: unknown;
+    themePreset?: unknown;
+    themePresetLight?: unknown;
+    themePresetDark?: unknown;
+  };
+  const legacyTheme = persistedRest.theme;
+  delete persistedRest.theme;
+  delete persistedRest.themePreset;
+  delete persistedRest.themePresetLight;
+  delete persistedRest.themePresetDark;
   const resolvedLegacyTheme = legacyTheme === 'light' || legacyTheme === 'dark' ? legacyTheme : null;
   const themeMode: AppStoreState['themeMode'] =
     safePersisted.themeMode === 'light' || safePersisted.themeMode === 'dark' || safePersisted.themeMode === 'system'
       ? safePersisted.themeMode
       : (resolvedLegacyTheme ?? 'dark');
-  const legacyPreset = isThemePresetId(legacyThemePreset) ? legacyThemePreset : DEFAULT_THEME_PRESET_ID;
-  const themePresetLight = isThemePresetId(safePersisted.themePresetLight)
-    ? safePersisted.themePresetLight
-    : legacyPreset;
-  const themePresetDark = isThemePresetId(safePersisted.themePresetDark)
-    ? safePersisted.themePresetDark
-    : legacyPreset;
   const persistedDiscoveryChannels = (safePersisted as Record<string, unknown>).discoveryChannels;
   const normalizedDiscoveryChannels = [...defaultDiscoveryChannels.map((defaultChannel) => {
     const persistedChannel = Array.isArray(persistedDiscoveryChannels)
@@ -150,8 +150,6 @@ export const normalizePersistedState = (
       (safePersisted as Record<string, unknown>).accountWorkspaces,
     ),
     themeMode,
-    themePresetLight,
-    themePresetDark,
     themeTokens: normalizeThemeTokens((safePersisted as Record<string, unknown>).themeTokens),
     repositories: migratedRepositories,
     gists,

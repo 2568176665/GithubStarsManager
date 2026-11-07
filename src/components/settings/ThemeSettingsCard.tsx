@@ -1,13 +1,9 @@
 
-import { useTPair, TranslateFn } from '../../i18n/useT';
+import { TranslateFn } from '../../i18n/useT';
 import React from 'react';
 import { Check, MonitorCog, Moon, Palette, Sun } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { useShallow } from 'zustand/react/shallow';
-import { resolveTheme } from '../../store/selectors';
-import { getThemePreset, THEME_PRESETS } from '../../constants/themePresets';
-import type { ThemePresetId } from '../../constants/themePresets';
-import { getThemeSwatch } from '../../lib/themePresets';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Button } from '../ui/button';
 import { Switch } from '../ui/switch';
@@ -16,7 +12,6 @@ import {
   ACCENT_PRESET_NAME_KEYS,
   DEFAULT_THEME_TOKENS,
   FONT_SCALE_OPTIONS,
-  hslTripletToHex,
   type ThemeRadius,
 } from '../../utils/themeTokens';
 import { Label } from '../ui/label';
@@ -31,102 +26,21 @@ interface ThemeSettingsCardProps {
 }
 
 export const ThemeSettingsCard: React.FC<ThemeSettingsCardProps> = ({ t }) => {
-  const tPair = useTPair();
   const {
     themeMode,
-    systemTheme,
     setThemeMode,
-    themePresetLight,
-    themePresetDark,
-    setThemePresetLight,
-    setThemePresetDark,
     themeTokens,
     updateThemeTokens,
     repositoryCardFields,
     setRepositoryCardField,
   } = useAppStore(useShallow((state) => ({
     themeMode: state.themeMode,
-    systemTheme: state.systemTheme,
     setThemeMode: state.setThemeMode,
-    themePresetLight: state.themePresetLight,
-    themePresetDark: state.themePresetDark,
-    setThemePresetLight: state.setThemePresetLight,
-    setThemePresetDark: state.setThemePresetDark,
     themeTokens: state.themeTokens,
     updateThemeTokens: state.updateThemeTokens,
     repositoryCardFields: state.repositoryCardFields,
     setRepositoryCardField: state.setRepositoryCardField,
   })));
-  // 预设按深浅分别记忆；编辑目标用本地状态，默认落在当前实际模式上，
-  // 避免跟随系统时预设选择随系统翻动而漂移。
-  const theme = resolveTheme(themeMode, systemTheme);
-  const [editMode, setEditMode] = React.useState<'light' | 'dark'>(theme);
-  const editPresetId = editMode === 'dark' ? themePresetDark : themePresetLight;
-  const activePreset = getThemePreset(editPresetId);
-  const setEditPreset = React.useCallback((preset: ThemePresetId) => {
-    if (editMode === 'dark') {
-      setThemePresetDark(preset);
-    } else {
-      setThemePresetLight(preset);
-    }
-  }, [editMode, setThemePresetDark, setThemePresetLight]);
-  // 显式选定深/浅（含头部快捷键切换）时，配色编辑目标同步跟随；
-  // 跟随系统时保持当前目标，不随系统翻动漂移。
-  React.useEffect(() => {
-    if (themeMode === 'light' || themeMode === 'dark') setEditMode(themeMode);
-  }, [themeMode]);
-  const presetAccentColor = hslTripletToHex(
-    (editMode === 'dark' ? activePreset.darkColors : activePreset.lightColors).primary,
-  ) ?? '#2563eb';
-
-  // Roving tabindex: arrow keys move focus across preset options; selection
-  // stays on click/Enter (Space) as with any button.
-  const handlePresetGridKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
-    const keys = ['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp', 'Home', 'End'];
-    if (!keys.includes(event.key)) return;
-    const buttons = Array.from(
-      event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"][data-theme-preset-id]'),
-    );
-    if (buttons.length === 0) return;
-    const currentIndex = buttons.findIndex((button) => button === document.activeElement);
-    let nextIndex: number;
-    if (event.key === 'Home') {
-      nextIndex = 0;
-    } else if (event.key === 'End') {
-      nextIndex = buttons.length - 1;
-    } else {
-      const forward = event.key === 'ArrowRight' || event.key === 'ArrowDown';
-      nextIndex = currentIndex === -1
-        ? 0
-        : (currentIndex + (forward ? 1 : -1) + buttons.length) % buttons.length;
-    }
-    const nextButton = buttons[nextIndex];
-    const nextPresetId = nextButton?.dataset.themePresetId;
-    if (nextPresetId) {
-      setEditPreset(nextPresetId as ThemePresetId);
-    }
-    event.preventDefault();
-    nextButton?.focus();
-  }, [setEditPreset]);
-
-  // 编辑目标只有两项：radiogroup 语义下方向键直接切换选中项并在两项间
-  // 循环，焦点、aria-checked 与 Tab 入口同步移动；Home/End 跳到首尾。
-  const handleEditModeKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
-    const keys = ['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp', 'Home', 'End'];
-    if (!keys.includes(event.key)) return;
-    let nextMode: 'light' | 'dark';
-    if (event.key === 'Home') {
-      nextMode = 'light';
-    } else if (event.key === 'End') {
-      nextMode = 'dark';
-    } else {
-      nextMode = editMode === 'light' ? 'dark' : 'light';
-    }
-    const nextButton = event.currentTarget.querySelector<HTMLButtonElement>(`[data-edit-mode='${nextMode}']`);
-    setEditMode(nextMode);
-    nextButton?.focus();
-    event.preventDefault();
-  }, [editMode]);
 
   return (
     <>
@@ -183,98 +97,8 @@ export const ThemeSettingsCard: React.FC<ThemeSettingsCardProps> = ({ t }) => {
           </RadioGroup>
         </div>
 
-        <div>
-          <p id="theme-preset-label" className="mb-1 text-sm font-medium text-foreground">
-            {t('themeSettingsCard.theme-color')}
-          </p>
-          <p className="mb-3 text-xs text-muted-foreground">
-            {t('themeSettingsCard.switch-the-interface-color-scheme-instantly-chan')}
-          </p>
-          <div className="mb-3 flex flex-wrap items-center gap-3">
-            <div
-              role="radiogroup"
-              aria-label={t('themeSettingsCard.color-mode-target')}
-              className="inline-flex overflow-hidden rounded-lg border border-border"
-              onKeyDown={handleEditModeKeyDown}
-            >
-              {(['light', 'dark'] as const).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  role="radio"
-                  aria-checked={editMode === mode}
-                  tabIndex={editMode === mode ? 0 : -1}
-                  data-edit-mode={mode}
-                  onClick={() => setEditMode(mode)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 text-sm transition-colors ${
-                    editMode === mode
-                      ? 'bg-primary text-primary-foreground'
-                      : 'text-muted-foreground hover:bg-background dark:hover:bg-card/[0.10]'
-                  }`}
-                >
-                  {mode === 'light'
-                    ? <Sun className="h-3.5 w-3.5" aria-hidden="true" />
-                    : <Moon className="h-3.5 w-3.5" aria-hidden="true" />}
-                  {t(mode === 'light' ? 'themeSettingsCard.light' : 'themeSettingsCard.dark')}
-                </button>
-              ))}
-            </div>
-            <span className="text-xs text-muted-foreground">{t('themeSettingsCard.per-mode-hint')}</span>
-          </div>
-          <div
-            role="radiogroup"
-            aria-labelledby="theme-preset-label"
-            className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6"
-            onKeyDown={handlePresetGridKeyDown}
-          >
-            {THEME_PRESETS.map((preset) => {
-
-              const swatch = getThemeSwatch(preset, editMode === 'dark');
-              const isActive = editPresetId === preset.id;
-              return (
-                <button
-                  key={preset.id}
-                  type="button"
-                  role="radio"
-                  aria-checked={isActive}
-                  tabIndex={isActive ? 0 : -1}
-                  data-theme-preset-id={preset.id}
-                  onClick={() => setEditPreset(preset.id as ThemePresetId)}
-                  className={`group relative flex flex-col items-center gap-2 rounded-lg border p-2.5 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--ui-focus-ring) focus-visible:ring-offset-2 focus-visible:ring-offset-background ${
-                    isActive
-                      ? 'border-primary ring-2 ring-primary/30'
-                      : 'border-border hover:border-primary/40'
-                  }`}
-                >
-                  {isActive && (
-                    <span className="absolute right-1.5 top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-primary-foreground">
-                      <Check className="h-3 w-3" aria-hidden="true" />
-                    </span>
-                  )}
-                  <span
-                    aria-hidden="true"
-                    className="flex h-12 w-full items-end overflow-hidden rounded-md border border-border/60"
-                    style={{ background: swatch.background }}
-                  >
-                    <span
-                      className="m-1 h-7 flex-1 rounded-sm border"
-                      style={{ background: swatch.card, borderColor: `hsl(var(--border))` }}
-                    >
-                      <span className="mx-auto mt-1 block h-1.5 w-8 rounded-full" style={{ background: swatch.primary }} />
-                      <span className="mx-auto mt-1 block h-1.5 w-5 rounded-full" style={{ background: swatch.accent }} />
-                    </span>
-                  </span>
-                  <span className="line-clamp-1 text-xs font-medium text-foreground">
-                    {tPair(preset.labelZh, preset.labelEn)}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
         {/* Theme token（开发守则 §14）：强调色 / 圆角 / 字号 / 动效，全部落到 <html>
-            的 CSS 变量与 data 属性上，恢复默认即删掉内联值让预设重新生效。 */}
+            的 CSS 变量与 data 属性上，恢复默认即删掉内联值让样式表默认值重新生效。 */}
         <Accordion type="single" collapsible className="border-t border-border">
           <AccordionItem value="fine-tune" className="border-0">
             <AccordionTrigger>{t('themeSettingsCard.fine-tune-appearance')}</AccordionTrigger>
@@ -290,7 +114,7 @@ export const ThemeSettingsCard: React.FC<ThemeSettingsCardProps> = ({ t }) => {
                   themeTokens.accentColor === null ? 'border-primary text-foreground' : 'border-border text-muted-foreground'
                 }`}
               >
-                {t('themeSettingsCard.follow-the-theme-preset')}
+                {t('themeSettingsCard.default-value')}
               </button>
               {ACCENT_PRESETS.map((hex) => (
                 <button
@@ -308,7 +132,7 @@ export const ThemeSettingsCard: React.FC<ThemeSettingsCardProps> = ({ t }) => {
               <input
                 type="color"
                 aria-label={t('themeSettingsCard.custom-accent-color')}
-                value={themeTokens.accentColor ?? presetAccentColor}
+                value={themeTokens.accentColor ?? '#2563eb'}
                 onChange={(event) => updateThemeTokens({ accentColor: event.target.value })}
                 className="h-7 w-10 cursor-pointer rounded border border-border bg-transparent"
               />
@@ -323,7 +147,7 @@ export const ThemeSettingsCard: React.FC<ThemeSettingsCardProps> = ({ t }) => {
               onChange={(event) => updateThemeTokens({ radius: event.target.value as ThemeRadius })}
               className="rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground"
             >
-              <option value="default">{t('themeSettingsCard.follow-the-theme-preset')}</option>
+              <option value="default">{t('themeSettingsCard.default-value')}</option>
               <option value="none">{t('themeSettingsCard.radius-none')}</option>
               <option value="small">{t('themeSettingsCard.radius-small')}</option>
               <option value="medium">{t('themeSettingsCard.radius-medium')}</option>

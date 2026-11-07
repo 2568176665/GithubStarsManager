@@ -47,7 +47,6 @@ import type {
   ThemeTokens,
   TrendingSnapshot,
 } from '../types';
-import type { ThemePresetId } from '../constants/themePresets';
 import type { GitHubListsApiService } from '../services/githubListsApi';
 
 export interface AppActions {
@@ -176,8 +175,6 @@ export interface AppActions {
   // UI actions
   setThemeMode: (mode: ThemeMode) => void;
   setSystemTheme: (systemTheme: 'light' | 'dark') => void;
-  setThemePresetLight: (preset: ThemePresetId) => void;
-  setThemePresetDark: (preset: ThemePresetId) => void;
   setCurrentView: (view: 'repositories' | 'gists' | 'releases' | 'forks' | 'settings' | 'subscription') => void;
   setSelectedCategory: (category: string) => void;
   setLanguage: (language: AppLanguage) => void;

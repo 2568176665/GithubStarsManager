@@ -36,7 +36,7 @@ Use TypeScript with two-space indentation, single quotes, semicolons, and the ex
 
 界面文案统一走 `src/i18n` 的 `useT`/`useTPair` 与 `src/locales` 下的命名空间文案，不要在组件里硬编码中英文对照字符串；新增文案需同时补齐 10 种语言，缺失时回退到 `en`。
 
-主题状态使用 `themeMode`、`systemTheme` 与 `themePresetLight`、`themePresetDark`，不存在 `theme`/`themePreset` 字段。
+主题状态只有 `themeMode` 与 `systemTheme` 两个字段（`light`/`dark`/`system`），不提供主题配色预设，也不存在 `theme`/`themePreset`/`themePresetLight`/`themePresetDark` 字段。
 
 ## Testing Guidelines
 

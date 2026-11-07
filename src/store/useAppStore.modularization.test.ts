@@ -81,8 +81,6 @@ const currentPersistedKeys = [
   'repositoryCardActions',
   'trendingSnapshots',
   'themeMode',
-  'themePresetLight',
-  'themePresetDark',
   'currentView',
   'selectedCategory',
   'language',
