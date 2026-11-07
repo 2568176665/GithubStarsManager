@@ -654,4 +654,14 @@
     </changelog>
     <downloadUrl>https://github.com/2568176665/GithubStarsManager/releases/tag/v0.8.9</downloadUrl>
   </version>
+  <version>
+    <number>0.9.0</number>
+    <releaseDate>2026-11-07</releaseDate>
+    <changelog>
+      <item>前端升级到上游 0.9.0 基线，界面迁移到 Tailwind 4 并新增内置主题预设</item>
+      <item>接入多语言界面与仓库对话式 AI 问答</item>
+      <item>移除 WebDAV 同步、插件市场、Telegram/XTweet 采集等不适用于云端部署的功能</item>
+    </changelog>
+    <downloadUrl>https://github.com/2568176665/GithubStarsManager/releases/tag/v0.9.0</downloadUrl>
+  </version>
 </versions>

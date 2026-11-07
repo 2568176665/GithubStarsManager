@@ -9,9 +9,9 @@ import tseslint from 'typescript-eslint';
  * calls or Store mutation; they belong behind a hook in src/features/.../hooks/**.
  * See docs/adr/0001-frontend-layering.md for the layering contract.
  *
- * Infrastructure utilities (logger, indexedDbStorage, aiRequestLimiter,
- * discoveryAnalysisStorage) are intentionally NOT banned — they are tools, not
- * orchestration.
+ * Infrastructure utilities (logger, isElectron/electronProxy, indexedDbStorage,
+ * mcpElectronBridge, aiRequestLimiter, discoveryAnalysisStorage) are intentionally NOT
+ * banned — they are tools, not orchestration.
  */
 const BANNED_COMPONENT_SERVICES = [
   'githubApi',
@@ -42,7 +42,9 @@ const BANNED_COMPONENT_SERVICE_DYNAMIC_SELECTORS = BANNED_COMPONENT_SERVICES.map
 );
 
 export default tseslint.config(
-  { ignores: ['dist', '**/.wrangler/**', 'cloudflare-worker/worker-configuration.d.ts'] },
+  {
+    ignores: ['dist', 'coverage', '**/.wrangler/**', 'cloudflare-worker/worker-configuration.d.ts'],
+  },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],
@@ -60,6 +62,8 @@ export default tseslint.config(
         'warn',
         { allowConstantExport: true, allowExportNames: ['useDialog'] },
       ],
+      'preserve-caught-error': 'off',
+      'no-useless-assignment': 'off',
     },
   },
   {
@@ -72,9 +76,16 @@ export default tseslint.config(
      * `no-restricted-syntax` covers dynamic `import('...')` (ImportExpression), which
      * no-restricted-imports does not inspect.
      */
-    files: ['src/components/**/*.{ts,tsx}'],
+    // Covers the shared View tier (src/components/**) and feature-local view
+    // components (src/features/*/components/**), which are View tier per ADR 0001
+    // and must not import business services either.
+    files: [
+      'src/components/**/*.{ts,tsx}',
+      'src/features/*/components/**/*.{ts,tsx}',
+    ],
     ignores: [
       'src/components/**/*.test.{ts,tsx}',
+      'src/features/*/components/**/*.test.{ts,tsx}',
     ],
     rules: {
       'no-restricted-imports': [
@@ -96,6 +107,28 @@ export default tseslint.config(
           message:
             'View components must not dynamically import() business services. Move the call into a hook in src/features/.../hooks/**. See docs/adr/0001-frontend-layering.md.',
         })),
+      ],
+    },
+  },
+  {
+    /**
+     * Route-mode rule: GitHub API clients must be built via createGitHubApiService()
+     * (services/githubApiFactory) so the route-mode preference (auto/backend/browser)
+     * attaches the backend proxy consistently. Direct `new GitHubApiService(...)`
+     * bypasses the factory and always calls api.github.com from the browser, which
+     * breaks login/sync in the fullstack deployment and ignores the route-mode
+     * setting. The factory itself and tests are exempt.
+     */
+    files: ['src/**/*.{ts,tsx}'],
+    ignores: ['src/services/githubApiFactory.ts', 'src/**/*.test.{ts,tsx}'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "NewExpression[callee.name='GitHubApiService']",
+          message:
+            'Build GitHub API clients with createGitHubApiService(token) from services/githubApiFactory so the route-mode setting (auto/backend/browser) applies. Direct construction skips backend proxying.',
+        },
       ],
     },
   },
