@@ -4,7 +4,6 @@ import {
   startAutoSync,
   stopAutoSync,
   syncFromBackend,
-  syncLocalGitHubTokenToBackend,
   tryRestoreAuthFromBackend,
 } from '../../../services/autoSync';
 
@@ -27,9 +26,9 @@ export const useBackendLifecycle = (hasHydrated: boolean): void => {
           // Session restoration must precede the data pull so a fresh browser
           // receives authentication state before it consumes backend records.
           await tryRestoreAuthFromBackend();
-          if (!cancelled) {
-            await syncLocalGitHubTokenToBackend();
-          }
+          // No local-token sync here: this Worker strips github_token from
+          // PUT /settings (it uses the GITHUB_TOKEN secret), so the request
+          // would only cost a cross-border round trip plus a D1 write.
           if (!cancelled) {
             await syncFromBackend();
           }
