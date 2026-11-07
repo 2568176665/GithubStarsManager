@@ -6,6 +6,7 @@ import type { Repository } from '../types';
 import type { RepositoryChatSession } from '../types/repositoryChat';
 import { useAppStore } from '../store/useAppStore';
 import { repositoryChatStorage } from '../services/repositoryChatStorage';
+import { avatarSrc } from '../services/avatarUrl';
 import { accountIdKey } from '../store/helpers/accountWorkspace';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -323,7 +324,7 @@ export const GlobalChatHistorySheet: React.FC<GlobalChatHistorySheetProps> = ({
                             onClick={() => onSelectSession(targetRepository, session.id)}
                             title={t('globalChatHistorySheet.open-conversation-in-v1', { v1: session.repoFullName })}
                           >
-                            <img src={avatarUrl} alt="" className="h-7 w-7 shrink-0 rounded-md border border-border" />
+                            <img src={avatarSrc(avatarUrl)} alt="" loading="lazy" decoding="async" className="h-7 w-7 shrink-0 rounded-md border border-border" />
                             <span className="min-w-0 flex-1">
                               <span className="block truncate text-sm font-medium text-foreground">{session.title}</span>
                               <span className="block truncate text-xs text-muted-foreground">{session.repoFullName} · {formatTime(session.updatedAt)}</span>

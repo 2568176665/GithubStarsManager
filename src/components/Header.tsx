@@ -12,6 +12,7 @@ import { useAppStore } from '../store/useAppStore';
 import { resolveTheme } from '../store/selectors';
 import { useShallow } from 'zustand/react/shallow';
 import { useDialog } from '../hooks/useDialog';
+import { avatarSrc } from '../services/avatarUrl';
 import { HeaderMenuId, AppState } from '../types';
 
 const MENU_META: Record<HeaderMenuId, {
@@ -176,7 +177,7 @@ export const Header: React.FC = () => {
             {user && (
               <div className="flex items-center space-x-2 sm:space-x-3">
                 <img
-                  src={user.avatar_url}
+                  src={avatarSrc(user.avatar_url)}
                   alt={user.name || user.login}
                   className="w-8 h-8 rounded-full"
                 />

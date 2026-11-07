@@ -12,10 +12,13 @@ import {
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, If-None-Match',
+  'Access-Control-Expose-Headers': 'ETag',
 };
 
 const json = (data: unknown, status = 200) => Response.json(data, { status, headers: CORS_HEADERS });
+
+const AVATAR_HOSTS = new Set(['avatars.githubusercontent.com', 'github.com', 'camo.githubusercontent.com']);
 
 function parseRpcPort(value: unknown): number | null {
   const port = typeof value === 'number'
@@ -32,6 +35,13 @@ async function readState(env: Env, key: string, fallback: unknown): Promise<unkn
   const row = await env.DB.prepare('SELECT value FROM sync_state WHERE key = ?').bind(key).first<{ value: string }>();
   if (!row) return fallback;
   try { return JSON.parse(row.value); } catch { return fallback; }
+}
+
+/** Strong ETag for a JSON body so conditional GETs can answer 304. */
+async function strongEtag(body: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(body));
+  const hex = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `"${hex}"`;
 }
 
 async function writeState(env: Env, key: string, value: unknown): Promise<void> {
@@ -123,6 +133,27 @@ async function saveAIConfigs(env: Env, configs: AIConfig[]): Promise<void> {
 async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
   if (url.pathname === '/api/health') return json({ status: 'ok', mode: 'worker-env', service: 'github-stars-manager' });
+  if (url.pathname === '/api/avatar' && request.method === 'GET') {
+    let target: URL;
+    try {
+      target = new URL(url.searchParams.get('u') || '');
+    } catch {
+      return json({ error: 'u must be an absolute https URL on an allowed host' }, 400);
+    }
+    if (target.protocol !== 'https:' || !AVATAR_HOSTS.has(target.hostname)) {
+      return json({ error: 'u must be an absolute https URL on an allowed host' }, 400);
+    }
+    const targetUrl = target.toString();
+    const upstream = await fetch(targetUrl, { cf: { cacheEverything: true, cacheTtl: 86400, cacheKey: targetUrl } });
+    return new Response(upstream.body, {
+      status: upstream.status,
+      headers: {
+        ...CORS_HEADERS,
+        'Content-Type': upstream.headers.get('Content-Type') || 'image/png',
+        'Cache-Control': upstream.ok ? 'public, max-age=86400' : 'no-store',
+      },
+    });
+  }
   if (url.pathname === '/api/session' && request.method === 'GET') {
     if (!env.GITHUB_TOKEN) return json({ error: 'GITHUB_TOKEN is not configured' }, 503);
     const response = await fetch('https://api.github.com/user', {
@@ -251,8 +282,19 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
   const collection = path.match(/^(repositories|releases|configs\/(?:webdav|embedding))(?:\/bulk)?$/)?.[1];
   if (collection && request.method === 'GET') {
     const value = await readState(env, collection, []);
-    return collection === 'repositories' || collection === 'releases'
-      ? json({ [collection]: value, total: Array.isArray(value) ? value.length : 0 }) : json(value);
+    if (collection !== 'repositories' && collection !== 'releases') return json(value);
+    // These two collections are the largest payloads; answer conditional GETs
+    // with 304 so an unchanged client revalidates without re-downloading them.
+    const body = JSON.stringify({ [collection]: value, total: Array.isArray(value) ? value.length : 0 });
+    const etag = await strongEtag(body);
+    const headers = { ...CORS_HEADERS, ETag: etag, 'Cache-Control': 'no-store' };
+    if (request.headers.get('If-None-Match') === etag) {
+      return new Response(null, { status: 304, headers });
+    }
+    return new Response(body, {
+      status: 200,
+      headers: { ...headers, 'Content-Type': 'application/json' },
+    });
   }
   if (collection && request.method === 'PUT') {
     const body = await request.json() as Record<string, unknown>;

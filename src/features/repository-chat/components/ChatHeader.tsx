@@ -4,6 +4,7 @@ import { useT } from '../../../i18n/useT';
 import type { Repository } from '../../../types';
 import type { RepositoryChatSession } from '../../../types/repositoryChat';
 import { Button } from '../../../components/ui/button';
+import { avatarSrc } from '../../../services/avatarUrl';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '../../../components/ui/dropdown-menu';
 
 export const ChatHeader: React.FC<{
@@ -44,7 +45,7 @@ export const ChatHeader: React.FC<{
       <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={onToggleHistory} aria-label={t('repositoryChatSheet.history')} aria-pressed={historyOpen}>
         <PanelLeft className="h-4 w-4" aria-hidden="true" />
       </Button>
-      <img src={repository.owner.avatar_url} alt="" className="ml-0.5 h-6 w-6 rounded-md border border-border" />
+      <img src={avatarSrc(repository.owner.avatar_url)} alt="" loading="lazy" decoding="async" className="ml-0.5 h-6 w-6 rounded-md border border-border" />
       <div className="min-w-0 flex-1">
         <h2 className="truncate text-sm font-semibold">{repository.full_name}</h2>
       </div>

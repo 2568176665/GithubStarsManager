@@ -12,6 +12,7 @@ import { useAppStore } from '../store/useAppStore';
 import { useShallow } from 'zustand/react/shallow';
 import { useReadmeFetch, pickReadmeCandidate } from '../hooks/useReadmeFetch';
 import { buildReadmeVariants, DEFAULT_README_VARIANT, type ReadmeVariant } from '../utils/readmeVariants';
+import { avatarSrc } from '../services/avatarUrl';
 import { Dialog, DialogContent, DialogTitle } from './ui/dialog';
 
 interface TocItem {
@@ -556,8 +557,10 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
           <div className="flex flex-wrap items-center gap-3 border-b border-border p-4 dark:border-border">
             <div className="flex min-w-0 flex-1 items-center space-x-3">
               <img
-                src={repository.owner.avatar_url}
+                src={avatarSrc(repository.owner.avatar_url)}
                 alt={repository.owner.login}
+                loading="lazy"
+                decoding="async"
                 className="w-8 h-8 rounded-full"
               />
               <div>

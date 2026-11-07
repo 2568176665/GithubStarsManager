@@ -13,6 +13,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useCategorySyncActions } from '../features/repositories/hooks/useCategorySyncActions';
 import { computeCustomCategory, getAICategory, getDefaultCategory } from '../utils/categoryUtils';
 import { deferOutsideDismiss } from './modalDismiss';
+import { avatarSrc } from '../services/avatarUrl';
 import { CategoryGlyph } from './CategoryGlyph';
 
 interface RepositoryEditModalProps {
@@ -736,8 +737,10 @@ export const RepositoryEditModal: React.FC<RepositoryEditModalProps> = ({
         {/* Repository Info Header */}
         <div className="flex items-center space-x-3 p-4 bg-gradient-to-r from-accent/60 to-background dark:bg-primary/10 dark:from-transparent dark:to-transparent rounded-xl border border-border dark:border-primary/20">
           <img
-            src={repository.owner.avatar_url}
+            src={avatarSrc(repository.owner.avatar_url)}
             alt={repository.owner.login}
+            loading="lazy"
+            decoding="async"
             className="w-10 h-10 rounded-full border-2 border-card dark:border-card shadow-sm"
           />
           <div className="flex-1 min-w-0">

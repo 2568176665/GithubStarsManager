@@ -7,6 +7,7 @@ import type { DiscoveryRepo } from '../types';
 import { useAppStore } from '../store/useAppStore';
 import { useDiscoveryRepoActions } from '../features/discovery/hooks/useDiscoveryRepoActions';
 import { useTranslatedDescription } from '../hooks/useTranslatedDescription';
+import { avatarSrc } from '../services/avatarUrl';
 import { ReadmeModal } from './ReadmeModal';
 import { WeeklyIssueModal } from './WeeklyIssueModal';
 import { XTweetModal } from './XTweetModal';
@@ -168,8 +169,10 @@ export const SubscriptionRepoCard: React.FC<SubscriptionRepoCardProps> = ({ repo
             <div className="flex items-center gap-2 min-w-0">
               {!desktopSafeMode && repo.owner?.avatar_url && (
                 <img
-                  src={repo.owner.avatar_url}
+                  src={avatarSrc(repo.owner.avatar_url)}
                   alt={repo.owner.login}
+                  loading="lazy"
+                  decoding="async"
                   className="w-6 h-6 rounded-full flex-shrink-0"
                 />
               )}

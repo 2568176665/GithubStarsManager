@@ -25,6 +25,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { NO_LICENSE_SENTINEL, normalizeLicense } from '../utils/licenseFilter';
 import { useRepositoryCardActions } from '../features/repositories/hooks/useRepositoryCardActions';
 import { useTranslatedDescription } from '../hooks/useTranslatedDescription';
+import { avatarSrc } from '../services/avatarUrl';
 import { Button } from './ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
 
@@ -989,8 +990,10 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
       {/* Header - Repository Info */}
       <div className="app-repository-card-header flex items-start space-x-3 mb-3">
         <img
-          src={repository.owner.avatar_url}
+          src={avatarSrc(repository.owner.avatar_url)}
           alt={repository.owner.login}
+          loading="lazy"
+          decoding="async"
           className={`app-repository-card-avatar ${viewMode === 'list' ? 'w-10 h-10' : 'w-8 h-8'} rounded-full flex-shrink-0`}
         />
         <div className="app-repository-card-identity min-w-0 flex-1">

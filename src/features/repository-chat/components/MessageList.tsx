@@ -16,6 +16,7 @@ import {
 } from '../utils/citationUtils';
 import { remendStreamingMarkdown } from '../utils/streamingMarkdown';
 import { Button } from '../../../components/ui/button';
+import { avatarSrc } from '../../../services/avatarUrl';
 
 interface AssistantBodyProps {
   content: string;
@@ -84,7 +85,7 @@ export const EmptyState: React.FC<{
   }, [repository.language, repository.topics, t]);
   return (
     <div className="flex min-h-full flex-col items-center justify-center px-4 py-12 text-center">
-      <img src={repository.owner.avatar_url} alt="" className="h-14 w-14 rounded-2xl border border-border shadow-sm" />
+      <img src={avatarSrc(repository.owner.avatar_url)} alt="" loading="lazy" decoding="async" className="h-14 w-14 rounded-2xl border border-border shadow-sm" />
       <h2 className="mt-4 text-lg font-semibold tracking-tight">{repository.full_name}</h2>
       <p className="mt-1.5 max-w-md text-sm leading-6 text-muted-foreground">
         {repository.description || t('repositoryChatSheet.empty-description')}
