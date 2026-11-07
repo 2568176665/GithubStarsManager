@@ -37,6 +37,17 @@ async function readState(env: Env, key: string, fallback: unknown): Promise<unkn
   try { return JSON.parse(row.value); } catch { return fallback; }
 }
 
+/**
+ * Cloudflare turns a strong ETag into a weak one (`W/"..."`) when it compresses the
+ * response, and If-None-Match may carry a comma separated list, so compare the opaque
+ * digest only.
+ */
+function etagMatches(ifNoneMatch: string | null, etag: string): boolean {
+  if (!ifNoneMatch) return false;
+  const expected = etag.replace(/^W\//, '').replace(/"/g, '');
+  return ifNoneMatch.split(',').some((candidate) => candidate.trim().replace(/^W\//, '').replace(/"/g, '') === expected);
+}
+
 /** Strong ETag for a JSON body so conditional GETs can answer 304. */
 async function strongEtag(body: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(body));
@@ -288,7 +299,7 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
     const body = JSON.stringify({ [collection]: value, total: Array.isArray(value) ? value.length : 0 });
     const etag = await strongEtag(body);
     const headers = { ...CORS_HEADERS, ETag: etag, 'Cache-Control': 'no-store' };
-    if (request.headers.get('If-None-Match') === etag) {
+    if (etagMatches(request.headers.get('If-None-Match'), etag)) {
       return new Response(null, { status: 304, headers });
     }
     return new Response(body, {
