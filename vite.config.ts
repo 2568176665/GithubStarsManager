@@ -9,7 +9,7 @@ export default defineConfig({
     legacy({
       targets: ['defaults', 'not IE 11', 'Chrome >= 60', 'Firefox >= 60', 'Safari >= 12', 'Edge >= 79'],
       additionalLegacyPolyfills: ['regenerator-runtime/runtime'],
-      modernPolyfills: true,
+      modernPolyfills: false,
     }),
   ],
   optimizeDeps: {
