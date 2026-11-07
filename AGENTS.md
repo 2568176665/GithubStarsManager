@@ -34,6 +34,10 @@ Use TypeScript with two-space indentation, single quotes, semicolons, and the ex
 
 浏览器状态按分片引用判脏持久化。更新 `repositories`、`gists`、`starredGists`、`releases`、`forks` 时必须创建新数组，禁止对 store 中的数组或元素原地修改；清空缓存必须 await 持久化层的串行删除。
 
+界面文案统一走 `src/i18n` 的 `useT`/`useTPair` 与 `src/locales` 下的命名空间文案，不要在组件里硬编码中英文对照字符串；新增文案需同时补齐 10 种语言，缺失时回退到 `en`。
+
+主题状态使用 `themeMode`、`systemTheme` 与 `themePresetLight`、`themePresetDark`，不存在 `theme`/`themePreset` 字段。
+
 ## Testing Guidelines
 
 Frontend tests use Vitest; frontend UI tests use Testing Library with `jsdom`. Add focused tests for behavior changes, colocated with the implementation or under a feature’s `__tests__/` directory. No coverage threshold is enforced, but run coverage for substantial changes.
