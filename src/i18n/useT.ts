@@ -1,10 +1,21 @@
 import { useEffect, useMemo, useReducer } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '../store/useAppStore';
-import { i18n } from './index';
+import { ensureNamespacesLoaded, i18n, namespacesLoaded } from './index';
+import { FALLBACK_LANGUAGE, isAppLanguage, type AppLanguage } from './languages';
 import type { I18nNamespace } from './index';
 
 export type TranslateFn = (key: string, params?: Record<string, unknown>) => string;
+
+/**
+ * 视图首次渲染时补齐它需要的命名空间（当前语言与回退语言）。
+ * 首屏命名空间已由 preloadBootNamespaces 装载，这里是同步短路，不再发请求。
+ */
+function ensureNamespaceReady(language: AppLanguage, namespace: I18nNamespace): void {
+  const targets = language === FALLBACK_LANGUAGE ? [language] : [language, FALLBACK_LANGUAGE];
+  if (targets.every((target) => namespacesLoaded(target, [namespace]))) return;
+  void Promise.all(targets.map((target) => ensureNamespacesLoaded(target, [namespace])));
+}
 
 /**
  * 组件级翻译函数：跟随 zustand 的 `language`（唯一事实源）。
@@ -26,8 +37,12 @@ export function useT(namespace?: I18nNamespace): TranslateFn {
     };
   }, []);
   return useMemo(
-    () => (key: string, params?: Record<string, unknown>) =>
-      i18n.getFixedT(language, namespace ?? 'common')(key, params) as string,
+    () => {
+      const target = namespace ?? 'common';
+      ensureNamespaceReady(language, target);
+      return (key: string, params?: Record<string, unknown>) =>
+        i18n.getFixedT(language, target)(key, params) as string;
+    },
     [language, namespace],
   );
 }
@@ -37,8 +52,10 @@ export function useT(namespace?: I18nNamespace): TranslateFn {
  * 语言来源由调用方决定（通常是 store.getState().language 或局部语言变量）。
  */
 export function makeT(language: string, namespace?: I18nNamespace): TranslateFn {
+  const target = namespace ?? 'common';
+  if (isAppLanguage(language)) ensureNamespaceReady(language, target);
   return (key: string, params?: Record<string, unknown>) =>
-    i18n.getFixedT(language, namespace ?? 'common')(key, params) as string;
+    i18n.getFixedT(language, target)(key, params) as string;
 }
 
 export type PairTranslateFn = (zh: string, en: string) => string;

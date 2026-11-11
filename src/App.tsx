@@ -17,7 +17,7 @@ import { useSystemThemeSync } from './hooks/useSystemThemeSync';
 import { resolveTheme, selectAppShellState } from './store/selectors';
 import { useShallow } from 'zustand/react/shallow';
 import { applyThemeTokens } from './utils/themeTokens';
-import { changeAppLanguage } from './i18n';
+import { changeAppLanguage, preloadNamespaces } from './i18n';
 import { useAutoUpdateCheck } from './hooks/useAutoUpdateCheck';
 import { logger } from './services/logger';
 import { UpdateNotificationBanner } from './components/UpdateNotificationBanner';
@@ -29,21 +29,26 @@ import { isElectron, loadEncryptedXAuthViaDesktop } from './services/electronPro
 import { useT } from './i18n/useT';
 import { matchesCategory } from './utils/categoryUtils';
 
-const LazyReleaseTimeline = React.lazy(() =>
-  import('./components/ReleaseTimeline').then((module) => ({ default: module.ReleaseTimeline }))
-);
-const LazyForkTimeline = React.lazy(() =>
-  import('./components/ForkTimeline').then((module) => ({ default: module.ForkTimeline }))
-);
-const LazySettingsPanel = React.lazy(() =>
-  import('./components/SettingsPanel').then((module) => ({ default: module.SettingsPanel }))
-);
-const LazyDiscoveryView = React.lazy(() =>
-  import('./components/DiscoveryView').then((module) => ({ default: module.DiscoveryView }))
-);
-const LazyGistView = React.lazy(() =>
-  import('./components/GistView').then((module) => ({ default: module.GistView }))
-);
+const LazyReleaseTimeline = React.lazy(() => {
+  preloadNamespaces(['releases']);
+  return import('./components/ReleaseTimeline').then((module) => ({ default: module.ReleaseTimeline }));
+});
+const LazyForkTimeline = React.lazy(() => {
+  preloadNamespaces(['releases']);
+  return import('./components/ForkTimeline').then((module) => ({ default: module.ForkTimeline }));
+});
+const LazySettingsPanel = React.lazy(() => {
+  preloadNamespaces(['settings', 'plugins']);
+  return import('./components/SettingsPanel').then((module) => ({ default: module.SettingsPanel }));
+});
+const LazyDiscoveryView = React.lazy(() => {
+  preloadNamespaces(['discovery']);
+  return import('./components/DiscoveryView').then((module) => ({ default: module.DiscoveryView }));
+});
+const LazyGistView = React.lazy(() => {
+  preloadNamespaces(['gists']);
+  return import('./components/GistView').then((module) => ({ default: module.GistView }));
+});
 
 const ViewLoadingFallback: React.FC = () => (
   <div className="flex min-h-[12rem] items-center justify-center bg-background text-foreground" role="status" aria-live="polite">

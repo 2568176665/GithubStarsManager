@@ -13,7 +13,7 @@ import { logger } from './services/logger';
 import { installFetchCapture } from './services/fetchCapture';
 import { installGlobalErrorHandlers } from './services/globalErrorHandlers';
 import { useAppStore } from './store/useAppStore';
-import { ensureLanguageLoaded, FALLBACK_LANGUAGE } from './i18n';
+import { preloadBootNamespaces } from './i18n';
 
 logger.info('app', 'Main.tsx loading');
 
@@ -30,13 +30,11 @@ try {
 
 const bootstrap = async (): Promise<void> => {
   try {
-    // 首帧前装载初始语言包与回退语言包，避免界面闪现 i18n key。
+    // 首帧前装载初始语言与回退语言的首屏命名空间，避免界面闪现 i18n key；
+    // 其余命名空间由使用它们的视图首次渲染时装载。
     // 持久化语言在水合完成后由 App 的 language 副作用切换。
     const initialLanguage = useAppStore.getState().language;
-    await Promise.all([
-      ensureLanguageLoaded(initialLanguage),
-      ensureLanguageLoaded(FALLBACK_LANGUAGE),
-    ]);
+    await preloadBootNamespaces(initialLanguage);
     logger.info('app', 'Initial language pack loaded', { initialLanguage });
 
     const rootElement = document.getElementById('root');
