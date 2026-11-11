@@ -20,6 +20,93 @@ const json = (data: unknown, status = 200) => Response.json(data, { status, head
 
 const AVATAR_HOSTS = new Set(['avatars.githubusercontent.com', 'github.com', 'camo.githubusercontent.com']);
 
+/**
+ * Fields of a repository row that this app reads: the `Repository` contract in
+ * src/types plus the fields the search projection indexes. GitHub's starred
+ * payload carries roughly 60 more per repo — every `*_url` template,
+ * `node_id`, `homepage`, `size`, `watchers_count`, `has_*`, `visibility` —
+ * that nothing here reads, so GET responses drop them.
+ */
+const REPOSITORY_FIELDS = [
+  'id', 'name', 'full_name', 'description', 'html_url', 'stargazers_count',
+  'forks_count', 'forks', 'language', 'created_at', 'updated_at', 'pushed_at',
+  'starred_at', 'owner', 'topics', 'archived', 'disabled', 'fork',
+  'is_template', 'open_issues_count', 'default_branch', 'ai_summary',
+  'ai_tags', 'ai_platforms', 'analyzed_at', 'analysis_failed',
+  'analysis_error', 'subscribed_to_releases', 'custom_description',
+  'custom_tags', 'custom_category', 'category_locked', 'description_display',
+  'tags_display', 'last_edited', 'vector_indexed_at', 'vector_indexed_license',
+  'last_release_fetch_time', 'has_fetched_releases', 'license',
+] as const;
+const REPOSITORY_FIELD_SET: ReadonlySet<string> = new Set(REPOSITORY_FIELDS);
+const REPOSITORY_OWNER_FIELDS = ['login', 'avatar_url'] as const;
+const REPOSITORY_OWNER_FIELD_SET: ReadonlySet<string> = new Set(REPOSITORY_OWNER_FIELDS);
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function pickFields(source: Record<string, unknown>, fields: ReadonlySet<string>): Record<string, unknown> {
+  const picked: Record<string, unknown> = {};
+  for (const [field, value] of Object.entries(source)) {
+    if (fields.has(field)) picked[field] = value;
+  }
+  return picked;
+}
+
+/** Drop every repository field the app never reads; absent fields stay absent. */
+function projectRepository(row: unknown): unknown {
+  const source = asRecord(row);
+  if (!source) return row;
+  const projected = pickFields(source, REPOSITORY_FIELD_SET);
+  const owner = asRecord(source.owner);
+  if (owner) projected.owner = pickFields(owner, REPOSITORY_OWNER_FIELD_SET);
+  return projected;
+}
+
+/**
+ * The client writes back the objects it was served, so undoing the GET
+ * projection is what keeps stored rows lossless: fields outside the projection
+ * come from the previous row unless the payload already carries them (a fresh
+ * GitHub fetch does).
+ */
+function restoreProjectedFields(incoming: Record<string, unknown>, previous: Record<string, unknown>): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...incoming };
+  for (const [field, value] of Object.entries(previous)) {
+    if (!REPOSITORY_FIELD_SET.has(field) && !(field in merged)) merged[field] = value;
+  }
+  const previousOwner = asRecord(previous.owner);
+  const incomingOwner = asRecord(merged.owner);
+  if (previousOwner && incomingOwner) {
+    const owner: Record<string, unknown> = { ...incomingOwner };
+    for (const [field, value] of Object.entries(previousOwner)) {
+      if (!REPOSITORY_OWNER_FIELD_SET.has(field) && !(field in owner)) owner[field] = value;
+    }
+    merged.owner = owner;
+  }
+  return merged;
+}
+
+/**
+ * Re-attach the fields the GET projection strips, so a client that only ever
+ * saw the projected payload cannot erase them from D1.
+ */
+async function restoreProjectedRepositories(env: Env, incoming: unknown[]): Promise<unknown[]> {
+  const stored = await readState(env, 'repositories', []);
+  if (!Array.isArray(stored)) return incoming;
+  const previousById = new Map<unknown, Record<string, unknown>>();
+  for (const row of stored) {
+    const record = asRecord(row);
+    if (record && record.id !== undefined) previousById.set(record.id, record);
+  }
+  if (previousById.size === 0) return incoming;
+  return incoming.map((repository) => {
+    const record = asRecord(repository);
+    const previous = record ? previousById.get(record.id) : undefined;
+    return record && previous ? restoreProjectedFields(record, previous) : repository;
+  });
+}
+
 function parseRpcPort(value: unknown): number | null {
   const port = typeof value === 'number'
     ? value
@@ -296,7 +383,9 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
     if (collection !== 'repositories' && collection !== 'releases') return json(value);
     // These two collections are the largest payloads; answer conditional GETs
     // with 304 so an unchanged client revalidates without re-downloading them.
-    const body = JSON.stringify({ [collection]: value, total: Array.isArray(value) ? value.length : 0 });
+    // Project before hashing so the ETag covers exactly what is served.
+    const payload = collection === 'repositories' && Array.isArray(value) ? value.map(projectRepository) : value;
+    const body = JSON.stringify({ [collection]: payload, total: Array.isArray(payload) ? payload.length : 0 });
     const etag = await strongEtag(body);
     const headers = { ...CORS_HEADERS, ETag: etag, 'Cache-Control': 'no-store' };
     if (etagMatches(request.headers.get('If-None-Match'), etag)) {
@@ -309,7 +398,10 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
   }
   if (collection && request.method === 'PUT') {
     const body = await request.json() as Record<string, unknown>;
-    const value = body[collection] ?? body.configs ?? [];
+    const incoming = body[collection] ?? body.configs ?? [];
+    const value = collection === 'repositories' && Array.isArray(incoming)
+      ? await restoreProjectedRepositories(env, incoming)
+      : incoming;
     await writeState(env, collection, value);
     if (collection === 'repositories' && Array.isArray(value)) {
       ctx.waitUntil(refreshSearchProjection(env, value).catch((error) => {
