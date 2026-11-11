@@ -41,6 +41,12 @@ Use TypeScript with two-space indentation, single quotes, semicolons, and the ex
 
 主题状态只有 `themeMode` 与 `systemTheme` 两个字段（`light`/`dark`/`system`），不提供主题配色预设，也不存在 `theme`/`themePreset`/`themePresetLight`/`themePresetDark` 字段。
 
+首帧前只装载 `src/i18n` 的 `BOOT_NAMESPACES`，其余命名空间由 `useT`/`makeT` 在使用它的视图首次渲染时装载，`React.lazy` 的视图用 `preloadNamespaces()` 与视图 chunk 并行取语言包。首屏模块直接用到的命名空间必须列进 `BOOT_NAMESPACES`，否则会闪现 raw key。
+
+`/api/repositories` 的 GET 投影白名单（`cloudflare-worker/src/index.ts` 的 `REPOSITORY_FIELDS`）必须覆盖 `src/types` 里 `Repository` 的全部字段；PUT 侧的 `restoreProjectedFields()` 与投影成对存在，客户端会把收到的对象原样写回，只改一侧会让 D1 永久丢字段。
+
+不要给与首屏代码共享依赖的第三方库做 per-package `manualChunks`：拆出 `radix-<name>` 会把 dialog/menu 也在用的内部模块拖进首屏，实测首屏从 9 个请求涨到 13 个。
+
 ## Testing Guidelines
 
 Frontend tests use Vitest; frontend UI tests use Testing Library with `jsdom`. Add focused tests for behavior changes, colocated with the implementation or under a feature’s `__tests__/` directory. No coverage threshold is enforced, but run coverage for substantial changes.
