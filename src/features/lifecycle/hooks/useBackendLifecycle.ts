@@ -1,11 +1,52 @@
 import { useEffect } from 'react';
 import { backend } from '../../../services/backendAdapter';
 import {
+  loadDeferredReleases,
   startAutoSync,
   stopAutoSync,
   syncFromBackend,
   tryRestoreAuthFromBackend,
 } from '../../../services/autoSync';
+
+/** Delay used when requestIdleCallback is unavailable. */
+const DEFERRED_RELEASES_FALLBACK_DELAY_MS = 1500;
+
+type IdleWindow = {
+  requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+  cancelIdleCallback?: (handle: number) => void;
+};
+
+/**
+ * Pull releases once the first paint is done.
+ *
+ * They are the largest backend payload by far and the first screen renders
+ * repositories only, so the startup pull leaves them out; this idle slot loads
+ * them right after the first paint, before the regular 30s poll would.
+ */
+const scheduleDeferredReleasesLoad = (): (() => void) => {
+  const idleWindow = window as unknown as IdleWindow;
+  let cancelled = false;
+  const load = () => {
+    if (cancelled) return;
+    void loadDeferredReleases();
+  };
+
+  if (typeof idleWindow.requestIdleCallback === 'function') {
+    const handle = idleWindow.requestIdleCallback(load, {
+      timeout: DEFERRED_RELEASES_FALLBACK_DELAY_MS * 2,
+    });
+    return () => {
+      cancelled = true;
+      idleWindow.cancelIdleCallback?.(handle);
+    };
+  }
+
+  const handle = setTimeout(load, DEFERRED_RELEASES_FALLBACK_DELAY_MS);
+  return () => {
+    cancelled = true;
+    clearTimeout(handle);
+  };
+};
 
 /**
  * Owns application-wide backend startup after Store hydration.
@@ -17,6 +58,7 @@ export const useBackendLifecycle = (hasHydrated: boolean): void => {
     if (!hasHydrated) return;
 
     let unsubscribe: (() => void) | null = null;
+    let cancelDeferredReleases: (() => void) | null = null;
     let cancelled = false;
 
     const initialize = async () => {
@@ -34,6 +76,7 @@ export const useBackendLifecycle = (hasHydrated: boolean): void => {
           }
           if (!cancelled) {
             unsubscribe = startAutoSync();
+            cancelDeferredReleases = scheduleDeferredReleasesLoad();
           }
         }
       } catch (error) {
@@ -46,6 +89,9 @@ export const useBackendLifecycle = (hasHydrated: boolean): void => {
 
     return () => {
       cancelled = true;
+      if (cancelDeferredReleases) {
+        cancelDeferredReleases();
+      }
       if (unsubscribe) {
         stopAutoSync(unsubscribe);
       }

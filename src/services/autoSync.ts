@@ -22,6 +22,15 @@ let _hasPendingPush = false;
 // Track unsynced local edits so backend polling does not overwrite them.
 let _hasPendingLocalChanges = false;
 
+/**
+ * Collections whose pull is deferred off the startup path. They are megabytes
+ * large and only some views read them, so the first pull leaves them out; once
+ * a collection is demanded every later pull (including the 30s poll) refreshes
+ * it. A collection that was never demanded is never requested.
+ */
+type DeferredCollection = 'releases';
+const _demandedCollections = new Set<DeferredCollection>();
+
 // Debounce timer for push-to-backend
 let _debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -269,6 +278,58 @@ export async function syncLocalGitHubTokenToBackend(
 }
 
 /**
+ * Mark a deferred collection as needed by the running client and pull it right
+ * away, without waiting for the next poll.
+ *
+ * Releases are pulled here instead of during startup: they are the largest
+ * payload, and while the releases view itself is lazy, the repository cards
+ * read them for platform badges, so they cannot wait for that view to mount.
+ * Loading them after the first paint keeps them off the critical path while
+ * their freshness afterwards comes from the regular poll.
+ */
+export async function loadDeferredReleases(): Promise<void> {
+  _demandedCollections.add('releases');
+  if (!backend.isAvailable) return;
+
+  // A local edit owns this shard until its push lands; the next poll — releases
+  // are demanded by now — applies the remote copy instead.
+  if (_hasPendingLocalChanges || _debounceTimer) return;
+
+  const startTime = Date.now();
+  try {
+    const result = await backend.fetchReleases();
+    const hash = quickHash(result.releases);
+    if (hash === _lastHash.releases) return;
+
+    const state = useAppStore.getState();
+    if (result.releases.length === 0 && state.releases.length > 0) {
+      // Same guard as the regular pull: an empty backend copy must not wipe
+      // local releases, so queue the local list for pushing instead.
+      _hasPendingPush = true;
+      void syncToBackend();
+      return;
+    }
+
+    _isSyncingFromBackend = true;
+    try {
+      state.setReleases(result.releases);
+      _lastHash.releases = hash;
+      logger.info('sync.deferredReleases', 'Loaded releases from backend', {
+        count: result.releases.length,
+        durationMs: Date.now() - startTime,
+      });
+    } finally {
+      _isSyncingFromBackend = false;
+    }
+  } catch (err) {
+    logger.warn('sync.deferredReleases', 'Failed to load releases from backend', {
+      error: err instanceof Error ? err.message : String(err),
+      durationMs: Date.now() - startTime,
+    });
+  }
+}
+
+/**
  * Pull all data from backend and update local store.
  * Backend-first strategy: backend data overwrites local data.
  * Silent: errors logged to console only.
@@ -304,9 +365,14 @@ export async function syncFromBackend(options: { force?: boolean } = {}): Promis
   const startTime = Date.now();
   try {
     const repositoriesBeforeFetch = useAppStore.getState().repositories;
+    // Releases are only fetched once something needs them (see
+    // loadDeferredReleases), so the startup pull stays limited to the small
+    // collections plus the repositories of the current view. A forced pull is
+    // an explicit "restore everything" and always includes them.
+    const pullReleases = Boolean(options.force) || _demandedCollections.has('releases');
     const [reposResult, releasesResult, aiResult, webdavResult, embeddingResult, vectorSearchResult, settingsResult] = await Promise.allSettled([
       backend.fetchRepositories(),
-      backend.fetchReleases(),
+      pullReleases ? backend.fetchReleases() : Promise.resolve(null),
       backend.fetchAIConfigs(),
       backend.fetchWebDAVConfigs(),
       backend.fetchEmbeddingConfigs(),
@@ -358,7 +424,7 @@ export async function syncFromBackend(options: { force?: boolean } = {}): Promis
       }
     }
 
-    if (releasesResult.status === 'fulfilled') {
+    if (releasesResult.status === 'fulfilled' && releasesResult.value) {
       const hash = quickHash(releasesResult.value.releases);
       if (options.force || hash !== _lastHash.releases) {
         hashes.releases = hash;
@@ -438,7 +504,7 @@ export async function syncFromBackend(options: { force?: boolean } = {}): Promis
         _lastHash.repos = hashes.repos;
       }
     }
-    if (changed.releases && releasesResult.status === 'fulfilled') {
+    if (changed.releases && releasesResult.status === 'fulfilled' && releasesResult.value) {
       const backendReleases = releasesResult.value.releases;
       if (!options.force && backendReleases.length === 0 && state.releases.length > 0) {
         _hasPendingPush = true;

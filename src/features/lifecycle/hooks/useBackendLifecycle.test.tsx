@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => {
     tryRestoreAuthFromBackend: vi.fn(async () => { calls.push('restore-auth'); return false; }),
     syncLocalGitHubTokenToBackend: vi.fn(),
     syncFromBackend: vi.fn(async () => { calls.push('sync-from-backend'); }),
+    loadDeferredReleases: vi.fn(async () => { calls.push('load-deferred-releases'); }),
     startAutoSync: vi.fn(() => { calls.push('start-auto-sync'); return unsubscribe; }),
     stopAutoSync: vi.fn(() => { calls.push('stop-auto-sync'); }),
   };
@@ -24,6 +25,7 @@ vi.mock('../../../services/autoSync', () => ({
   tryRestoreAuthFromBackend: mocks.tryRestoreAuthFromBackend,
   syncLocalGitHubTokenToBackend: mocks.syncLocalGitHubTokenToBackend,
   syncFromBackend: mocks.syncFromBackend,
+  loadDeferredReleases: mocks.loadDeferredReleases,
   startAutoSync: mocks.startAutoSync,
   stopAutoSync: mocks.stopAutoSync,
 }));
@@ -56,6 +58,41 @@ describe('useBackendLifecycle', () => {
     // The Worker strips github_token from PUT /settings, so startup must not
     // spend a request on it; manual settings actions still trigger the sync.
     expect(mocks.syncLocalGitHubTokenToBackend).not.toHaveBeenCalled();
+  });
+
+  it('schedules the releases pull off the startup path and cancels it on unmount', async () => {
+    type IdleWindow = {
+      requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+    const idleWindow = window as unknown as IdleWindow;
+    const originalRequestIdleCallback = idleWindow.requestIdleCallback;
+    const originalCancelIdleCallback = idleWindow.cancelIdleCallback;
+    const idleCallbacks: Array<() => void> = [];
+    const cancelIdleCallback = vi.fn();
+    const requestIdleCallback = vi.fn((callback: () => void) => {
+      idleCallbacks.push(callback);
+      return 1;
+    });
+    idleWindow.requestIdleCallback = requestIdleCallback;
+    idleWindow.cancelIdleCallback = cancelIdleCallback;
+
+    try {
+      const { unmount } = renderHook(() => useBackendLifecycle(true));
+      await waitFor(() => expect(mocks.startAutoSync).toHaveBeenCalledOnce());
+
+      // Startup itself must not wait for releases: the idle slot owns them.
+      expect(mocks.loadDeferredReleases).not.toHaveBeenCalled();
+      expect(requestIdleCallback).toHaveBeenCalledOnce();
+
+      unmount();
+      expect(cancelIdleCallback).toHaveBeenCalledWith(1);
+      idleCallbacks[0]?.();
+      expect(mocks.loadDeferredReleases).not.toHaveBeenCalled();
+    } finally {
+      idleWindow.requestIdleCallback = originalRequestIdleCallback;
+      idleWindow.cancelIdleCallback = originalCancelIdleCallback;
+    }
   });
 
   it('keeps local startup available when backend probing fails', async () => {
