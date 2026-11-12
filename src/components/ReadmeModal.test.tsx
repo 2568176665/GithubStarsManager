@@ -1,9 +1,12 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ReadmeModal } from './ReadmeModal';
 import { backend } from '../services/backendAdapter';
 import { GitHubApiService } from '../services/githubApi';
+import { i18n } from '../i18n';
+import zhApp from '../locales/zh/app.json';
+import zhCommon from '../locales/zh/common.json';
 import { useAppStore } from '../store/useAppStore';
 import type { Repository, RouteMode } from '../types';
 
@@ -82,6 +85,8 @@ const mockRepository: Repository = {
 describe('ReadmeModal multilingual README switching', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    i18n.addResourceBundle('zh', 'app', zhApp, true, true);
+    i18n.addResourceBundle('zh', 'common', zhCommon, true, true);
     (backend as { isAvailable: boolean }).isAvailable = true;
     setMockStore();
     mockGitHubApi.getRepositoryReadme.mockResolvedValue('Direct README content');
@@ -249,6 +254,10 @@ describe('ReadmeModal multilingual README switching', () => {
       dispatchEvent: vi.fn(),
     }));
     vi.stubGlobal('matchMedia', matchMedia);
+    vi.stubGlobal('IntersectionObserver', class {
+      observe() {}
+      disconnect() {}
+    });
 
     try {
       (backend.getRepositoryReadme as ReturnType<typeof vi.fn>).mockResolvedValue('# Demo heading\n\nBody');
@@ -267,6 +276,7 @@ describe('ReadmeModal multilingual README switching', () => {
       await user.click(screen.getByRole('button', { name: 'Demo heading' }));
       expect(document.querySelector('.app-readme-toc')).not.toBeInTheDocument();
     } finally {
+      cleanup();
       vi.unstubAllGlobals();
     }
   });

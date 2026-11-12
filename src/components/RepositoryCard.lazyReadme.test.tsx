@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TooltipProvider } from './ui/tooltip';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Repository } from '../types';
 
 const mocks = vi.hoisted(() => ({
@@ -92,6 +92,11 @@ describe('RepositoryCard README lazy boundary', () => {
     mocks.useAppStore.mockImplementation((selector?: (state: typeof storeState) => unknown) => (
       selector ? selector(storeState) : storeState
     ));
+  });
+
+  afterEach(() => {
+    vi.doUnmock('./ReadmeModal');
+    vi.restoreAllMocks();
   });
 
   it('restores focus to the keyboard trigger after the README modal closes', async () => {

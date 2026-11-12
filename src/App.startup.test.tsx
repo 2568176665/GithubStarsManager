@@ -136,29 +136,30 @@ describe('App backend initialization', () => {
     mocks.backend.init.mockResolvedValue(undefined);
     mocks.tryRestoreAuthFromBackend.mockResolvedValue(false);
     mocks.startAutoSync.mockReturnValue(vi.fn());
-    mocks.backend.syncSettings.mockImplementation(
-      (_settings: Record<string, unknown>, signal: AbortSignal) =>
-        new Promise((_resolve, reject) => {
-          signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
-        }),
-    );
   });
 
-  it('continues backend loading after a pending local token sync reaches its deadline', async () => {
+  it('restores authentication before loading backend data without syncing the local token', async () => {
+    let finishRestore!: (restored: boolean) => void;
+    mocks.tryRestoreAuthFromBackend.mockReturnValue(new Promise<boolean>((resolve) => {
+      finishRestore = resolve;
+    }));
     render(<MemoryRouter><App /></MemoryRouter>);
 
     await act(async () => {
       await Promise.resolve();
     });
+    expect(mocks.tryRestoreAuthFromBackend).toHaveBeenCalledOnce();
     expect(mocks.syncFromBackend).not.toHaveBeenCalled();
+    expect(mocks.startAutoSync).not.toHaveBeenCalled();
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(5000);
+      finishRestore(false);
     });
 
-    expect(mocks.backend.syncSettings).toHaveBeenCalledOnce();
+    expect(mocks.backend.syncSettings).not.toHaveBeenCalled();
     expect(mocks.syncFromBackend).toHaveBeenCalledOnce();
     expect(mocks.startAutoSync).toHaveBeenCalledOnce();
+    expect(mocks.syncFromBackend.mock.invocationCallOrder[0]).toBeLessThan(mocks.startAutoSync.mock.invocationCallOrder[0]);
   });
 
   it('renders repositories before dormant views load, then resolves every lazy primary view after a view switch', async () => {

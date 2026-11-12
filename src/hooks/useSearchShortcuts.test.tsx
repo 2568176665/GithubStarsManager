@@ -7,7 +7,7 @@ describe('useSearchShortcuts', () => {
     vi.restoreAllMocks();
   });
 
-  it('registers one listener and invokes the latest callbacks', () => {
+  it('replaces the listener when callbacks change and cleans it up on unmount', () => {
     const addEventListener = vi.spyOn(document, 'addEventListener');
     const removeEventListener = vi.spyOn(document, 'removeEventListener');
     const firstFocus = vi.fn();
@@ -23,14 +23,25 @@ describe('useSearchShortcuts', () => {
       { initialProps: { onFocusSearch: firstFocus } },
     );
 
+    const initialListener = addEventListener.mock.calls.find(([type]) => type === 'keydown')?.[1];
+    expect(initialListener).toBeDefined();
     rerender({ onFocusSearch: secondFocus });
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true }));
+    const added = addEventListener.mock.calls.filter(([type]) => type === 'keydown');
+    const removed = removeEventListener.mock.calls.filter(([type]) => type === 'keydown');
+    expect(added).toHaveLength(2);
+    expect(removed).toHaveLength(1);
+    expect(removed[0][1]).toBe(initialListener);
+    expect(added[1][1]).not.toBe(initialListener);
 
-    expect(addEventListener.mock.calls.filter(([type]) => type === 'keydown')).toHaveLength(1);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true }));
     expect(firstFocus).not.toHaveBeenCalled();
     expect(secondFocus).toHaveBeenCalledOnce();
 
     unmount();
-    expect(removeEventListener.mock.calls.filter(([type]) => type === 'keydown')).toHaveLength(1);
+    const allRemoved = removeEventListener.mock.calls.filter(([type]) => type === 'keydown');
+    expect(allRemoved).toHaveLength(2);
+    expect(allRemoved[1][1]).toBe(added[1][1]);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true }));
+    expect(secondFocus).toHaveBeenCalledOnce();
   });
 });

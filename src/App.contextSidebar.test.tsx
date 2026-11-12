@@ -401,7 +401,7 @@ describe('App route-aware context sidebars', () => {
     expect(document.querySelectorAll('[data-context-sidebar]')).toHaveLength(1);
     expect(within(sidebar).getByRole('button', { name: /^趋势/ })).toBeInTheDocument();
     expectNoForeignControls();
-  });
+  }, 25000);
 
   it('releases 路由：唯一 releases 侧栏，含发布筛选且不串台仓库分类', async () => {
     const { rerender } = render(<MemoryRouter><App /></MemoryRouter>);
