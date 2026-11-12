@@ -1,9 +1,4 @@
-/**
- * Cross-implementation sanitization vectors. The same fixture drives the
- * main-process copy (electron/redact.test.js, node:test) and the backend copy
- * (server/tests/services/logSanitizer.vectors.test.ts) so the three sanitizer
- * copies stay behaviorally identical.
- */
+/** Sanitization vectors for strings, objects, and error messages. */
 
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -19,7 +14,7 @@ const VECTORS = JSON.parse(
   errorMessages: { name: string; input: string; expected: string }[];
 };
 
-describe('logSanitizer shared sanitization vectors', () => {
+describe('logSanitizer sanitization vectors', () => {
   for (const vector of VECTORS.strings) {
     it(`string: ${vector.name}`, () => {
       expect(sanitizeForLog(vector.input)).toBe(vector.expected);
