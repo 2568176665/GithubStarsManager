@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { SubscriptionRepoCard } from './SubscriptionRepoCard';
+import { TooltipProvider } from './ui/tooltip';
 import type { DiscoveryRepo } from '../types';
 
 vi.mock('../store/useAppStore', () => ({
@@ -55,14 +56,14 @@ const repo: DiscoveryRepo = {
 };
 
 describe('SubscriptionRepoCard', () => {
-  const renderCard = () => render(<SubscriptionRepoCard repo={repo} />);
+  const renderCard = () => render(<TooltipProvider><SubscriptionRepoCard repo={repo} /></TooltipProvider>);
 
   it('keeps the repository description limited to two lines', () => {
     renderCard();
 
     const description = screen.getByText('Example repository');
     expect(description).toHaveClass('line-clamp-2');
-    expect(description).not.toHaveClass('block');
+    expect(description).toHaveClass('block');
   });
 
   it('opens GitHub without opening the README modal', () => {
@@ -86,11 +87,11 @@ describe('SubscriptionRepoCard', () => {
     expect(screen.getByTestId('readme-modal')).toBeInTheDocument();
   });
 
-  it('does not show a hover tooltip for the trending repository description', () => {
+  it('shows a tooltip for the trending repository description on focus', async () => {
     renderCard();
 
-    fireEvent.mouseEnter(screen.getByText('Example repository'));
+    fireEvent.focus(screen.getByRole('button', { name: 'Example repository' }));
 
-    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Example repository');
   });
 });
