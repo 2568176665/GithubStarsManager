@@ -5,6 +5,7 @@ export default defineConfig({
   plugins: [react()],
   test: {
     globals: true,
+    maxWorkers: 4,
     environment: 'jsdom',
     environmentOptions: {
       jsdom: {
