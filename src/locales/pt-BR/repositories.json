@@ -249,7 +249,8 @@
   },
   "useRepositoryReleaseSheet": {
     "configure-a-github-token-in-settings-or-connect": "Configure primeiro o GitHub Token nas configurações ou conecte-se ao serviço de back-end.",
-    "download-failed": "Falha no download"
+    "download-failed": "Falha no download",
+    "invalid-token-public-download": "Falha na autenticação do GitHub. Atualize o Token nas configurações. O link público de download será aberto; arquivos privados podem não estar disponíveis."
   },
   "useSearchActions": {
     "ai-semantic-analysis": "Análise semântica de IA…",

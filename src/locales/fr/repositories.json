@@ -249,7 +249,8 @@
   },
   "useRepositoryReleaseSheet": {
     "configure-a-github-token-in-settings-or-connect": "Veuillez d'abord configurer le jeton GitHub dans les paramètres ou vous connecter au service backend.",
-    "download-failed": "Le téléchargement a échoué"
+    "download-failed": "Le téléchargement a échoué",
+    "invalid-token-public-download": "Échec de l’authentification GitHub. Mettez à jour le Token dans les paramètres. Le lien de téléchargement public va s’ouvrir ; les ressources privées peuvent être inaccessibles."
   },
   "useSearchActions": {
     "ai-semantic-analysis": "Analyse sémantique de l’IA…",

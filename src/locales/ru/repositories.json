@@ -249,7 +249,8 @@
   },
   "useRepositoryReleaseSheet": {
     "configure-a-github-token-in-settings-or-connect": "Сначала настройте токен GitHub в настройках или подключитесь к серверной службе.",
-    "download-failed": "Загрузка не удалась"
+    "download-failed": "Загрузка не удалась",
+    "invalid-token-public-download": "Ошибка аутентификации GitHub. Обновите Token в настройках. Открывается публичная ссылка для скачивания; приватные файлы могут быть недоступны."
   },
   "useSearchActions": {
     "ai-semantic-analysis": "Семантический анализ ИИ…",

@@ -249,7 +249,8 @@
   },
   "useRepositoryReleaseSheet": {
     "configure-a-github-token-in-settings-or-connect": "请先在设置中配置 GitHub Token，或连接后端服务。",
-    "download-failed": "下载失败"
+    "download-failed": "下载失败",
+    "invalid-token-public-download": "GitHub 认证失败，请在设置中更新 Token。正在打开公开下载链接，私有资源可能无法下载。"
   },
   "useSearchActions": {
     "ai-semantic-analysis": "AI 语义分析…",

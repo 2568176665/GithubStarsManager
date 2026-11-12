@@ -249,7 +249,8 @@
   },
   "useRepositoryReleaseSheet": {
     "configure-a-github-token-in-settings-or-connect": "最初に設定で GitHub トークンを構成するか、バックエンド サービスに接続してください。",
-    "download-failed": "ダウンロードに失敗しました"
+    "download-failed": "ダウンロードに失敗しました",
+    "invalid-token-public-download": "GitHub 認証に失敗しました。設定で Token を更新してください。公開ダウンロードリンクを開きます。非公開アセットはダウンロードできない場合があります。"
   },
   "useSearchActions": {
     "ai-semantic-analysis": "AI セマンティック分析…",

@@ -249,7 +249,8 @@
   },
   "useRepositoryReleaseSheet": {
     "configure-a-github-token-in-settings-or-connect": "請先在設定中設定 GitHub Token，或連線後端服務。",
-    "download-failed": "下載失敗"
+    "download-failed": "下載失敗",
+    "invalid-token-public-download": "GitHub 驗證失敗，請在設定中更新 Token。正在開啟公開下載連結，私有資源可能無法下載。"
   },
   "useSearchActions": {
     "ai-semantic-analysis": "AI 語意分析…",

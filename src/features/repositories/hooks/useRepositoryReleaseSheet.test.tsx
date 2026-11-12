@@ -168,6 +168,45 @@ describe('useRepositoryReleaseSheet', () => {
     expect(clickSpy).toHaveBeenCalledOnce();
   });
 
+  it('opens the public link and warns about the token when GitHub returns 401', async () => {
+    vi.mocked(window.fetch).mockResolvedValue({ ok: false, status: 401 } as Response);
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    const { result } = renderHook(() => useRepositoryReleaseSheet(repository));
+    const url = 'https://github.com/owner/repo/releases/download/v1/public.zip';
+
+    await act(async () => {
+      await result.current.downloadAsset({
+        id: 'asset-401', name: 'public.zip', url,
+        authenticatedUrl: 'https://api.github.com/repos/owner/repo/releases/assets/401',
+        size: 10, isSourceCode: false, assetId: 401,
+      });
+    });
+
+    expect(clickSpy).toHaveBeenCalledOnce();
+    expect((clickSpy.mock.instances[0] as HTMLAnchorElement).href).toBe(url);
+    expect(mocks.toast).toHaveBeenCalledWith(expect.stringContaining('Token'), 'error');
+    expect(Object.values(result.current.downloadStates)).not.toContain('sending');
+    clickSpy.mockRestore();
+  });
+
+  it('does not fall back to the public link for other GitHub errors', async () => {
+    vi.mocked(window.fetch).mockResolvedValue({ ok: false, status: 403 } as Response);
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    const { result } = renderHook(() => useRepositoryReleaseSheet(repository));
+
+    await act(async () => {
+      await result.current.downloadAsset({
+        id: 'asset-403', name: 'asset.zip', url: 'https://github.com/owner/repo/releases/download/v1/asset.zip',
+        authenticatedUrl: 'https://api.github.com/repos/owner/repo/releases/assets/403',
+        size: 10, isSourceCode: false, assetId: 403,
+      });
+    });
+
+    expect(clickSpy).not.toHaveBeenCalled();
+    expect(mocks.toast).toHaveBeenCalledWith(expect.stringContaining('403'), 'error');
+    clickSpy.mockRestore();
+  });
+
   it('uses the authenticated backend proxy for private downloads in backend-only sessions', async () => {
     mocks.store.githubToken = null;
     mocks.backend.isAvailable = true;

@@ -245,6 +245,15 @@ export const useRepositoryReleaseSheet = (repository: Repository) => {
             Authorization: `Bearer ${githubToken}`,
           },
         });
+        if (response.status === 401) {
+          const anchor = document.createElement('a');
+          anchor.href = link.url;
+          anchor.rel = 'noopener noreferrer';
+          anchor.click();
+          setBrowserDownloadStates((previous) => ({ ...previous, [downloadKey]: 'idle' }));
+          toast(t('useRepositoryReleaseSheet.invalid-token-public-download'), 'error');
+          return;
+        }
         if (!response.ok) {
           throw new Error(`${t('useRepositoryReleaseSheet.download-failed')} (${response.status})`);
         }
