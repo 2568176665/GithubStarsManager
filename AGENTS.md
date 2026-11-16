@@ -29,6 +29,16 @@ Run `npm ci` at the repository root first; run `npm ci` in `cloudflare-worker/` 
 
 `GITHUB_TOKEN` 必须使用 `npx wrangler secret put GITHUB_TOKEN` 配置为 Worker Secret。不要把线上 Secret 写入仓库。
 
+### 上游同步
+
+上游是 `AmintaCCCP/GithubStarsManager`（remote `upstream`）。本 fork 历史与上游不相关（前端是重写移植的），**不要**用 `merge`/`cherry-pick` 合上游标签，按语义移植：
+
+1. `git fetch upstream --tags`。
+2. 看净变化用 `git diff v0.9.x v0.9.y -- <path>`，看本 fork 自己的改动用 `git diff v0.9.x HEAD -- <path>`，取上游单文件最终版用 `git show v0.9.y:<path>`。
+3. 只移植 `src/`、`cloudflare-worker/`、`examples/`、`versions/` 中本 fork 仍存在的部分；`server/`、`electron/`、Docker、CI 工作流跳过，也不要把已删除的目录加回来。桌面端专属改动（托盘、窗口、自动更新安装）整条跳过。
+4. 上游 `versions/version-info.xml` 的变更条目常晚于 tag 单独提交，发布前要自己核对补条目，并把 `package.json` 的 version 一并更新。
+5. 语言包按 `src/locales/<lang>/{app,repositories,login}.json` 整体对齐，移植后重跑 `src/i18n/parity.test.ts`，并重新去掉本 fork 已移除的主题配色键。
+
 ## Coding Style & Naming Conventions
 
 Use TypeScript with two-space indentation, single quotes, semicolons, and the existing ESLint configuration. Use `PascalCase` for React components, `camelCase` for functions/variables, and descriptive `*.test.ts` or `*.test.tsx` names. Keep application commands pure; put service calls in feature hooks or services. Frontend API calls must use the existing Worker adapter and preserve browser-direct fallback where supported.
