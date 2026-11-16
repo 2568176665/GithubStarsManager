@@ -664,4 +664,15 @@
     </changelog>
     <downloadUrl>https://github.com/2568176665/GithubStarsManager/releases/tag/v0.9.0</downloadUrl>
   </version>
+  <version>
+    <number>0.9.1</number>
+    <releaseDate>2026-11-16</releaseDate>
+    <changelog>
+      <item>feat: 同步上游 v0.9.1 前端改动：更新弹窗支持按版本「不再提示」，设置页新增自动检查更新开关；Token 引导默认推荐经典 Token 并提示细粒度 Token 的限制；视图与设置标签页切换改为并发渲染，切换不再卡顿；Release 超长 tag 可点击展开。</item>
+      <item>fix: 仓库卡片快捷操作折叠按实际槽位宽度计算，字号缩放后重新测量；后端鉴权失败改为可操作的 API Secret 提示，不再误报 GitHub Token 无效；备份包含明文密钥时给出常驻警告。</item>
+      <item>perf: 数据接口启用 ETag 协商缓存（内容未变化时返回 304 且无正文），repositories 响应按前端契约投影，单次载荷从 2.4MB 降到 460KB（brotli 306KB → 86KB）；启动只装载首屏语言包、releases 移出首屏关键路径；/assets/* 静态资源长缓存 immutable；头像改走同域边缘缓存。</item>
+      <item>chore: 同步上游 v0.9.1 的 10 种语言文案。</item>
+    </changelog>
+    <downloadUrl>https://github.com/2568176665/GithubStarsManager/releases/tag/v0.9.1</downloadUrl>
+  </version>
 </versions>
