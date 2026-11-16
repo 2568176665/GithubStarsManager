@@ -3,6 +3,8 @@ import { isAppLanguage, type AppLanguage } from '../i18n/languages';
 const ERROR_MESSAGES: Record<string, { zh: string; en: string }> = {
   // Auth
   UNAUTHORIZED: { zh: '未授权，请检查 API Secret', en: 'Unauthorized, please check API Secret' },
+  // 后端尚未配置 API Secret：引导到 Worker 的 Secret 配置处，而不是让用户去重置 GitHub Token。
+  AUTH_NOT_CONFIGURED: { zh: '后端 API Secret 未配置：请在 Cloudflare 控制台该 Worker 的 Settings → Variables and Secrets 中查看或设置 API_SECRET（也可执行 npx wrangler secret put API_SECRET），再把相同的值填入客户端 API Secret 输入框', en: 'The backend API secret is not configured: check or set API_SECRET under the Worker\'s Settings → Variables and Secrets in the Cloudflare dashboard (or run npx wrangler secret put API_SECRET), then enter the same value in the client API Secret field' },
   // Proxy
   GITHUB_TOKEN_NOT_CONFIGURED: { zh: 'GitHub Token 未配置', en: 'GitHub token not configured' },
   GITHUB_TOKEN_DECRYPT_FAILED: { zh: 'GitHub Token 解密失败', en: 'Failed to decrypt GitHub token' },

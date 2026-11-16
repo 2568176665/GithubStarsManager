@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
@@ -47,6 +48,36 @@ describe('AppearancePanel language settings', () => {
   it('no longer renders language settings inside General', () => {
     render(<GeneralPanel t={t} />);
     expect(screen.queryByRole('radiogroup')).toBeNull();
+  });
+});
+
+describe('GeneralPanel update check settings', () => {
+  const setAutoUpdateCheckEnabled = vi.fn();
+
+  beforeEach(() => {
+    Object.assign(mocks.state, {
+      user: null,
+      autoUpdateCheckEnabled: true,
+      setAutoUpdateCheckEnabled,
+    });
+  });
+
+  it('reflects the persisted automatic update check preference', () => {
+    render(<GeneralPanel t={t} />);
+    expect(screen.getByLabelText(t('generalPanel.auto-update-check'))).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('renders the switch off when the automatic check was disabled', () => {
+    Object.assign(mocks.state, { autoUpdateCheckEnabled: false });
+    render(<GeneralPanel t={t} />);
+    expect(screen.getByLabelText(t('generalPanel.auto-update-check'))).toHaveAttribute('aria-checked', 'false');
+  });
+
+  it('persists the off toggle through the store action', async () => {
+    const user = userEvent.setup();
+    render(<GeneralPanel t={t} />);
+    await user.click(screen.getByLabelText(t('generalPanel.auto-update-check')));
+    expect(setAutoUpdateCheckEnabled).toHaveBeenCalledWith(false);
   });
 });
 

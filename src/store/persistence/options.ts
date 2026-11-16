@@ -23,7 +23,7 @@ import { debouncedPersistStorage } from './storage';
 
 export const appPersistenceOptions: PersistOptions<AppStoreState, PersistedAppState> = {
   name: 'github-stars-manager',
-  version: 16,
+  version: 17,
   storage: debouncedPersistStorage as PersistStorage<PersistedAppState>,
 partialize: (state) => ({
   // 持久化用户信息和认证状态
@@ -105,6 +105,9 @@ sortOrder: state.gistSearchFilters.sortOrder,
   language: state.language,
   translationEngine: state.translationEngine,
   autoTranslateRepoDescription: state.autoTranslateRepoDescription,
+  // 更新检查偏好：自动检查开关 + 用户"不再提示"的版本号
+  autoUpdateCheckEnabled: state.autoUpdateCheckEnabled,
+  updatePromptDismissedVersion: state.updatePromptDismissedVersion,
   isSidebarCollapsed: state.isSidebarCollapsed,
   headerMenuConfig: state.headerMenuConfig,
 
@@ -410,6 +413,17 @@ stateRecord.mcpConfig = normalizeMcpConfig(stateRecord.mcpConfig);
       || stateRecord.accountWorkspaces === null
       || Array.isArray(stateRecord.accountWorkspaces)) {
       stateRecord.accountWorkspaces = {};
+    }
+  }
+
+  // v16→v17: 更新检查偏好兜底（自动检查默认开启；"不再提示"版本默认为空）
+  if (state) {
+    const stateRecord = state as Record<string, unknown>;
+    if (typeof stateRecord.autoUpdateCheckEnabled !== 'boolean') {
+      stateRecord.autoUpdateCheckEnabled = true;
+    }
+    if (typeof stateRecord.updatePromptDismissedVersion !== 'string' || !stateRecord.updatePromptDismissedVersion) {
+      stateRecord.updatePromptDismissedVersion = null;
     }
   }
 
