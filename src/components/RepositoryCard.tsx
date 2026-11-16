@@ -150,9 +150,20 @@ interface RepositoryCardProps {
 
 
 const MAX_CACHE_SIZE = 500;
-const ACTION_SLOT_WIDTH = 32;
-const ACTION_SLOT_GAP = 6;
-const ACTION_SLOT_STRIDE = ACTION_SLOT_WIDTH + ACTION_SLOT_GAP;
+// Must match --app-card-action-size (1.75rem) + --app-sidebar-action-gap (0.125rem) in index.css.
+// The root font size scales these values, so resolve them at measure time instead of caching px.
+const DEFAULT_ROOT_FONT_SIZE = 16;
+const ACTION_SLOT_WIDTH_REM = 1.75;
+const ACTION_SLOT_GAP_REM = 0.125;
+
+const resolveActionSlotMetrics = () => {
+  const rootFontSize = Number.parseFloat(getComputedStyle(document.documentElement).fontSize)
+    || DEFAULT_ROOT_FONT_SIZE;
+  return {
+    width: ACTION_SLOT_WIDTH_REM * rootFontSize,
+    gap: ACTION_SLOT_GAP_REM * rootFontSize,
+  };
+};
 
 const highlightCache = new Map<string, React.ReactNode>();
 
@@ -163,14 +174,18 @@ const highlightCache = new Map<string, React.ReactNode>();
  *
  * @param width - Available action-row width in pixels.
  * @param primaryActionCount - Number of primary quick actions.
+ * @param slotWidth - Resolved action slot width in pixels.
+ * @param slotGap - Resolved gap between action slots in pixels.
  * @returns Number of primary actions to render outside the menu.
  */
 const countVisibleOverflowActions = (
   width: number,
   primaryActionCount: number,
+  slotWidth: number,
+  slotGap: number,
 ): number => {
   if (width === 0) return primaryActionCount;
-  const capacity = Math.max(1, Math.floor((width + ACTION_SLOT_GAP) / ACTION_SLOT_STRIDE));
+  const capacity = Math.max(1, Math.floor((width + slotGap) / (slotWidth + slotGap)));
   return Math.max(0, Math.min(primaryActionCount, capacity - 1));
 };
 
@@ -484,17 +499,23 @@ const RepositoryCardComponent: React.FC<RepositoryCardProps> = ({
         setVisibleOverflowActionCount(primaryOverflowActionCount);
         return;
       }
+      const { width: slotWidth, gap } = resolveActionSlotMetrics();
       setVisibleOverflowActionCount(
-        countVisibleOverflowActions(width, primaryOverflowActionCount),
+        countVisibleOverflowActions(width, primaryOverflowActionCount, slotWidth, gap),
       );
     };
 
     updateVisibleActionCount();
     const observer = new ResizeObserver(updateVisibleActionCount);
     if (overflowActionRowRef.current) observer.observe(overflowActionRowRef.current);
+    // Font scale writes an inline font-size on <html>; the row width stays the
+    // same, so ResizeObserver alone would not re-run the slot math.
+    const fontObserver = new MutationObserver(updateVisibleActionCount);
+    fontObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
     window.addEventListener('resize', updateVisibleActionCount);
     return () => {
       observer.disconnect();
+      fontObserver.disconnect();
       window.removeEventListener('resize', updateVisibleActionCount);
     };
   }, [viewMode, primaryOverflowActionCount, selectionMode]);
