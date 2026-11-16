@@ -125,6 +125,18 @@ describe('SettingsPanel context sidebar ownership', () => {
     scrollToSpy.mockRestore();
   });
 
+  it('切换 Tab 立即提交新面板内容，过渡只靠 150ms 淡入', () => {
+    render(<SettingsPanel isOpen isModal onClose={vi.fn()} />);
+
+    const desktopTablist = screen.getAllByRole('tablist', { name: '设置标签页' })[0];
+    fireEvent.click(within(desktopTablist).getByRole('tab', { name: '分类管理' }));
+
+    // 回归：旧的"淡出 100ms → 切内容 → 120ms 转场锁"序列会让这里仍是通用面板
+    const panel = screen.getByRole('tabpanel', { name: '分类管理' });
+    expect(within(panel).getByTestId('CategoryPanel-content')).toBeTruthy();
+    expect(panel).toHaveClass('motion-safe:animate-tab-fade');
+  });
+
   it('Modal 切换 Tab 不改变文档滚动位置', async () => {
     const scrollToSpy = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
     render(<SettingsPanel isOpen isModal onClose={vi.fn()} />);

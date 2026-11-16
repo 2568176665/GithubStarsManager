@@ -1,4 +1,4 @@
-import React, { Suspense, useEffect, useMemo, useCallback, useRef } from 'react';
+import React, { Suspense, useEffect, useLayoutEffect, useMemo, useCallback, useDeferredValue, useRef } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { LoginScreen } from './components/LoginScreen';
 import { Header } from './components/Header';
@@ -56,10 +56,11 @@ const ViewLoadingFallback: React.FC = () => (
   </div>
 );
 
+// 懒视图只保留错误边界。Suspense 上移到 App 视图容器的外层：这样懒模块
+// 加载期间整个淡入容器都不挂载，动画在目标内容真正提交时才开始播放，
+// 而不是先在 loading 占位上播完。
 const LazyViewBoundary: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <ErrorBoundary>
-    <Suspense fallback={<ViewLoadingFallback />}>{children}</Suspense>
-  </ErrorBoundary>
+  <ErrorBoundary>{children}</ErrorBoundary>
 );
 
 /**
@@ -271,17 +272,12 @@ const SettingsView = React.memo(() => (
 ));
 SettingsView.displayName = 'SettingsView';
 
-const DiscoverySubscriptionView = React.memo(() => (
-  <Suspense fallback={<ViewLoadingFallback />}>
-    <LazyDiscoveryView />
-  </Suspense>
-));
+const DiscoverySubscriptionView = React.memo(() => <LazyDiscoveryView />);
 DiscoverySubscriptionView.displayName = 'DiscoverySubscriptionView';
 
 function App() {
   const {
     isAuthenticated,
-    currentView,
     selectedCategory,
     themeMode,
     systemTheme,
@@ -296,6 +292,11 @@ function App() {
 
   useAutoUpdateCheck();
   useBackendLifecycle(hasHydrated);
+
+  // 视图切换并发渲染：路由变化时先用延迟值继续渲染旧视图，新视图在低优先级
+  // 渲染完再一次性提交，避免重视图（几百张卡片）同步挂载造成的长帧卡顿。
+  const location = useLocation();
+  const deferredLocation = useDeferredValue(location);
 
   const theme = resolveTheme(themeMode, systemTheme);
   useSystemThemeSync(themeMode);
@@ -352,9 +353,12 @@ function App() {
     applyThemeTokens(themeTokens);
   }, [themeTokens, theme]);
 
-  useEffect(() => {
+  // 滚动重置跟随延迟提交的视图：新视图提交的同一帧再回顶，避免旧视图
+  // 还在屏上时滚动先跳、新内容后到的闪跳。用布局 effect 保证复位发生在
+  // 新内容绘制之前（reduced-motion 下没有淡入遮盖位置跳变）。
+  useLayoutEffect(() => {
     window.scrollTo({ top: 0, behavior: 'auto' });
-  }, [currentView]);
+  }, [deferredLocation.pathname]);
 
   // Language side effect: zustand 的 language 是唯一事实源，这里只负责装载
   // 语言包、切换 i18next 并同步 <html lang>。
@@ -391,34 +395,43 @@ function App() {
       <Header />
       <main className="app-main">
         <AppRouteSync />
-        <Routes>
-          <Route
-            path={VIEW_PATHS.repositories}
-            element={
-              <RepositoriesView
-                repositories={repositories}
-                searchResults={searchResults}
-                searchFilters={searchFilters}
-                selectedCategory={selectedCategory}
-                onCategorySelect={handleCategorySelect}
+        {/* key 化包裹层：视图切换时重挂载并重放 200ms 淡入，消除硬切的突兀感。
+            只动 opacity（transform 动画期间会为 fixed 后代创建 containing block）。
+            Suspense 在容器外层：懒加载 fallback 不在淡入容器内，动画等目标
+            内容真正提交时才开始。Routes 读延迟 location，切换是低优先级更新，
+            期间旧视图保持可见。 */}
+        <Suspense fallback={<ViewLoadingFallback />}>
+          <div key={deferredLocation.pathname} className="motion-safe:animate-fade-in">
+            <Routes location={deferredLocation}>
+              <Route
+                path={VIEW_PATHS.repositories}
+                element={
+                  <RepositoriesView
+                    repositories={repositories}
+                    searchResults={searchResults}
+                    searchFilters={searchFilters}
+                    selectedCategory={selectedCategory}
+                    onCategorySelect={handleCategorySelect}
+                  />
+                }
               />
-            }
-          />
-          <Route path="/repositories" element={<Navigate to={VIEW_PATHS.repositories} replace />} />
-          <Route path={VIEW_PATHS.gists} element={<GistsView />} />
-          <Route path={VIEW_PATHS.releases} element={<ReleasesView />} />
-          <Route path={VIEW_PATHS.forks} element={<ForksView />} />
-          <Route
-            path={VIEW_PATHS.subscription}
-            element={
-              <ErrorBoundary>
-                <DiscoverySubscriptionView />
-              </ErrorBoundary>
-            }
-          />
-          <Route path={VIEW_PATHS.settings} element={<SettingsView />} />
-          <Route path="*" element={<Navigate to={VIEW_PATHS.repositories} replace />} />
-        </Routes>
+              <Route path="/repositories" element={<Navigate to={VIEW_PATHS.repositories} replace />} />
+              <Route path={VIEW_PATHS.gists} element={<GistsView />} />
+              <Route path={VIEW_PATHS.releases} element={<ReleasesView />} />
+              <Route path={VIEW_PATHS.forks} element={<ForksView />} />
+              <Route
+                path={VIEW_PATHS.subscription}
+                element={
+                  <ErrorBoundary>
+                    <DiscoverySubscriptionView />
+                  </ErrorBoundary>
+                }
+              />
+              <Route path={VIEW_PATHS.settings} element={<SettingsView />} />
+              <Route path="*" element={<Navigate to={VIEW_PATHS.repositories} replace />} />
+            </Routes>
+          </div>
+        </Suspense>
       </main>
       <BackToTop />
       <DebugModeIndicator />
