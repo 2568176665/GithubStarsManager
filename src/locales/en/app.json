@@ -498,7 +498,8 @@
     "release-date": "Release Date:",
     "what-s-new": "What's New:",
     "download-now": "Download Now",
-    "later": "Later"
+    "later": "Later",
+    "dont-remind-again": "Don't Remind Again"
   },
   "updateNotificationBanner": {
     "new-version-available": "New Version Available",
@@ -967,6 +968,8 @@
     "check-for-updates": "Check for Updates",
     "current-version-v-version": "Current Version: v{{version}}",
     "check-if-a-new-version-is-available": "Check if a new version is available",
+    "auto-update-check": "Automatic Update Check",
+    "auto-update-check-hint": "Automatically check for new versions on startup; you can still check manually",
     "contact-information": "Contact Information",
     "if-you-encounter-any-issues-or-have-suggestions": "If you encounter any issues or have suggestions while using the app, feel free to contact me through:",
     "github": "GitHub",
@@ -976,7 +979,8 @@
   },
   "includeKeysToggle": {
     "include-keys-in-backup-export": "Include keys in backup/export",
-    "includes-keys-for-ai-configs-webdav-proxy-remote": "Includes keys for AI configs, WebDAV, proxy, remote download, and backend server"
+    "includes-keys-for-ai-configs-webdav-proxy-remote": "Includes keys for AI configs, WebDAV, proxy, remote download, and backend server",
+    "warning-backup-file-contains-plaintext-keys": "When enabled, backup and export files contain plaintext keys, passwords, and other credentials. Keep them safe."
   },
   "mcpSettingsPanel": {
     "copied": "Copied",
@@ -1165,7 +1169,14 @@
     "marketplace-error-blocked": "This version has been blocked by the official registry and cannot be installed or updated.",
     "marketplace-error-changed": "The plugin changed on the source during installation; refresh and try again.",
     "marketplace-update-success-still-enabled-v1": "Updated {{v1}}; the plugin stays enabled.",
-    "marketplace-orphaned-revoked-title": "Revoked installed plugins"
+    "marketplace-orphaned-revoked-title": "Revoked installed plugins",
+    "customize-icon": "Customize icon",
+    "customize-icon-title": "Customize plugin icon: {{name}}",
+    "select-icon": "Select icon",
+    "default-icon": "Default icon",
+    "search-icons": "Search icons…",
+    "reset-icon": "Restore default icon",
+    "no-icons-found": "No matching icons found"
   },
   "pushCategoriesModal": {
     "push-selected-categories": "Push selected categories",
@@ -1207,7 +1218,6 @@
     "color-green": "Green",
     "color-cyan": "Cyan",
     "custom-accent-color": "Custom accent color",
-    "default-value": "Default",
     "border-radius": "Corner radius",
     "radius-none": "None",
     "radius-small": "Small",

@@ -498,7 +498,8 @@
     "release-date": "Дата выпуска:",
     "what-s-new": "Обновления:",
     "download-now": "Скачать сейчас",
-    "later": "напоминание позже"
+    "later": "напоминание позже",
+    "dont-remind-again": "Больше не напоминать"
   },
   "updateNotificationBanner": {
     "new-version-available": "найдена новая версия",
@@ -967,6 +968,8 @@
     "check-for-updates": "Проверьте наличие обновлений",
     "current-version-v-version": "Текущая версия: v{{version}}",
     "check-if-a-new-version-is-available": "Проверьте, доступна ли новая версия",
+    "auto-update-check": "Автоматическая проверка обновлений",
+    "auto-update-check-hint": "Автоматически проверять новые версии при запуске; ручная проверка останется доступной",
     "contact-information": "Контактная информация",
     "if-you-encounter-any-issues-or-have-suggestions": "Если у вас возникнут какие-либо проблемы или у вас есть предложения во время использования, свяжитесь со мной следующими способами:",
     "github": "GitHub",
@@ -976,7 +979,8 @@
   },
   "includeKeysToggle": {
     "include-keys-in-backup-export": "Включить ключи при резервном копировании/экспорте",
-    "includes-keys-for-ai-configs-webdav-proxy-remote": "Содержит ключи для настройки AI, WebDAV, прокси, удаленной загрузки и внутреннего сервера."
+    "includes-keys-for-ai-configs-webdav-proxy-remote": "Содержит ключи для настройки AI, WebDAV, прокси, удаленной загрузки и внутреннего сервера.",
+    "warning-backup-file-contains-plaintext-keys": "Если включено, файлы резервных копий и экспорта содержат ключи, пароли и другие учётные данные в открытом виде. Храните эти файлы в безопасном месте."
   },
   "mcpSettingsPanel": {
     "copied": "Скопировано",
@@ -1165,7 +1169,14 @@
     "marketplace-error-blocked": "Эта версия заблокирована официальным реестром; установка и обновление невозможны.",
     "marketplace-error-changed": "Плагин изменился в источнике во время установки; обновите список и повторите попытку.",
     "marketplace-update-success-still-enabled-v1": "«{{v1}}» обновлён; плагин остаётся включённым.",
-    "marketplace-orphaned-revoked-title": "Отозванные установленные плагины"
+    "marketplace-orphaned-revoked-title": "Отозванные установленные плагины",
+    "customize-icon": "Настроить значок",
+    "customize-icon-title": "Настройка значка плагина: {{name}}",
+    "select-icon": "Выбрать значок",
+    "default-icon": "Значок по умолчанию",
+    "search-icons": "Поиск значков…",
+    "reset-icon": "Восстановить значок по умолчанию",
+    "no-icons-found": "Совпадающих значков не найдено"
   },
   "pushCategoriesModal": {
     "push-selected-categories": "Отправить выбранные категории",
@@ -1207,7 +1218,6 @@
     "color-green": "Зелёный",
     "color-cyan": "Голубой",
     "custom-accent-color": "Свой акцентный цвет",
-    "default-value": "По умолчанию",
     "border-radius": "Радиус углов",
     "radius-none": "Нет",
     "radius-small": "Малый",

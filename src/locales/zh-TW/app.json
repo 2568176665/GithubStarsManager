@@ -498,7 +498,8 @@
     "release-date": "發佈日期:",
     "what-s-new": "更新內容:",
     "download-now": "立即下載",
-    "later": "稍後提醒"
+    "later": "稍後提醒",
+    "dont-remind-again": "不再顯示"
   },
   "updateNotificationBanner": {
     "new-version-available": "發現新版本",
@@ -967,6 +968,8 @@
     "check-for-updates": "檢查更新",
     "current-version-v-version": "目前版本: v{{version}}",
     "check-if-a-new-version-is-available": "檢查是否有新版本可用",
+    "auto-update-check": "自動檢查更新",
+    "auto-update-check-hint": "啟動時自動檢查新版本；關閉後仍可手動檢查更新",
     "contact-information": "聯絡方式",
     "if-you-encounter-any-issues-or-have-suggestions": "如果您在使用過程中遇到任何問題或有建議，歡迎透過以下方式與我聯絡：",
     "github": "GitHub",
@@ -976,7 +979,8 @@
   },
   "includeKeysToggle": {
     "include-keys-in-backup-export": "備份/匯出時包含金鑰",
-    "includes-keys-for-ai-configs-webdav-proxy-remote": "包含 AI 設定、WebDAV、代理、遠端下載和後端伺服器的金鑰"
+    "includes-keys-for-ai-configs-webdav-proxy-remote": "包含 AI 設定、WebDAV、代理、遠端下載和後端伺服器的金鑰",
+    "warning-backup-file-contains-plaintext-keys": "勾選後，備份與匯出檔案內含明文金鑰、密碼及其他憑證，請妥善保管這些檔案"
   },
   "mcpSettingsPanel": {
     "copied": "已複製",
@@ -1165,7 +1169,14 @@
     "marketplace-error-blocked": "該版本已被官方註冊表封鎖，無法安裝或更新。",
     "marketplace-error-changed": "安裝過程中來源上的插件發生了變化，請重新整理後再試。",
     "marketplace-update-success-still-enabled-v1": "已更新 {{v1}}，插件保持啟用狀態。",
-    "marketplace-orphaned-revoked-title": "已撤銷的已安裝插件"
+    "marketplace-orphaned-revoked-title": "已撤銷的已安裝插件",
+    "customize-icon": "自訂圖示",
+    "customize-icon-title": "自訂插件圖示：{{name}}",
+    "select-icon": "選擇圖示",
+    "default-icon": "預設圖示",
+    "search-icons": "搜尋圖示…",
+    "reset-icon": "恢復預設圖示",
+    "no-icons-found": "找不到相符的圖示"
   },
   "pushCategoriesModal": {
     "push-selected-categories": "推送所選分類",
@@ -1207,7 +1218,6 @@
     "color-green": "綠色",
     "color-cyan": "青綠色",
     "custom-accent-color": "自訂強調色",
-    "default-value": "預設",
     "border-radius": "圓角",
     "radius-none": "無",
     "radius-small": "小號",

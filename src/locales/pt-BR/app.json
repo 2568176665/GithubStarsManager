@@ -498,7 +498,8 @@
     "release-date": "data de lançamento:",
     "what-s-new": "Atualizações:",
     "download-now": "Baixe agora",
-    "later": "lembrete mais tarde"
+    "later": "lembrete mais tarde",
+    "dont-remind-again": "Não me lembrar novamente"
   },
   "updateNotificationBanner": {
     "new-version-available": "nova versão encontrada",
@@ -967,6 +968,8 @@
     "check-for-updates": "Verifique se há atualizações",
     "current-version-v-version": "Versão atual: v{{version}}",
     "check-if-a-new-version-is-available": "Verifique se uma nova versão está disponível",
+    "auto-update-check": "Verificação automática de atualizações",
+    "auto-update-check-hint": "Verificar novas versões automaticamente ao iniciar; a verificação manual continuará disponível",
     "contact-information": "Informações de contato",
     "if-you-encounter-any-issues-or-have-suggestions": "Se você encontrar algum problema ou tiver sugestões durante o uso, entre em contato comigo através dos seguintes métodos:",
     "github": "GitHub",
@@ -976,7 +979,8 @@
   },
   "includeKeysToggle": {
     "include-keys-in-backup-export": "Incluir chaves ao fazer backup/exportar",
-    "includes-keys-for-ai-configs-webdav-proxy-remote": "Contém chaves para configuração de IA, WebDAV, proxy, download remoto e servidor backend"
+    "includes-keys-for-ai-configs-webdav-proxy-remote": "Contém chaves para configuração de IA, WebDAV, proxy, download remoto e servidor backend",
+    "warning-backup-file-contains-plaintext-keys": "Ao ativar, os arquivos de backup e de exportação conterão chaves, senhas e outras credenciais em texto plano. Guarde esses arquivos em local seguro."
   },
   "mcpSettingsPanel": {
     "copied": "Copiado",
@@ -1165,7 +1169,14 @@
     "marketplace-error-blocked": "Esta versão foi bloqueada pelo registro oficial; não é possível instalar nem atualizar.",
     "marketplace-error-changed": "O plugin mudou na fonte durante a instalação; atualize e tente novamente.",
     "marketplace-update-success-still-enabled-v1": "{{v1}} atualizado; o plugin permanece ativado.",
-    "marketplace-orphaned-revoked-title": "Plugins instalados revogados"
+    "marketplace-orphaned-revoked-title": "Plugins instalados revogados",
+    "customize-icon": "Personalizar ícone",
+    "customize-icon-title": "Personalizar ícone do plug-in: {{name}}",
+    "select-icon": "Selecionar ícone",
+    "default-icon": "Ícone padrão",
+    "search-icons": "Buscar ícones…",
+    "reset-icon": "Restaurar ícone padrão",
+    "no-icons-found": "Nenhum ícone correspondente encontrado"
   },
   "pushCategoriesModal": {
     "push-selected-categories": "Enviar categorias selecionadas",
@@ -1207,7 +1218,6 @@
     "color-green": "Verde",
     "color-cyan": "Ciano",
     "custom-accent-color": "Cor de destaque personalizada",
-    "default-value": "Padrão",
     "border-radius": "Raio dos cantos",
     "radius-none": "Nenhum",
     "radius-small": "Pequeno",

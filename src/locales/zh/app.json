@@ -498,7 +498,8 @@
     "release-date": "发布日期:",
     "what-s-new": "更新内容:",
     "download-now": "立即下载",
-    "later": "稍后提醒"
+    "later": "稍后提醒",
+    "dont-remind-again": "不再提示"
   },
   "updateNotificationBanner": {
     "new-version-available": "发现新版本",
@@ -967,6 +968,8 @@
     "check-for-updates": "检查更新",
     "current-version-v-version": "当前版本: v{{version}}",
     "check-if-a-new-version-is-available": "检查是否有新版本可用",
+    "auto-update-check": "自动检查更新",
+    "auto-update-check-hint": "启动时自动检查新版本；关闭后仍可手动检查更新",
     "contact-information": "联系方式",
     "if-you-encounter-any-issues-or-have-suggestions": "如果您在使用过程中遇到任何问题或有建议，欢迎通过以下方式联系我：",
     "github": "GitHub",
@@ -976,7 +979,8 @@
   },
   "includeKeysToggle": {
     "include-keys-in-backup-export": "备份/导出时包含密钥",
-    "includes-keys-for-ai-configs-webdav-proxy-remote": "包含 AI 配置、WebDAV、代理、远程下载和后端服务器的密钥"
+    "includes-keys-for-ai-configs-webdav-proxy-remote": "包含 AI 配置、WebDAV、代理、远程下载和后端服务器的密钥",
+    "warning-backup-file-contains-plaintext-keys": "勾选后，备份与导出文件内含明文密钥、密码及其他凭据，请妥善保管这些文件"
   },
   "mcpSettingsPanel": {
     "copied": "已复制",
@@ -1165,7 +1169,14 @@
     "marketplace-error-blocked": "该版本已被官方注册表拉黑，无法安装或更新。",
     "marketplace-error-changed": "安装过程中源上的插件发生了变化，请刷新后重试。",
     "marketplace-update-success-still-enabled-v1": "已更新 {{v1}}，插件保持启用状态。",
-    "marketplace-orphaned-revoked-title": "已撤销的已安装插件"
+    "marketplace-orphaned-revoked-title": "已撤销的已安装插件",
+    "customize-icon": "自定义图标",
+    "customize-icon-title": "自定义插件图标：{{name}}",
+    "select-icon": "选择图标",
+    "default-icon": "默认图标",
+    "search-icons": "搜索图标…",
+    "reset-icon": "恢复默认图标",
+    "no-icons-found": "未找到匹配的图标"
   },
   "pushCategoriesModal": {
     "push-selected-categories": "推送所选分类",
@@ -1207,7 +1218,6 @@
     "color-green": "绿色",
     "color-cyan": "青色",
     "custom-accent-color": "自定义强调色",
-    "default-value": "默认",
     "border-radius": "圆角",
     "radius-none": "无",
     "radius-small": "小",

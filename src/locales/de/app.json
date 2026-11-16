@@ -498,7 +498,8 @@
     "release-date": "Veröffentlichungsdatum:",
     "what-s-new": "Aktualisierungen:",
     "download-now": "Jetzt herunterladen",
-    "later": "Erinnerung später"
+    "later": "Erinnerung später",
+    "dont-remind-again": "Nicht mehr daran erinnern"
   },
   "updateNotificationBanner": {
     "new-version-available": "neue Version gefunden",
@@ -967,6 +968,8 @@
     "check-for-updates": "Suchen Sie nach Updates",
     "current-version-v-version": "Aktuelle Version: v{{version}}",
     "check-if-a-new-version-is-available": "Prüfen Sie, ob eine neue Version verfügbar ist",
+    "auto-update-check": "Automatische Update-Suche",
+    "auto-update-check-hint": "Beim Start automatisch nach neuen Versionen suchen; die manuelle Suche bleibt verfügbar",
     "contact-information": "Kontaktinformationen",
     "if-you-encounter-any-issues-or-have-suggestions": "Wenn Sie während der Nutzung auf Probleme stoßen oder Vorschläge haben, kontaktieren Sie mich bitte über die folgenden Methoden:",
     "github": "GitHub",
@@ -976,7 +979,8 @@
   },
   "includeKeysToggle": {
     "include-keys-in-backup-export": "Beziehen Sie beim Sichern/Exportieren Schlüssel mit ein",
-    "includes-keys-for-ai-configs-webdav-proxy-remote": "Enthält Schlüssel für AI-Konfiguration, WebDAV, Proxy, Remote-Download und Backend-Server"
+    "includes-keys-for-ai-configs-webdav-proxy-remote": "Enthält Schlüssel für AI-Konfiguration, WebDAV, Proxy, Remote-Download und Backend-Server",
+    "warning-backup-file-contains-plaintext-keys": "Bei Aktivierung enthalten Backup- und Exportdateien Schlüssel, Passwörter und andere Zugangsdaten im Klartext. Bewahren Sie diese Dateien sicher auf."
   },
   "mcpSettingsPanel": {
     "copied": "Kopiert",
@@ -1165,7 +1169,14 @@
     "marketplace-error-blocked": "Diese Version wurde von der offiziellen Registry gesperrt und kann nicht installiert oder aktualisiert werden.",
     "marketplace-error-changed": "Das Plugin hat sich während der Installation auf der Quelle geändert; aktualisiere und versuche es erneut.",
     "marketplace-update-success-still-enabled-v1": "{{v1}} aktualisiert; das Plugin bleibt aktiviert.",
-    "marketplace-orphaned-revoked-title": "Widerrufene installierte Plugins"
+    "marketplace-orphaned-revoked-title": "Widerrufene installierte Plugins",
+    "customize-icon": "Symbol anpassen",
+    "customize-icon-title": "Plug-in-Symbol anpassen: {{name}}",
+    "select-icon": "Symbol auswählen",
+    "default-icon": "Standardsymbol",
+    "search-icons": "Symbole suchen…",
+    "reset-icon": "Standardsymbol wiederherstellen",
+    "no-icons-found": "Keine passenden Symbole gefunden"
   },
   "pushCategoriesModal": {
     "push-selected-categories": "Ausgewählte Kategorien übertragen",
@@ -1207,7 +1218,6 @@
     "color-green": "Grün",
     "color-cyan": "Cyan",
     "custom-accent-color": "Eigene Akzentfarbe",
-    "default-value": "Standard",
     "border-radius": "Eckenradius",
     "radius-none": "Keiner",
     "radius-small": "Klein",
